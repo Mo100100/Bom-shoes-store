@@ -158,11 +158,59 @@ export type CouponEvalContext = {
   // just the cart-level subtotal. Both create-order and validate-coupon
   // already have this from resolveCartPricing, so it's always supplied.
   resolvedItems: ResolvedOrderItem[]
-  customerEmail?: string | null
+  // The signed-in customer, read from the caller's already-verified JWT (see
+  // _shared/auth.ts). null for a guest. This is the ONLY identity
+  // per_customer_limit is counted against -- the customer email it used to
+  // use is optional at checkout and never verified, so a blank one skipped
+  // the limit entirely and any value at all could be invented.
+  userId?: string | null
   // Only known by create-order (validate-coupon has no shipping context).
   // Defaults to 0, which is also what makes free_shipping's discountAmount
   // correctly read as 0 from validate-coupon's response.
   shippingCost?: number
+}
+
+// Every "no" that would otherwise tell the caller a code EXISTS shares one
+// reason: not found, inactive, not started, expired, out of scope for this
+// cart, usage limit reached. Distinguishing them turned validate-coupon into
+// an oracle over the whole code space, and a customer never needs to know
+// which of them it was. The two rejections below stay distinct because they
+// tell the customer something they can act on.
+export type CouponRejectionCode = 'unavailable' | 'min_order' | 'sign_in_required'
+
+export type CouponRejection = {
+  reasonCode: CouponRejectionCode
+  reason: string
+  // Only on 'min_order', so the storefront can show the real figure in the
+  // customer's own language and currency format.
+  minOrderAmount?: number
+}
+
+export const COUPON_UNAVAILABLE: CouponRejection = {
+  reasonCode: 'unavailable',
+  reason: 'This code cannot be applied to your cart',
+}
+
+// How close to a coupon's min_order_amount a cart has to be before the
+// rejection names the figure instead of staying generic. See
+// getBasicEligibility for why the helpful message is gated at all.
+export const MIN_ORDER_HINT_RATIO = 0.5
+
+// Every percentage an admin can type, from any column, goes through this: a
+// value outside 0..100 is a typo, and the only sane reading of one is the
+// nearest real percentage. Shared by computeDiscount (coupons.discount_value)
+// and computeBxgyDiscount (coupons.get_discount_percent), which had the same
+// expression written out twice.
+export function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, value))
+}
+
+// Coupon codes are stored upper case (see the coupons_code_upper_check
+// constraint in the 20260807000000 migration and AdminCoupons' save), so
+// `save20` and `SAVE20` are the same code instead of one working and one
+// silently failing.
+export function normalizeCouponCode(code: string): string {
+  return code.trim().toUpperCase()
 }
 
 // Does this single cart item fall within a coupon's target scope? Shared by
@@ -183,7 +231,7 @@ export async function findCouponByCode(admin: SupabaseClient, code: string): Pro
   const { data, error } = await admin
     .from('coupons')
     .select('*')
-    .eq('code', code)
+    .eq('code', normalizeCouponCode(code))
     .eq('requires_code', true)
     .maybeSingle()
 
@@ -199,20 +247,44 @@ export async function findCouponByCode(admin: SupabaseClient, code: string): Pro
 export function getBasicEligibility(
   coupon: Coupon,
   ctx: CouponEvalContext,
-): { ok: true } | { ok: false; reason: string } {
+): { ok: true } | { ok: false; rejection: CouponRejection } {
+  // Inactive, not started yet and expired all share COUPON_UNAVAILABLE: each
+  // of them would otherwise confirm the code exists. See CouponRejectionCode.
   if (!coupon.active) {
-    return { ok: false, reason: 'This coupon is no longer active' }
+    return { ok: false, rejection: COUPON_UNAVAILABLE }
   }
 
   const now = Date.now()
   if (coupon.starts_at && now < new Date(coupon.starts_at).getTime()) {
-    return { ok: false, reason: 'This coupon is not active yet' }
+    return { ok: false, rejection: COUPON_UNAVAILABLE }
   }
   if (coupon.ends_at && now > new Date(coupon.ends_at).getTime()) {
-    return { ok: false, reason: 'This coupon has expired' }
+    return { ok: false, rejection: COUPON_UNAVAILABLE }
   }
+  // "Spend 200 more and this works" is the one rejection worth real money to
+  // the store, so it keeps its own message and its figure -- but only for a
+  // customer who is plausibly about to qualify. An enumerator guessing
+  // dictionary words (WELCOME10, SAVE20, EID25) with a near-empty cart would
+  // otherwise get "this code exists" for every hit, which is the oracle this
+  // whole endpoint is supposed to have closed.
+  //
+  // MIN_ORDER_HINT_RATIO is where that line sits: at 50%, a cart already
+  // halfway to the minimum is treated as a real shopper who deserves to be
+  // told what to add, and anything below it gets the generic rejection that
+  // reveals nothing. 50% is a starting point, not a measured optimum -- raise
+  // it to tighten the leak further, lower it to be more helpful.
   if (coupon.min_order_amount != null && ctx.subtotal < coupon.min_order_amount) {
-    return { ok: false, reason: `This coupon requires a minimum order of ${coupon.min_order_amount}` }
+    if (ctx.subtotal < coupon.min_order_amount * MIN_ORDER_HINT_RATIO) {
+      return { ok: false, rejection: COUPON_UNAVAILABLE }
+    }
+    return {
+      ok: false,
+      rejection: {
+        reasonCode: 'min_order',
+        reason: `This coupon requires a minimum order of ${coupon.min_order_amount}`,
+        minOrderAmount: coupon.min_order_amount,
+      },
+    }
   }
 
   // Targeting semantics (deliberate simplification, documented per task):
@@ -225,50 +297,101 @@ export function getBasicEligibility(
   // itemMatchesCouponTarget/computeBxgyDiscount.)
   if (coupon.target_type !== 'all') {
     const matches = ctx.items.some(i => itemMatchesCouponTarget(coupon, i.product_id, ctx.productById))
-    if (!matches) return { ok: false, reason: 'This coupon does not apply to any items in your cart' }
+    if (!matches) return { ok: false, rejection: COUPON_UNAVAILABLE }
   }
 
   return { ok: true }
 }
 
-// usage_limit / per_customer_limit checks via a best-effort COUNT against
-// coupon_redemptions (see task notes: an accepted race-tolerant tradeoff,
-// not a hard distributed lock -- a coupon-limit race has no inventory
-// consequence, unlike stock).
-export async function checkUsageLimits(
+export type RedemptionCounts = Map<string, { total: number; customer: number }>
+
+// One grouped count covering EVERY candidate coupon (public.
+// coupon_redemption_counts), rather than one or two COUNT queries per coupon
+// from inside an eligibility loop -- the query count no longer grows with the
+// number of active promotions. Coupons with neither limit set are left out of
+// the call, and a call with nothing left to count is skipped entirely, so the
+// ordinary cart pays nothing for this.
+export async function fetchRedemptionCounts(
   admin: SupabaseClient,
-  coupon: Coupon,
-  customerEmail?: string | null,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  if (coupon.usage_limit != null) {
-    const { count, error } = await admin
-      .from('coupon_redemptions')
-      .select('id', { count: 'exact', head: true })
-      .eq('coupon_id', coupon.id)
+  coupons: Coupon[],
+  userId: string | null,
+): Promise<RedemptionCounts> {
+  const counts: RedemptionCounts = new Map()
 
-    if (error) throw error
-    if ((count ?? 0) >= coupon.usage_limit) {
-      return { ok: false, reason: 'This coupon has reached its usage limit' }
-    }
+  // A per_customer_limit is uncountable without a signed-in customer, and
+  // checkUsageLimits refuses before it ever reads the number, so a guest must
+  // not pay for the round trip that would produce it.
+  const ids = coupons
+    .filter(c => c.usage_limit != null || (c.per_customer_limit != null && userId))
+    .map(c => c.id)
+  if (ids.length === 0) return counts
+
+  const { data, error } = await admin.rpc('coupon_redemption_counts', {
+    p_coupon_ids: ids,
+    p_user_id: userId,
+  })
+  if (error) throw error
+
+  // count() is bigint, which some drivers hand back as a string.
+  for (const row of (data ?? []) as Array<{ coupon_id: string; total_count: number; customer_count: number }>) {
+    counts.set(row.coupon_id, { total: Number(row.total_count), customer: Number(row.customer_count) })
+  }
+  return counts
+}
+
+// usage_limit / per_customer_limit against counts already fetched above (see
+// task notes: a best-effort count, an accepted race-tolerant tradeoff rather
+// than a hard distributed lock -- a coupon-limit race has no inventory
+// consequence, unlike stock).
+//
+// per_customer_limit is enforced against the AUTHENTICATED user id only. It
+// used to be counted against the customer's email, which is optional at
+// checkout and never verified: leaving it blank skipped the check and gave
+// unlimited redemptions, and filling in another address reset the count. So a
+// coupon that limits redemptions per customer now needs a customer we can
+// actually identify, and a guest who TYPED such a code is refused outright
+// rather than quietly granted unlimited redemptions. That refusal is
+// deliberately its own message, since "sign in" is something the customer can
+// act on.
+//
+// enforcePerCustomerLimit = false is for the AUTO-APPLIED path, where that
+// reasoning inverts. A guest cannot hunt for an auto promotion; it simply
+// applies, so there is no abuse to refuse. Withholding it would instead mean
+// an owner who sets "once per customer" on an auto promo silently stops
+// serving it to every guest in a guest-checkout store, with no symptom
+// anywhere but a sales dip. So the auto path enforces the GLOBAL usage_limit
+// only, which is also exactly what findBestAutoPromotion (its
+// percentage/fixed/free_shipping sibling) does by skipping this check
+// entirely.
+export function checkUsageLimits(
+  coupon: Coupon,
+  counts: RedemptionCounts,
+  userId: string | null,
+  opts: { enforcePerCustomerLimit?: boolean } = {},
+): { ok: true } | { ok: false; rejection: CouponRejection } {
+  const count = counts.get(coupon.id)
+
+  if (coupon.usage_limit != null && (count?.total ?? 0) >= coupon.usage_limit) {
+    return { ok: false, rejection: COUPON_UNAVAILABLE }
   }
 
-  if (coupon.per_customer_limit != null && customerEmail) {
-    const { count, error } = await admin
-      .from('coupon_redemptions')
-      .select('id', { count: 'exact', head: true })
-      .eq('coupon_id', coupon.id)
-      .eq('customer_email', customerEmail)
-
-    if (error) throw error
-    if ((count ?? 0) >= coupon.per_customer_limit) {
-      return { ok: false, reason: 'You have already used this coupon the maximum number of times' }
+  if (coupon.per_customer_limit != null && opts.enforcePerCustomerLimit !== false) {
+    if (!userId) {
+      return {
+        ok: false,
+        rejection: { reasonCode: 'sign_in_required', reason: 'Please sign in to use this code' },
+      }
+    }
+    if ((count?.customer ?? 0) >= coupon.per_customer_limit) {
+      return { ok: false, rejection: COUPON_UNAVAILABLE }
     }
   }
 
   return { ok: true }
 }
 
-// percentage -> % of subtotal, capped at max_discount_amount if set.
+// percentage -> % of subtotal, capped at max_discount_amount if set, and
+//   never more than the subtotal itself.
 // fixed -> the flat amount, capped at the subtotal itself so it can't go
 //   negative.
 // free_shipping -> no subtotal discount; the caller-supplied shippingCost
@@ -281,9 +404,21 @@ export function computeDiscount(
   ctx: CouponEvalContext,
 ): { discountAmount: number; freeShipping: boolean } {
   if (coupon.discount_type === 'percentage') {
-    const raw = ctx.subtotal * (coupon.discount_value / 100)
+    // discount_value is constrained to 0..100 in the database (see the
+    // 20260807000000 migration) and clamped again here. Without it a typo of
+    // 150 discounted 1.5x the subtotal and posted a NEGATIVE amount to
+    // Kashier, which hard-breaks checkout.
+    //
+    // The Math.min against the subtotal below is deliberately redundant with
+    // that clamp: while both stand, neither is individually observable in the
+    // output (min(min(100,v)/100*S, M) equals min(min(v/100*S, M), S) for
+    // every input), which is exactly the point -- weakening either one alone
+    // cannot produce a discount larger than the cart. It is the pair that is
+    // load-bearing, so do not delete one as "dead".
+    const percent = clampPercent(coupon.discount_value) / 100
+    const raw = ctx.subtotal * percent
     const capped = coupon.max_discount_amount != null ? Math.min(raw, coupon.max_discount_amount) : raw
-    return { discountAmount: Math.max(0, capped), freeShipping: false }
+    return { discountAmount: Math.max(0, Math.min(capped, ctx.subtotal)), freeShipping: false }
   }
 
   if (coupon.discount_type === 'fixed') {
@@ -306,7 +441,7 @@ export type CouponEvalResult =
       description: string | null
       freeShipping: boolean
     }
-  | { valid: false; reason: string }
+  | ({ valid: false } & CouponRejection)
 
 // Full validation for a customer-typed code: lookup (requires_code = true
 // only -- this is not for auto-promotions), active/date/min-order/targeting,
@@ -318,15 +453,19 @@ export async function evaluateCouponByCode(
   ctx: CouponEvalContext,
 ): Promise<CouponEvalResult> {
   const coupon = await findCouponByCode(admin, code)
+  // Deliberately the same rejection a real-but-unusable code gets: telling
+  // the two apart is what made this an enumeration oracle.
   if (!coupon) {
-    return { valid: false, reason: 'Invalid coupon code' }
+    return { valid: false, ...COUPON_UNAVAILABLE }
   }
 
   const basic = getBasicEligibility(coupon, ctx)
-  if (!basic.ok) return { valid: false, reason: basic.reason }
+  if (!basic.ok) return { valid: false, ...basic.rejection }
 
-  const usage = await checkUsageLimits(admin, coupon, ctx.customerEmail)
-  if (!usage.ok) return { valid: false, reason: usage.reason }
+  const userId = ctx.userId ?? null
+  const counts = await fetchRedemptionCounts(admin, [coupon], userId)
+  const usage = checkUsageLimits(coupon, counts, userId)
+  if (!usage.ok) return { valid: false, ...usage.rejection }
 
   const { discountAmount, freeShipping } = computeDiscount(coupon, ctx)
 
@@ -376,11 +515,13 @@ export async function findBestAutoPromotion(
 
 // Same as findBestAutoPromotion, but for the OTHER independent candidate
 // group: auto-apply (requires_code = false) buy_x_get_y promotions only.
-// Per the task spec, BXGY coupons also get their usage_limit/
-// per_customer_limit enforced even when auto-applied (unlike the
-// percentage/fixed/free_shipping auto-promotions above, which deliberately
-// skip that check -- see getBasicEligibility's doc comment) since a BXGY
-// promo can reasonably be capped ("first 100 orders").
+// Per the task spec, BXGY coupons get their GLOBAL usage_limit enforced even
+// when auto-applied (unlike the percentage/fixed/free_shipping
+// auto-promotions above, which skip usage checks entirely -- see
+// getBasicEligibility's doc comment) since a BXGY promo can reasonably be
+// capped ("first 100 orders"). per_customer_limit is deliberately NOT
+// enforced here; see checkUsageLimits for why an auto promotion must never
+// withhold itself from a guest.
 export async function findBestAutoBxgyPromotion(
   admin: SupabaseClient,
   ctx: CouponEvalContext,
@@ -396,10 +537,18 @@ export async function findBestAutoBxgyPromotion(
 
   let best: { coupon: Coupon; discountAmount: number } | null = null
 
-  for (const coupon of (data ?? []) as Coupon[]) {
-    if (!getBasicEligibility(coupon, ctx).ok) continue
-    const usage = await checkUsageLimits(admin, coupon, ctx.customerEmail)
-    if (!usage.ok) continue
+  // Eligibility first, then ONE grouped redemption count for whatever
+  // survives it. This used to await one or two COUNT queries per coupon from
+  // inside the loop, so the query count grew with the number of active BXGY
+  // promotions; it is now two queries in total however many there are.
+  const userId = ctx.userId ?? null
+  const candidates = ((data ?? []) as Coupon[]).filter(coupon => getBasicEligibility(coupon, ctx).ok)
+  const counts = await fetchRedemptionCounts(admin, candidates, userId)
+
+  for (const coupon of candidates) {
+    // Global usage_limit only: see checkUsageLimits for why an auto-applied
+    // promotion must not withhold itself from a guest over per_customer_limit.
+    if (!checkUsageLimits(coupon, counts, userId, { enforcePerCustomerLimit: false }).ok) continue
 
     const { discountAmount } = computeDiscount(coupon, ctx)
     if (!best || discountAmount > best.discountAmount) {
@@ -454,7 +603,7 @@ export function computeBxgyDiscount(
   const discountedUnitCount = sets * coupon.get_quantity
   const cheapestUnits = unitPrices.slice(0, discountedUnitCount)
 
-  const percent = Math.max(0, Math.min(100, coupon.get_discount_percent)) / 100
+  const percent = clampPercent(coupon.get_discount_percent) / 100
   return cheapestUnits.reduce((sum, price) => sum + price * percent, 0)
 }
 
@@ -584,6 +733,21 @@ export function findBestBundle(
   return best
 }
 
+// The amount actually charged. Rounded to cents so the stored total_amount
+// and the amount string in the Kashier hash derive from one value (no float
+// drift between them), and floored at 0 so no combination of discounts can
+// ever post a negative amount to the gateway. Every discount above is already
+// capped at the subtotal, so this floor is the last line of defence rather
+// than the first.
+export function computeOrderTotal(
+  subtotal: number,
+  shipping: number,
+  tax: number,
+  discountAmount: number,
+): number {
+  return Math.max(0, Math.round((subtotal + shipping + tax - discountAmount) * 100) / 100)
+}
+
 // ---------------------------------------------------------------------------
 // Combining bundles, BXGY coupons, and regular coupons/promotions
 // ---------------------------------------------------------------------------
@@ -689,28 +853,20 @@ export function combineCouponWithBundle(
   return combineWithBundle(discountAmount, bundleMatch, subtotal)
 }
 
-// The single top-level "what discount does this cart get" function, used by
-// create-order to settle the REAL, charged total. validate-coupon does NOT
-// call this one wholesale -- it composes the same underlying building blocks
-// (evaluateCouponByCode, findBestBundle, combineCouponWithBundle) directly
-// instead, for one deliberate reason: this function's winner-selection requires
-// discountAmount > 0 to win (so a free_shipping coupon that nets to zero
-// marginal value -- e.g. the cart already qualifies for free shipping via
-// the subtotal threshold -- correctly never burns a usage_limit slot; see
-// the (iii) block below). validate-coupon has no real shippingCost to give
-// it (see CouponEvalContext), so a free_shipping code's discountAmount is
-// always a placeholder 0 there regardless of whether it would really apply
-// -- the freeShipping BOOLEAN is what carries that signal instead (an
-// existing, deliberate design predating this phase). Running THIS
-// competitive selection from validate-coupon would make that placeholder 0
-// disqualify an otherwise-valid free_shipping code from ever reporting
-// freeShipping: true, which the storefront's Cart/Checkout pages depend on.
-// So: the bundle/BXGY MATH (the genuinely new, must-never-drift logic) is
-// still 100% shared between the two endpoints; only this top-level
-// "does an unrelated auto-promotion beat my explicit code" competition stays
-// create-order-only, exactly as it already was, pre-this-phase, for
-// percentage/fixed coupons (validate-coupon has never run that comparison
-// either -- see its own file for the accepted gap this preserves).
+// The single top-level "what discount does this cart get" function. BOTH
+// endpoints now call it: create-order to settle the REAL, charged total, and
+// validate-coupon to preview it. They used to differ, which is exactly how
+// the storefront ended up showing a total the receipt disagreed with whenever
+// an auto-promotion or a bundle applied.
+//
+// One thing does NOT survive the preview, and validate-coupon compensates for
+// it: winner-selection here requires discountAmount > 0 (so a free_shipping
+// coupon worth nothing at the margin never burns a usage_limit slot -- see
+// the (iii) block below), and validate-coupon has no real shippingCost to
+// give (see CouponEvalContext), so a free_shipping candidate always nets a
+// placeholder 0 there and can never win. The freeShipping BOOLEAN carries
+// that signal instead; see validate-coupon for exactly how, and for the one
+// remaining preview gap it leaves.
 //
 // Considers THREE independent candidates against the ORIGINAL cart:
 //   (i)   the best bundle match (findBestBundle)

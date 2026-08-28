@@ -5,6 +5,29 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIU
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+// The edge functions reject an over-cap, rate-limited or otherwise refusable
+// request with a machine-readable `code` (and the ceiling that was hit) in the
+// response body, so the customer can be told what to actually change rather
+// than "please try again". functions.invoke surfaces any non-2xx as a
+// FunctionsHttpError whose `context` is the raw Response, which is the only
+// place that body is reachable from. Anything else (a network drop, a 5xx with
+// no body) yields nothing and the caller falls back to a generic message.
+//
+// `responded` says whether the server answered at all, which is a different
+// question from whether it sent a code: a request that got no response may
+// still have been processed (see the retry handling in Checkout.tsx).
+export async function readServerError(err: unknown): Promise<{ responded: boolean; code?: string; limit?: number }> {
+  const context = (err as { context?: unknown } | null)?.context
+  if (!(context instanceof Response)) return { responded: false }
+  // clone() itself throws synchronously if the body was already read, so the
+  // whole read is guarded, not just the json() promise.
+  try {
+    return { responded: true, ...await context.clone().json() }
+  } catch {
+    return { responded: true }
+  }
+}
+
 export type Product = {
   id: string
   name: string
@@ -20,7 +43,6 @@ export type Product = {
   colors: string[]
   featured: boolean
   created_at: string
-  sale_price: number | null
   materials: string | null
   weight_grams: number | null
   tags: string[]
@@ -76,7 +98,15 @@ export type ProductCatalogEntry = Product & {
   total_stock: number
   available_sizes: string[]
   available_colors: string[]
+  // Bottom and top of the variant price range, both computed in SQL over the
+  // IN-STOCK variants (all variants only when nothing is in stock). Equal
+  // means one flat price; min < max means the grid shows a "from" price.
   min_price: number
+  max_price: number
+  // The single definition of "on sale": min_price is under the product's base
+  // price, i.e. some purchasable variant really is discounted. Computed in the
+  // view so the /sale filter and the SALE badge cannot disagree.
+  has_discount: boolean
   // null (not 0) when the product has no reviews yet -- render "no ratings
   // yet", not a misleading 0-star average.
   avg_rating: number | null
@@ -124,6 +154,10 @@ export type Order = {
   created_at: string
   coupon_id: string | null
   discount_amount: number
+  // When this order actually took stock off the shelf (null = it never did).
+  // Written only by the database functions; the admin list reads it to know
+  // which status changes admin_update_order_status() will accept.
+  stock_reserved_at: string | null
 }
 
 // A coupon AND an automatic promotion are the same row: requires_code = true
@@ -208,7 +242,10 @@ export type StoreSettings = {
   id: string
   logo_url: string | null
   favicon_url: string | null
-  // Display currency only -- Kashier always settles in EGP (see create-order).
+  // The column still exists and is kept in sync with the DB row, but nothing
+  // reads or writes it anymore -- the admin display-currency selector this
+  // once backed was removed (CurrencyContext.tsx always renders EGP, the only
+  // currency Kashier ever settles).
   currency: string
   updated_at: string
 }

@@ -38,6 +38,9 @@ export type CreateOrderRequest = {
   lang?: string
   // 'cash' = Cash on Delivery; anything else (default) = pay online.
   paymentMethod?: 'online' | 'cash'
+  // Idempotency key kept across a lost response, so retrying a Cash on
+  // Delivery submit returns the first order instead of placing a second one.
+  clientRequestId?: string
 }
 
 export type CreateOrderResponse = {

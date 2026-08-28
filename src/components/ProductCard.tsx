@@ -2,9 +2,10 @@ import { Link } from 'react-router-dom'
 import { ProductCatalogEntry } from '@/lib/supabase'
 import { useT } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
+import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import WishlistButton from '@/components/WishlistButton'
 import { cn } from '@/lib/utils'
-import { Plus, Loader2 } from 'lucide-react'
+import { Eye, Plus, Loader2 } from 'lucide-react'
 
 const NEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 
@@ -15,6 +16,8 @@ type ProductCardProps = {
   categoryLabel: string
   /** Pre-formatted buy-x-get-y badge text, if an active promo applies. */
   bxgyBadge?: string
+  /** Opens the quick-view modal. Optional: the homepage grid has no modal to
+   *  open, so it omits this and the button simply isn't rendered. */
   onQuickView?: (productId: string) => void
   onQuickAdd: (product: ProductCatalogEntry, e: React.MouseEvent) => void
   quickAdding?: boolean
@@ -30,6 +33,7 @@ export default function ProductCard({
   product: p,
   categoryLabel,
   bxgyBadge,
+  onQuickView,
   onQuickAdd,
   quickAdding = false,
   animationDelay,
@@ -37,9 +41,14 @@ export default function ProductCard({
 }: ProductCardProps) {
   const t = useT()
   const { formatPrice } = useCurrency()
+  const catalogPrice = useCatalogPrice()
   const isNew = Date.now() - new Date(p.created_at).getTime() < NEW_WINDOW_MS
-  const hasSale = p.sale_price != null && Number(p.sale_price) < Number(p.min_price)
-  const displayPrice = hasSale ? Number(p.sale_price) : Number(p.min_price)
+  // has_discount comes straight from product_catalog, which computes it from
+  // the rule the server actually charges by: coalesce(price_override,
+  // products.price) per variant (supabase/functions/_shared/pricing.ts).
+  // Reading it rather than re-deriving it here is what keeps this badge and
+  // the /sale filter in Shop.tsx meaning the same thing.
+  const hasSale = p.has_discount
   const topLabel = p.brand || categoryLabel
 
   return (
@@ -91,9 +100,9 @@ export default function ProductCard({
           {p.name}
         </h3>
         <div className="mt-2 flex items-baseline gap-2">
-          <span className="text-base font-bold text-foreground">{formatPrice(displayPrice)}</span>
+          <span className="text-base font-bold text-foreground">{catalogPrice(p)}</span>
           {hasSale && (
-            <span className="text-xs text-muted-foreground line-through">{formatPrice(Number(p.min_price))}</span>
+            <span className="text-xs text-muted-foreground line-through">{formatPrice(Number(p.price))}</span>
           )}
         </div>
         <div className="mt-3.5 flex items-center justify-between gap-2">
@@ -108,17 +117,31 @@ export default function ProductCard({
           ) : (
             <span />
           )}
-          {p.total_stock > 0 && (
-            <button
-              onClick={(e) => onQuickAdd(p, e)}
-              disabled={quickAdding}
-              aria-label={t.shopQuickAdd}
-              title={t.shopQuickAdd}
-              className="shrink-0 w-[34px] h-[34px] rounded-full border border-foreground text-foreground flex items-center justify-center hover:bg-foreground hover:text-background hover:scale-105 transition-all cursor-pointer disabled:opacity-50"
-            >
-              {quickAdding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-            </button>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            {/* The whole card is a <Link>, so this has to cancel the navigation
+                it sits inside before it can open the modal. */}
+            {onQuickView && (
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); onQuickView(p.id) }}
+                aria-label={t.shopQuickView}
+                title={t.shopQuickView}
+                className="w-[34px] h-[34px] rounded-full border border-border text-muted-foreground flex items-center justify-center hover:border-foreground hover:text-foreground hover:scale-105 transition-all cursor-pointer"
+              >
+                <Eye className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {p.total_stock > 0 && (
+              <button
+                onClick={(e) => onQuickAdd(p, e)}
+                disabled={quickAdding}
+                aria-label={t.shopQuickAdd}
+                title={t.shopQuickAdd}
+                className="w-[34px] h-[34px] rounded-full border border-foreground text-foreground flex items-center justify-center hover:bg-foreground hover:text-background hover:scale-105 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {quickAdding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </Link>

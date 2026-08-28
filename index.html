@@ -8,8 +8,21 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Amiri:ital,wght@0,400;0,700;1,400&family=Cairo:wght@300;400;500;600;700;800;900&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,500;1,600&display=swap" rel="stylesheet">
-    <title>BOM Store — Built to last. Made to move.</title>
+    <title>BOM Store - Built to last. Made to move.</title>
     <meta name="description" content="BOM Store: a modern craft workshop for handcrafted shoes. Goodyear welted, resoled for life. Built to last. Made to move." />
+    <script>
+      // Arabic is the default (hardcoded on <html> above), but a visitor who
+      // picked English used to get a full RTL page until LanguageContext ran
+      // after mount. Read the same key it stores and correct the document
+      // before first paint. Keep in sync with LANG_KEY in
+      // src/contexts/LanguageContext.tsx.
+      try {
+        if (localStorage.getItem('bom-store-lang') === 'en') {
+          document.documentElement.lang = 'en'
+          document.documentElement.dir = 'ltr'
+        }
+      } catch (e) { /* localStorage unavailable in private mode: keep the Arabic default */ }
+    </script>
   </head>
   <body>
     <div id="root"></div>

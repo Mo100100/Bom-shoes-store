@@ -1,4 +1,5 @@
 import { Star } from 'lucide-react'
+import { useT } from '@/contexts/LanguageContext'
 
 type RatingStarsProps = {
   rating: number | null
@@ -10,12 +11,13 @@ type RatingStarsProps = {
 // cards, QuickViewModal). Renders nothing when there are no reviews yet --
 // an unrated product should look clean, not show a "0 reviews" placeholder.
 export default function RatingStars({ rating, count, className = '' }: RatingStarsProps) {
+  const t = useT()
   if (!count || rating == null) return null
   const rounded = Math.round(rating)
   return (
     <div
       className={`flex items-center gap-1 ${className}`}
-      aria-label={`${rating.toFixed(1)} out of 5 stars, ${count} reviews`}
+      aria-label={t.reviewsStarsLabel(rating.toFixed(1), count)}
     >
       <div className="flex text-foreground/70">
         {Array.from({ length: 5 }).map((_, i) => (

@@ -6,6 +6,8 @@ import { useCurrency } from '@/contexts/CurrencyContext'
 import { useCategories } from '@/contexts/CategoriesContext'
 import { useBrands } from '@/contexts/BrandsContext'
 import { compressImage } from '@/lib/compressImage'
+import { diffVariants, DesiredVariant } from '@/lib/variantDiff'
+import { splitSizes } from '@/lib/sizes'
 import { Loader2, Plus, X, Edit2, Trash2, Star, Search, ChevronUp, ChevronDown } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -14,7 +16,7 @@ type SortDir = 'asc' | 'desc'
 
 const EMPTY: Partial<Product> = {
   name: '', slug: '', description: '', price: 0, category: 'Sneakers',
-  brand: null, featured: false, sale_price: null, materials: '', weight_grams: null, tags: [],
+  brand: null, featured: false, materials: '', weight_grams: null, tags: [],
 }
 
 // Local editable row for the variant list. `_key` is a stable React key that
@@ -32,6 +34,41 @@ type VariantRow = {
 
 function blankVariantRow(): VariantRow {
   return { size: '', color: '', sku: '', barcode: '', stock: 0, price_override: '', _key: crypto.randomUUID() }
+}
+
+// A row is filler (the blank one openNew() seeds, or one the admin cleared)
+// only when BOTH halves of the natural key are empty. Half a row is a mistake.
+function isBlankVariantRow(row: VariantRow): boolean {
+  return !row.size.trim() && !row.color.trim()
+}
+
+// The single derivation of "what the grid means" -- product_variants AND the
+// legacy products.sizes/stock/colors columns are both built from this, so they
+// can never disagree about which sizes exist.
+//
+// One size box can name several sizes ('41/42/43'), which is how a whole
+// slash-joined string used to end up in one variant row and then in the cart.
+// Each named size becomes its own row here.
+//
+// Stock is the stock of EACH size the row expands to, not a total to divide:
+// an admin typing 41/42/43 with stock 2 has two pairs in each of those sizes,
+// and splitting 2 across three sizes would invent a fractional or zero count
+// nobody entered. The id and the sku identify one physical variant, so only
+// the first expanded size can keep them; the rest are new rows to be filled in.
+function expandVariantRows(rows: VariantRow[]): DesiredVariant[] {
+  return rows.flatMap(row => {
+    const color = row.color.trim()
+    if (!color) return []
+    return splitSizes(row.size).map((size, index) => ({
+      id: index === 0 ? row.id : undefined,
+      size,
+      color,
+      sku: index === 0 ? (row.sku.trim() || null) : null,
+      barcode: index === 0 ? (row.barcode.trim() || null) : null,
+      stock: Number(row.stock) || 0,
+      price_override: row.price_override.trim() === '' ? null : Number(row.price_override),
+    }))
+  })
 }
 
 // Recomputes products.image_url from the current product_images rows so every
@@ -54,6 +91,9 @@ export default function AdminProducts() {
   const [uploading, setUploading] = useState(false)
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [variantRows, setVariantRows] = useState<VariantRow[]>([])
+  // Per-row validation messages, keyed by VariantRow._key. Set on save,
+  // cleared as soon as the admin edits the row they belong to.
+  const [variantErrors, setVariantErrors] = useState<Record<string, string>>({})
   // cost_price lives in its own admin-only-select table (product_costs), not
   // on products/product_catalog -- see migration comment. Tracked separately
   // here rather than on `editing` since it's not part of the Product type.
@@ -122,6 +162,7 @@ export default function AdminProducts() {
       _key: v.id,
     }))
     setVariantRows(rows)
+    setVariantErrors({})
   }
 
   async function loadCostPrice(productId: string) {
@@ -133,6 +174,7 @@ export default function AdminProducts() {
     setEditing({ ...EMPTY })
     setImages([])
     setVariantRows([blankVariantRow()])
+    setVariantErrors({})
     setCostPrice(null)
     setDragIndex(null)
   }
@@ -144,37 +186,65 @@ export default function AdminProducts() {
 
   function updateVariantRow(key: string, field: keyof VariantRow, value: string | number) {
     setVariantRows(rows => rows.map(r => (r._key === key ? { ...r, [field]: value } : r)))
+    clearVariantError(key)
   }
   function addVariantRow() {
     setVariantRows(rows => [...rows, blankVariantRow()])
   }
   function removeVariantRow(key: string) {
     setVariantRows(rows => rows.filter(r => r._key !== key))
+    clearVariantError(key)
+  }
+  function clearVariantError(key: string) {
+    setVariantErrors(errors => (key in errors ? Object.fromEntries(Object.entries(errors).filter(([k]) => k !== key)) : errors))
   }
 
-  // Full replace against the DB for this product: delete every existing
-  // variant row, then insert the current set in one batch. Per-row
-  // update()/insert() calls against unique(product_id, size, color) can fail
-  // mid-loop when two rows swap values (updating row A to row B's current
-  // size/color hits the constraint before row B is touched) -- delete+insert
-  // sidesteps that entirely. Fine for an admin-only, low-traffic screen.
-  async function saveVariants(productId: string) {
-    const rows = variantRows
-      .filter(r => r.size.trim() && r.color.trim()) // ponytail: skip incomplete rows, don't persist half-filled variants
-      .map(row => ({
-        product_id: productId,
-        size: row.size.trim(),
-        color: row.color.trim(),
-        sku: row.sku.trim() || null,
-        barcode: row.barcode.trim() || null,
-        stock: Number(row.stock) || 0,
-        price_override: row.price_override.trim() === '' ? null : Number(row.price_override),
-      }))
-    const { error: delError } = await supabase.from('product_variants').delete().eq('product_id', productId)
-    if (delError) throw delError
-    if (rows.length) {
-      const { error: insError } = await supabase.from('product_variants').insert(rows)
-      if (insError) throw insError
+  // Writes the grid to product_variants as a diff that PRESERVES row ids.
+  // Orders snapshot `variant_id` and fulfill_order() looks the row up by that
+  // id, so the old delete + insert gave every variant a new uuid on every
+  // product save and killed any paid order still waiting on its webhook.
+  //
+  // unique(product_id, size, color) was the reason for delete + insert: naive
+  // per-row updates collide when two rows swap size/color. diffVariants()
+  // matches desired rows to existing rows by their natural key first and only
+  // then by id, so a swap leaves both rows on their own size/color while the
+  // other fields move across, and no update ever targets a key a surviving row
+  // still holds. Order is deletes -> updates -> inserts so a size/color or sku
+  // freed by a removed row is available again before another row reuses it.
+  //
+  // Four queries at most, whatever the row count: one read plus one batched
+  // write per operation kind. `desired` comes from expandVariantRows() in
+  // handleSave so the legacy columns below are built from the very same list.
+  async function saveVariants(productId: string, desired: DesiredVariant[]) {
+    // Read the current rows rather than trusting the grid's copy: only the DB
+    // knows which ids are still there to be kept, updated or removed.
+    const { data: existing, error: loadError } = await supabase
+      .from('product_variants').select('id, size, color').eq('product_id', productId)
+    if (loadError) throw loadError
+
+    const { deletes, updates, inserts } = diffVariants(existing || [], desired)
+
+    if (deletes.length) {
+      const { error } = await supabase.from('product_variants').delete().in('id', deletes)
+      // The database refuses to remove a variant an order is still waiting to
+      // be paid for: fulfill_order() looks the row up by id when the payment
+      // lands, and a missing row kills that paid order with its stock never
+      // decremented. Deletes run first here, so no other variant write has
+      // happened, but the product row above IS already committed -- which is
+      // exactly what the message says.
+      if (error?.hint === 'variant_in_live_order') throw new Error(t.adminVariantInLiveOrder)
+      if (error) throw error
+    }
+    if (updates.length) {
+      // upsert on the primary key: one statement for every kept row.
+      const { error } = await supabase.from('product_variants')
+        .upsert(updates.map(row => ({ ...row, product_id: productId })))
+      if (error) throw error
+    }
+    if (inserts.length) {
+      const { error } = await supabase.from('product_variants')
+        .insert(inserts.map(row => ({ ...row, product_id: productId })))
+      if (error) throw error
     }
   }
 
@@ -237,6 +307,20 @@ export default function AdminProducts() {
   async function handleSave() {
     if (!editing) return
     if (!editing.name || !editing.price) { toast.error(t.adminRequired); return }
+
+    // Reject half-filled rows and size boxes holding nothing usable, inline on
+    // the offending row. Dropping them silently is how a product could be saved
+    // with fewer sizes than the admin thought they had entered.
+    const rowErrors: Record<string, string> = {}
+    for (const row of variantRows) {
+      if (isBlankVariantRow(row)) continue
+      if (!row.color.trim()) rowErrors[row._key] = t.adminVariantColorRequired
+      else if (splitSizes(row.size).length === 0) rowErrors[row._key] = t.adminVariantSizeRequired
+    }
+    setVariantErrors(rowErrors)
+    if (Object.keys(rowErrors).length > 0) { toast.error(t.adminVariantRowsInvalid); return }
+
+    const desiredVariants = expandVariantRows(variantRows)
     setSaving(true)
     try {
       const isNew = !editing.id
@@ -249,7 +333,6 @@ export default function AdminProducts() {
         category: editing.category || 'Sneakers',
         brand: editing.brand?.trim() ? editing.brand.trim() : null,
         featured: !!editing.featured,
-        sale_price: editing.sale_price === null || editing.sale_price === undefined || (editing.sale_price as any) === '' ? null : Number(editing.sale_price),
         materials: editing.materials?.trim() ? editing.materials.trim() : null,
         weight_grams: editing.weight_grams === null || editing.weight_grams === undefined || (editing.weight_grams as any) === '' ? null : Number(editing.weight_grams),
         tags: editing.tags || [],
@@ -272,18 +355,18 @@ export default function AdminProducts() {
         productId = data.id
       }
 
-      await saveVariants(productId!)
+      await saveVariants(productId!, desiredVariants)
       await supabase.from('product_costs').upsert({ product_id: productId, cost_price: costPrice })
 
       // Keep legacy products.stock/sizes/colors in sync from the variants we
       // just wrote, so pages that still read those flat columns directly
       // (Shop, ProductDetail, Cart) don't go stale now that variants are the
-      // real source of truth.
-      const validRows = variantRows.filter(r => r.size.trim() && r.color.trim())
+      // real source of truth. Same `desiredVariants` list the variant rows came
+      // from, so the legacy columns can't reintroduce a crammed size.
       await supabase.from('products').update({
-        stock: validRows.reduce((sum, r) => sum + (Number(r.stock) || 0), 0),
-        sizes: Array.from(new Set(validRows.map(r => r.size.trim()))),
-        colors: Array.from(new Set(validRows.map(r => r.color.trim()))),
+        stock: desiredVariants.reduce((sum, v) => sum + v.stock, 0),
+        sizes: Array.from(new Set(desiredVariants.map(v => v.size))),
+        colors: Array.from(new Set(desiredVariants.map(v => v.color))),
       }).eq('id', productId)
 
       toast.success(isNew ? t.adminCreateSuccess : t.adminUpdateSuccess)
@@ -306,6 +389,10 @@ export default function AdminProducts() {
   async function handleDelete(p: ProductCatalogEntry) {
     if (!confirm(t.adminDeleteConfirm(p.name))) return
     const { error } = await supabase.from('products').delete().eq('id', p.id)
+    // Deleting a product cascades to its variants, so the same live-order
+    // guard applies. Its own message, though: nothing was removed and nothing
+    // was saved here, unlike the save path.
+    if (error?.hint === 'variant_in_live_order') { toast.error(t.adminProductInLiveOrder); return }
     if (error) { toast.error(error.message); return }
     toast.success(t.adminDeleted)
     load()
@@ -488,9 +575,6 @@ export default function AdminProducts() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <Field label={`${t.adminCostPrice} (${currency})`} type="number" value={costPrice != null ? String(costPrice) : ''} onChange={v => setCostPrice(v === '' ? null : Number(v))} />
-                <Field label={`${t.adminSalePrice} (${currency})`} type="number" value={editing.sale_price != null ? String(editing.sale_price) : ''} onChange={v => setEditing({ ...editing, sale_price: v === '' ? null : Number(v) })} />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
                 <Field label={t.adminMaterials} value={editing.materials || ''} onChange={v => setEditing({ ...editing, materials: v })} />
                 <Field label={t.adminWeightGrams} type="number" value={editing.weight_grams != null ? String(editing.weight_grams) : ''} onChange={v => setEditing({ ...editing, weight_grams: v === '' ? null : Number(v) })} />
               </div>
@@ -570,24 +654,31 @@ export default function AdminProducts() {
                   <span className="block text-xs tracking-widest uppercase text-muted-foreground">{t.adminVariants}</span>
                   <button type="button" onClick={addVariantRow} className="text-xs underline cursor-pointer">{t.adminAddRow}</button>
                 </div>
+                <p className="text-xs text-muted-foreground mb-2">{t.adminVariantSizeHint}</p>
                 <div className="overflow-x-auto">
                   <div className="min-w-[640px] space-y-2">
                     <div className="grid grid-cols-[1fr_1fr_4.5rem_1fr_1fr_6rem_1.5rem] gap-2 text-[10px] tracking-widest uppercase text-muted-foreground">
                       <span>{t.adminColSize}</span><span>{t.adminColColor}</span><span>{t.adminColStock}</span><span>{t.adminColSku}</span><span>{t.adminColBarcode}</span><span>{t.adminColPriceOverride}</span><span />
                     </div>
-                    {variantRows.map(row => (
-                      <div key={row._key} className="grid grid-cols-[1fr_1fr_4.5rem_1fr_1fr_6rem_1.5rem] gap-2 items-center">
-                        <input value={row.size} onChange={e => updateVariantRow(row._key, 'size', e.target.value)} className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none" />
-                        <input value={row.color} onChange={e => updateVariantRow(row._key, 'color', e.target.value)} className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none" />
-                        <input type="number" value={row.stock} onChange={e => updateVariantRow(row._key, 'stock', Number(e.target.value) || 0)} className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none" />
-                        <input value={row.sku} onChange={e => updateVariantRow(row._key, 'sku', e.target.value)} className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none" />
-                        <input value={row.barcode} onChange={e => updateVariantRow(row._key, 'barcode', e.target.value)} className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none" />
-                        <input type="number" value={row.price_override} onChange={e => updateVariantRow(row._key, 'price_override', e.target.value)} className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none" />
-                        <button type="button" onClick={() => removeVariantRow(row._key)} className="p-1 text-red-700 cursor-pointer" aria-label={t.adminRemoveRow}>
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ))}
+                    {variantRows.map(row => {
+                      const rowError = variantErrors[row._key]
+                      return (
+                        <div key={row._key}>
+                          <div className="grid grid-cols-[1fr_1fr_4.5rem_1fr_1fr_6rem_1.5rem] gap-2 items-center">
+                            <input value={row.size} onChange={e => updateVariantRow(row._key, 'size', e.target.value)} aria-invalid={!!rowError} placeholder={t.adminVariantSizePlaceholder} className={`w-full bg-transparent border px-2 py-1.5 text-sm focus:border-foreground outline-none ${rowError ? 'border-red-700' : 'border-border'}`} />
+                            <input value={row.color} onChange={e => updateVariantRow(row._key, 'color', e.target.value)} aria-invalid={!!rowError} className={`w-full bg-transparent border px-2 py-1.5 text-sm focus:border-foreground outline-none ${rowError ? 'border-red-700' : 'border-border'}`} />
+                            <input type="number" value={row.stock} onChange={e => updateVariantRow(row._key, 'stock', Number(e.target.value) || 0)} className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none" />
+                            <input value={row.sku} onChange={e => updateVariantRow(row._key, 'sku', e.target.value)} className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none" />
+                            <input value={row.barcode} onChange={e => updateVariantRow(row._key, 'barcode', e.target.value)} className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none" />
+                            <input type="number" value={row.price_override} onChange={e => updateVariantRow(row._key, 'price_override', e.target.value)} className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none" />
+                            <button type="button" onClick={() => removeVariantRow(row._key)} className="p-1 text-red-700 cursor-pointer" aria-label={t.adminRemoveRow}>
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          {rowError && <p className="text-xs text-red-700 mt-1">{rowError}</p>}
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               </div>

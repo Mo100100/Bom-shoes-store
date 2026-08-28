@@ -114,7 +114,10 @@ export default function AdminCoupons() {
     setSaving(true)
     try {
       const payload = {
-        code: editing.requires_code ? editing.code!.trim() : null,
+        // Stored upper case so a customer typing `save20` matches `SAVE20`
+        // (the lookup upper-cases too). The database enforces both this and
+        // the null on an auto promotion; see the 20260807000000 migration.
+        code: editing.requires_code ? editing.code!.trim().toUpperCase() : null,
         requires_code: !!editing.requires_code,
         description: editing.description?.trim() || null,
         discount_type: editing.discount_type || 'percentage',

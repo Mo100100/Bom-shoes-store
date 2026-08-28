@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { supabase, ProductCatalogEntry, Coupon } from '@/lib/supabase'
@@ -9,6 +9,7 @@ import QuickViewModal from '@/components/QuickViewModal'
 import ProductCard from '@/components/ProductCard'
 import { useSeo } from '@/hooks/useSeo'
 import { useCategories } from '@/contexts/CategoriesContext'
+import { compareSizes, firstInStockVariant } from '@/lib/sizes'
 
 const SORT_VALUES = ['featured', 'price-asc', 'price-desc', 'newest']
 
@@ -22,6 +23,7 @@ export default function Shop() {
   const [sort, setSort] = useState('featured')
   const [products, setProducts] = useState<ProductCatalogEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [selectedColors, setSelectedColors] = useState<string[]>([])
   const [selectedSizes, setSelectedSizes] = useState<string[]>([])
   const [minPrice, setMinPrice] = useState('')
@@ -60,21 +62,44 @@ export default function Shop() {
     description: t.shopSubtitle,
   })
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
+  // Guards against two overlapping loads (fast category/search switching, or
+  // a retry click while the previous attempt is still in flight): only the
+  // response matching the most recently started call is allowed to touch
+  // state, so a slow failure can't land after a fast success and paint an
+  // error banner over data that's already on screen (or vice versa).
+  const loadIdRef = useRef(0)
+
+  async function loadProducts() {
+    const id = ++loadIdRef.current
+    setLoading(true)
+    setLoadError(false)
+    try {
       // Category / brand / search / sale are independent server-side filters --
       // ANDed together by chaining on the same query.
       let query = supabase.from('product_catalog').select('*')
       if (category !== 'All') query = query.eq('category', category)
       if (brand) query = query.eq('brand', brand)
-      if (saleOnly) query = query.not('sale_price', 'is', null)
+      // has_discount is the view's own "some in-stock variant is priced under
+      // the base price" flag -- the exact column ProductCard's SALE badge
+      // reads, so /sale and the badge can never mean different things.
+      if (saleOnly) query = query.eq('has_discount', true)
       if (search) query = query.textSearch('search_vector', search, { type: 'websearch' })
-      const { data } = await query
+      const { data, error } = await query
+      if (error) throw error
+      if (id !== loadIdRef.current) return
       setProducts(data || [])
-      setLoading(false)
+    } catch {
+      if (id !== loadIdRef.current) return
+      setProducts([])
+      setLoadError(true)
+    } finally {
+      if (id === loadIdRef.current) setLoading(false)
     }
-    load()
+  }
+
+  useEffect(() => {
+    loadProducts()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category, search, brand, saleOnly])
 
   // Active, auto-apply (no code needed) buy-x-get-y promotions -- the only
@@ -119,7 +144,8 @@ export default function Shop() {
 
   // Color/size chips derive from what's already loaded -- no extra query.
   const availableColors = useMemo(() => Array.from(new Set(products.flatMap(p => p.available_colors))), [products])
-  const availableSizes = useMemo(() => Array.from(new Set(products.flatMap(p => p.available_sizes))), [products])
+  // Sorted so the chips read 9, 10, 40 rather than 10, 40, 9.
+  const availableSizes = useMemo(() => Array.from(new Set(products.flatMap(p => p.available_sizes))).sort(compareSizes), [products])
 
   // Client-side on top of the server-filtered set: color/size/price. Empty
   // selection = no filter, and all four filter dimensions compose (AND).
@@ -158,15 +184,26 @@ export default function Shop() {
     e.preventDefault()
     e.stopPropagation()
     setQuickAddingId(p.id)
-    const { data: variants } = await supabase.from('product_variants').select('*').eq('product_id', p.id)
-    const variant = variants?.find(v => v.stock > 0)
+    const { data: variants, error } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size').order('color')
     setQuickAddingId(null)
+    // A failed stock check must not be reported as "out of stock" -- that's a
+    // lie about inventory we never actually looked at.
+    if (error) {
+      toast.error(t.quickAddError)
+      return
+    }
+    // Smallest in-stock size, not whatever row came back first, so the customer
+    // gets a size they can predict and the toast tells them which one it is.
+    const variant = firstInStockVariant(variants ?? [])
     if (!variant) {
       toast.error(t.productOutOfStock)
       return
     }
-    addItem(p, variant.size, variant.color, 1)
-    toast.success(t.productAdded, { description: `${p.name}, ${variant.size}` })
+    if (!addItem(p, variant.size, variant.color, 1, variant)) {
+      toast.error(t.productStockMaxed)
+      return
+    }
+    toast.success(t.productAdded, { description: t.productAddedSize(p.name, variant.size) })
   }
 
   return (
@@ -206,11 +243,14 @@ export default function Shop() {
         {/* Filter bar */}
         <div className="flex flex-col gap-6 bg-background/60 border border-border px-6 py-5 mb-12">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
-            <div className="flex items-center gap-1 overflow-x-auto scrollbar-none -mx-1 px-1">
+            {/* No scrollbar-none here: on a narrow screen the scrollbar is the
+                only sign that more categories exist past the edge. */}
+            <div className="flex items-center gap-1 overflow-x-auto -mx-1 px-1">
               {CATEGORY_VALUES.map(c => (
                 <button
                   key={c}
                   onClick={() => selectCategory(c)}
+                  aria-pressed={category === c}
                   className={`px-4 py-1.5 text-sm whitespace-nowrap transition-colors cursor-pointer ${
                     category === c
                       ? 'bg-foreground text-background'
@@ -246,6 +286,7 @@ export default function Shop() {
                     <button
                       key={c}
                       onClick={() => toggleColor(c)}
+                      aria-pressed={selectedColors.includes(c)}
                       className={`px-3 py-1 text-xs border transition-colors cursor-pointer ${
                         selectedColors.includes(c)
                           ? 'border-foreground bg-foreground text-background'
@@ -264,6 +305,7 @@ export default function Shop() {
                     <button
                       key={s}
                       onClick={() => toggleSize(s)}
+                      aria-pressed={selectedSizes.includes(s)}
                       className={`px-3 py-1 text-xs border transition-colors cursor-pointer ${
                         selectedSizes.includes(s)
                           ? 'border-foreground bg-foreground text-background'
@@ -283,15 +325,17 @@ export default function Shop() {
                   value={minPrice}
                   onChange={(e) => setMinPrice(e.target.value)}
                   placeholder={t.shopPriceMin}
+                  aria-label={`${t.shopFilterPrice}: ${t.shopPriceMin}`}
                   className="w-16 bg-transparent text-xs border-b border-foreground/30 focus:outline-none focus:border-foreground py-1"
                 />
-                <span className="text-muted-foreground">–</span>
+                <span className="text-muted-foreground">-</span>
                 <input
                   type="number"
                   min={0}
                   value={maxPrice}
                   onChange={(e) => setMaxPrice(e.target.value)}
                   placeholder={t.shopPriceMax}
+                  aria-label={`${t.shopFilterPrice}: ${t.shopPriceMax}`}
                   className="w-16 bg-transparent text-xs border-b border-foreground/30 focus:outline-none focus:border-foreground py-1"
                 />
               </div>
@@ -303,6 +347,16 @@ export default function Shop() {
         {loading ? (
           <div className="py-24 flex justify-center">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : loadError ? (
+          <div className="py-24 text-center">
+            <p className="text-terracotta">{t.shopLoadError}</p>
+            <button
+              onClick={() => loadProducts()}
+              className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+            >
+              {t.failedTryAgain}
+            </button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="py-24 text-center">

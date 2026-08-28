@@ -3,26 +3,37 @@
 // Kashier calls this directly, server-to-server, with no Supabase JWT --
 // so verify_jwt = false for this function in supabase/config.toml.
 // Authenticity is instead verified via the x-kashier-signature header
-// (see verifyKashierSignature below), per developers.kashier.io/payment/webhook.
+// (see verifyKashierSignature in ./verify.ts), per
+// developers.kashier.io/payment/webhook.
 //
-// This is the ONLY place an order is ever marked paid: it calls the
-// fulfill_order() Postgres function (SECURITY DEFINER, atomic stock check +
-// decrement) and only emails the order confirmation if that succeeds.
+// This is the only place a payment GATEWAY can mark an order paid (the owner
+// can also do it by hand from the admin, see send-order-confirmation): it
+// calls the fulfill_order() Postgres function (SECURITY DEFINER, atomic stock
+// check + decrement) and only emails the order confirmation if that succeeds.
+// Because everything here is decided by an unauthenticated caller, everything
+// the decision rests on has to be signed and checked:
+// the signature must cover the order id, amount, currency and status
+// (verify.ts), the paid amount must match the stored total, and the order's
+// current state must allow the transition.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { corsHeaders } from '../_shared/cors.ts'
-import { hmacSha256Hex, timingSafeEqual } from '../_shared/kashier-crypto.ts'
-import { renderOrderConfirmationEmail } from '../_shared/email-templates.ts'
+import { sendOrderConfirmationEmail } from '../_shared/email-templates.ts'
+import {
+  checkPaidAmount,
+  deriveOutcome,
+  planOrderTransition,
+  planStockRelease,
+  verifyKashierSignature,
+  type KashierWebhookData,
+} from './verify.ts'
 
 type KashierWebhookPayload = {
-  event: string
-  data: {
-    merchantOrderId?: string
-    transactionId?: string
-    status?: string
-    signatureKeys?: string[]
-    [key: string]: unknown
-  }
+  // `event` sits outside `data` and is therefore never covered by the
+  // signature: it is only ever used to reject a delivery, never to accept
+  // one (see deriveOutcome).
+  event?: string
+  data: KashierWebhookData
 }
 
 Deno.serve(async (req: Request) => {
@@ -35,7 +46,14 @@ Deno.serve(async (req: Request) => {
 
   try {
     const rawBody = await req.text()
-    const payload = JSON.parse(rawBody) as KashierWebhookPayload
+    // Shape-checked, not just parsed: this endpoint is unauthenticated, so a
+    // body without `data` must be a cheap 400 rather than a thrown 500 that
+    // Kashier would then retry for 24h.
+    const payload = parsePayload(rawBody)
+    if (!payload?.data || typeof payload.data !== 'object') {
+      console.error('kashier-webhook: rejected, body is not a valid webhook payload')
+      return new Response('invalid body', { status: 400 })
+    }
 
     const apiKey = Deno.env.get('KASHIER_API_KEY')
     if (!apiKey) throw new Error('KASHIER_API_KEY not configured')
@@ -50,7 +68,7 @@ Deno.serve(async (req: Request) => {
     const eventId = payload.data.transactionId
     const merchantOrderId = payload.data.merchantOrderId
     if (!eventId || !merchantOrderId) {
-      console.error('kashier-webhook: payload missing transactionId/merchantOrderId', rawBody)
+      console.error('kashier-webhook: payload missing transactionId/merchantOrderId')
       return new Response('ignored: missing ids', { status: 200 })
     }
 
@@ -77,7 +95,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: order, error: orderLookupError } = await admin
       .from('orders')
-      .select('id, customer_name, customer_email, items, total_amount, kashier_order_id')
+      .select('id, status, payment_status, customer_name, customer_email, items, total_amount, kashier_order_id, stock_released_at')
       .eq('kashier_order_id', merchantOrderId)
       .single()
 
@@ -86,10 +104,95 @@ Deno.serve(async (req: Request) => {
       return new Response('ignored: unknown order', { status: 200 })
     }
 
-    // Kashier's `event` field can be pay|refund|authorize|void|capture -- only
-    // a successful/failed *payment* event should ever fulfill or fail an
-    // order. Refund/void/etc are out of scope for this pass (see report).
-    if (payload.event === 'pay' && payload.data.status === 'SUCCESS') {
+    // A refund or a void of a payment this store already applied: the goods go
+    // back on the shelf. release_order_stock is the single implementation of
+    // that (it is idempotent, locks in the same order as the other stock
+    // functions, and writes its own activity_logs entry), so this branch only
+    // decides whether to call it. It never fulfills anything, so it is handled
+    // before the payment state machine below and leaves it untouched.
+    const releasePlan = planStockRelease(order, payload.data, payload.event)
+    if (releasePlan.action === 'release') {
+      // Replay defence. `event` is not signed, and neither is transactionId
+      // guaranteed to be (it is not in REQUIRED_SIGNATURE_KEYS), so the
+      // idempotency ledger keyed on transactionId does not stop one captured
+      // payment body being resent as a refund under a fresh transaction id.
+      // A key on the ORDER does: one refund per order, whatever id it carries.
+      // Adding transactionId to the required signature keys was the other
+      // option and was rejected -- if Kashier does not sign that field, every
+      // legitimate webhook would start failing and we cannot verify from here
+      // which fields it signs.
+      const refundEventId = `refund:${merchantOrderId}`
+      const { data: refundSeen } = await admin
+        .from('processed_webhook_events')
+        .select('event_id')
+        .eq('event_id', refundEventId)
+        .maybeSingle()
+
+      if (refundSeen) {
+        console.log(`kashier-webhook: refund for ${merchantOrderId} already applied`)
+        return new Response('already processed', { status: 200 })
+      }
+
+      const { data: released, error: releaseError } = await admin.rpc('release_order_stock', {
+        p_order_id: order.id,
+        p_status: 'cancelled',
+        p_payment_status: 'refunded',
+        p_automatic: true,
+      })
+      if (releaseError) throw releaseError
+
+      // The order held no reservation to give back (it was released already,
+      // or it predates stock_reserved_at being recorded). The refund still
+      // happened, so record it: an order nobody was paid for must not keep
+      // reading as paid in the admin list.
+      if (!released) {
+        const { error: markError } = await admin
+          .from('orders')
+          .update({ status: 'cancelled', payment_status: 'refunded' })
+          .eq('id', order.id)
+        if (markError) throw markError
+      }
+
+      // Inventory moving because of a refund is worth a line in the logs even
+      // when everything worked: the owner has goods back to reshelve.
+      console.log(`kashier-webhook: refund applied to ${merchantOrderId} (stock returned: ${released === true})`)
+      // Both keys: the per-order one closes the replay above, the event one
+      // keeps an ordinary Kashier redelivery on the normal fast path.
+      await admin.from('processed_webhook_events').insert([{ event_id: refundEventId }, { event_id: eventId }])
+      return new Response('ok', { status: 200 })
+    }
+    if (releasePlan.isRefund) {
+      // A refund this store is NOT acting on (a partial one, or one for an
+      // order it never charged) needs a human: the money moved and the
+      // inventory did not.
+      console.error(`kashier-webhook: refund for ${merchantOrderId} not applied: ${releasePlan.reason}`)
+      return new Response('ignored: refund not applied', { status: 200 })
+    }
+
+    // The outcome comes from the signed `status`; the unsigned `event` can
+    // only veto a delivery, never authorise one (see deriveOutcome). Anything
+    // that isn't a clear payment success or failure changes nothing.
+    const outcome = deriveOutcome(payload.data, payload.event)
+    const plan = planOrderTransition(order, outcome)
+    if (plan.action === 'ignore') {
+      const message = `kashier-webhook: no state change for ${merchantOrderId}: ${plan.reason}`
+      // A successful payment we are declining to apply means the card was
+      // charged for an order that will not ship: that needs a human, so log
+      // it loudly rather than at info level.
+      if (outcome === 'paid') console.error(message)
+      else console.log(message)
+      return new Response('ignored: no state change', { status: 200 })
+    }
+
+    if (plan.action === 'fulfill') {
+      // Never fulfill on the gateway's say-so alone: the amount and currency
+      // actually paid must match the total this store computed and stored.
+      const amountCheck = checkPaidAmount(payload.data, order.total_amount)
+      if (!amountCheck.ok) {
+        console.error(`kashier-webhook: rejected ${merchantOrderId}, ${amountCheck.reason}`)
+        return new Response('rejected: amount mismatch', { status: 400 })
+      }
+
       const { data: fulfilled, error: rpcError } = await admin.rpc('fulfill_order', { p_order_id: order.id })
       if (rpcError) throw rpcError
 
@@ -98,11 +201,18 @@ Deno.serve(async (req: Request) => {
           console.error('kashier-webhook: failed to send confirmation email', err)
         )
       }
-    } else if (payload.event === 'pay') {
+    } else {
       // Payment failed/declined/cancelled: mark it, but stock was never
-      // touched (fulfill_order is only ever called on SUCCESS), so there's
-      // nothing to roll back.
-      await admin.from('orders').update({ payment_status: 'failed' }).eq('id', order.id)
+      // touched (fulfill_order is only ever called on success), so there's
+      // nothing to roll back. The payment_status filter re-checks in the
+      // database what planOrderTransition checked in memory, so a delivery
+      // racing a successful one still can't overwrite 'paid'.
+      const { error: failError } = await admin
+        .from('orders')
+        .update({ payment_status: 'failed' })
+        .eq('id', order.id)
+        .eq('payment_status', 'pending')
+      if (failError) throw failError
     }
 
     // Only mark this event processed now that we've actually handled it --
@@ -113,99 +223,18 @@ Deno.serve(async (req: Request) => {
     return new Response('ok', { status: 200 })
   } catch (err) {
     console.error('kashier-webhook error:', err)
-    // Ack with 200 anyway: an internal error here shouldn't make Kashier
-    // hammer us with retries for up to 24h. We've logged it for follow-up.
-    return new Response('error logged', { status: 200 })
+    // 5xx on purpose: reaching here means a payment we were told about was
+    // NOT applied (an rpc or database failure). Kashier must retry, otherwise
+    // a paid order silently stays pending with its stock never decremented.
+    // Genuinely ignorable deliveries return 200 above and never land here.
+    return new Response('internal error', { status: 500 })
   }
 })
 
-// Verifies the x-kashier-signature header over the data.signatureKeys fields.
-// Kashier's own docs and SDK disagree on the exact construction (keys in
-// array order vs sorted; raw "k=v" vs URL-encoded querystring; and the v3
-// Payment Sessions flow vs the legacy hosted-payment flow may sign with the
-// Payment API key or the account Secret Key). Rather than hard-code one
-// guess, we try every legitimate construction and accept on the first match,
-// logging which one worked -- all candidates are HMAC-SHA256 over the same
-// signed fields, so accepting any correct construction is not a security
-// weakening. The matched variant is logged so this can be pinned down later.
-async function verifyKashierSignature(
-  data: Record<string, unknown>,
-  signatureHeader: string,
-  keys: string[],
-): Promise<boolean> {
-  const sigKeys = Array.isArray(data.signatureKeys) ? (data.signatureKeys as string[]) : []
-  if (sigKeys.length === 0) return false
-
-  const orderings: Record<string, string[]> = {
-    arrayOrder: sigKeys,
-    sorted: [...sigKeys].sort(),
-  }
-  const builders: Record<string, (ks: string[]) => string> = {
-    raw: ks => ks.map(k => `${k}=${data[k]}`).join('&'),
-    encoded: ks => {
-      const p = new URLSearchParams()
-      for (const k of ks) p.append(k, String(data[k] ?? ''))
-      return p.toString()
-    },
-  }
-
-  for (const signKey of keys) {
-    if (!signKey) continue
-    for (const [ordName, ks] of Object.entries(orderings)) {
-      for (const [encName, build] of Object.entries(builders)) {
-        const expected = await hmacSha256Hex(build(ks), signKey)
-        if (timingSafeEqual(expected, signatureHeader)) {
-          console.log(`kashier-webhook: signature matched (order=${ordName}, enc=${encName}, key=${signKey === keys[0] ? 'api' : 'secret'})`)
-          return true
-        }
-      }
-    }
-  }
-
-  console.error('kashier-webhook: signature did not match any construction', JSON.stringify({
-    received: signatureHeader,
-    signatureKeys: sigKeys,
-    sample: builders.raw(orderings.sorted),
-  }))
-  return false
-}
-
-async function sendOrderConfirmationEmail(order: {
-  customer_name: string | null
-  customer_email: string | null
-  kashier_order_id: string | null
-  items: unknown
-  total_amount: number | null
-}) {
-  const resendApiKey = Deno.env.get('RESEND_API_KEY')
-  const fromEmail = Deno.env.get('RESEND_FROM_EMAIL')
-  if (!resendApiKey || !fromEmail || !order.customer_email) {
-    console.error('kashier-webhook: skipping confirmation email, missing RESEND config or customer email')
-    return
-  }
-
-  const html = renderOrderConfirmationEmail({
-    customerName: order.customer_name ?? 'there',
-    orderRef: order.kashier_order_id ?? '',
-    items: Array.isArray(order.items) ? order.items : [],
-    total: order.total_amount ?? 0,
-  })
-
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${resendApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: fromEmail,
-      to: order.customer_email,
-      subject: `Your BOM Store order ${order.kashier_order_id} is confirmed`,
-      html,
-    }),
-  })
-
-  if (!res.ok) {
-    console.error('kashier-webhook: Resend send failed', res.status, await res.text())
+function parsePayload(rawBody: string): KashierWebhookPayload | null {
+  try {
+    return JSON.parse(rawBody) as KashierWebhookPayload
+  } catch {
+    return null
   }
 }

@@ -19,6 +19,27 @@ const STATUS_LABEL_MAP: Record<string, string> = {
   cancelled: 'statusCancelled',
   paid: 'statusPaid',
   failed: 'statusFailed',
+  refunded: 'statusRefunded',
+}
+
+// The order states an order can still be moved into. Mirrors the state machine
+// in admin_update_order_status() (see 20260808000000), which is authoritative:
+// this only stops the owner picking a move the database will refuse.
+//
+//   cancelled is terminal      -- the goods went back on the shelf and may
+//                                 already be sold to someone else.
+//   pending cannot be advanced -- an order that never reserved stock would be
+//                                 shipped against inventory still counted as
+//                                 available. Cancelling it is all that is left.
+//   everything else moves freely between confirmed/processing/shipped/
+//   delivered, in both directions, and can always be cancelled.
+const ACTIVE_STATUSES = ['confirmed', 'processing', 'shipped', 'delivered']
+
+function allowedStatuses(order: Order): string[] {
+  if (order.status === 'cancelled') return []
+  const holdsStock = order.payment_status === 'paid' || !!order.stock_reserved_at
+  if (order.status === 'pending' && !holdsStock) return ['cancelled']
+  return [...ACTIVE_STATUSES, 'cancelled']
 }
 
 export default function AdminOrders() {
@@ -53,26 +74,61 @@ export default function AdminOrders() {
   }
   useEffect(() => { load() }, [])
 
+  // Every state change goes through admin_update_order_status(), never a plain
+  // UPDATE: cancelling an order has to give its reserved stock back, and
+  // advancing one that never reserved any has to be refused. A database
+  // trigger rejects a direct write from the client, so this is the only path.
+  // The refusal reasons come back as a `hint` and are shown in the owner's own
+  // language rather than as raw SQL.
+  function refusalMessage(hint: string | null | undefined, fallback: string): string {
+    if (hint === 'order_cancelled') return t.adminOrderCancelledFinal
+    if (hint === 'order_never_reserved') return t.adminOrderNeverReserved
+    if (hint === 'payment_not_markable') return t.adminPaymentNotMarkable
+    if (hint === 'fulfill_failed') return t.adminFulfillFailed
+    return fallback
+  }
+
   async function updateStatus(order: Order, newStatus: string) {
-    const { error } = await supabase
-      .from('orders')
-      .update({ status: newStatus })
-      .eq('id', order.id)
-    if (error) { toast.error(error.message); return }
+    // Cancelling is the one status change that moves inventory and cannot be
+    // undone: the items go back on the shelf and the order is closed for good.
+    // It sits in the same dropdown as the everyday moves, one scroll position
+    // away from 'delivered', so it gets the same confirm() a product deletion
+    // gets in AdminProducts.
+    if (newStatus === 'cancelled' && !confirm(t.adminCancelConfirm)) return
+    const { error } = await supabase.rpc('admin_update_order_status', {
+      p_order_id: order.id,
+      p_status: newStatus,
+    })
+    if (error) { toast.error(refusalMessage(error.hint, error.message)); return }
     toast.success(t.adminUpdated)
     load()
   }
 
-  // Cash-on-Delivery orders reserve stock at placement but stay payment
-  // 'pending' until the cash is collected -- this is how the admin records
-  // that. Online orders are marked paid only by the Kashier webhook, never
-  // here.
+  // Two shapes, both "the money arrived":
+  //   cash   -- stock was reserved at placement, so this only records the
+  //             collection. Normal, everyday, no confirmation.
+  //   online -- the payment landed but the webhook never did. The database
+  //             runs the order through fulfill_order() here, which TAKES the
+  //             stock, so it is confirmed first. Without this the owner's only
+  //             answer to a dropped webhook would be cancelling an order the
+  //             customer has already paid for.
   async function markPaid(order: Order) {
-    const { error } = await supabase
-      .from('orders')
-      .update({ payment_status: 'paid' })
-      .eq('id', order.id)
-    if (error) { toast.error(error.message); return }
+    const isOnlineFulfil = order.payment_method !== 'cash'
+    if (isOnlineFulfil && !confirm(t.adminMarkPaidConfirm)) return
+    const { error } = await supabase.rpc('admin_update_order_status', {
+      p_order_id: order.id,
+      p_payment_status: 'paid',
+    })
+    if (error) { toast.error(refusalMessage(error.hint, error.message)); return }
+    // The customer of a lost webhook never got the confirmation the gateway
+    // path sends, so send it here. Non-fatal exactly as it is in the webhook:
+    // the order is fulfilled either way and a failed email must not read as a
+    // failed fulfilment.
+    if (isOnlineFulfil && order.kashier_order_id) {
+      supabase.functions
+        .invoke('send-order-confirmation', { body: { orderId: order.kashier_order_id } })
+        .catch(err => console.error('send-order-confirmation failed', err))
+    }
     toast.success(t.adminMarkedPaid)
     load()
   }
@@ -178,7 +234,9 @@ export default function AdminOrders() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(o => (
+                {filtered.map(o => {
+                  const allowed = allowedStatuses(o)
+                  return (
                   <Fragment key={o.id}>
                   <tr
                     className="border-t border-border hover:bg-muted/20 cursor-pointer"
@@ -212,7 +270,16 @@ export default function AdminOrders() {
                         }`}>
                           {o.payment_method === 'cash' ? `${statusLabel(o.payment_status)} · ${t.adminCod}` : statusLabel(o.payment_status)}
                         </span>
-                        {isAdmin && o.payment_method === 'cash' && o.payment_status !== 'paid' && (
+                        {/* Cash: records the collection. Online: only offered on
+                            an order still sitting at 'pending', where it means
+                            the payment landed but the webhook never did, and it
+                            takes the stock through fulfill_order.
+                            A 'failed' payment_status is terminal either way: it
+                            means place_cod_order could not reserve the stock, or
+                            release_order_stock gave the stock back, and in both
+                            cases those goods are on the shelf again. */}
+                        {isAdmin && o.payment_status === 'pending' && o.status !== 'cancelled'
+                          && (o.payment_method === 'cash' || o.status === 'pending') && (
                           <button
                             onClick={e => { e.stopPropagation(); markPaid(o) }}
                             className="text-[10px] tracking-wider uppercase border border-emerald-700/50 text-emerald-700 px-2 py-0.5 hover:bg-emerald-700 hover:text-white transition-colors cursor-pointer"
@@ -223,21 +290,36 @@ export default function AdminOrders() {
                       </div>
                     </td>
                     <td className="px-4 py-4" onClick={e => e.stopPropagation()}>
-                      {isAdmin ? (
+                      {isAdmin && allowed.length > 0 ? (
                         <div className="relative inline-block">
+                          {/* Moves the database will refuse stay visible but
+                              unpickable, so the list still reads as a full
+                              status history rather than hiding states. */}
                           <select
                             value={o.status}
                             onChange={e => updateStatus(o, e.target.value)}
                             className="appearance-none bg-transparent border border-border px-2.5 py-1 pe-7 text-xs cursor-pointer focus:outline-none"
                           >
                             {STATUS_VALUES.map(s => (
-                              <option key={s} value={s}>{statusLabel(s)}</option>
+                              <option key={s} value={s} disabled={s !== o.status && !allowed.includes(s)}>
+                                {statusLabel(s)}
+                              </option>
                             ))}
                           </select>
                           <ChevronDown className="w-3 h-3 absolute end-2 top-1/2 -translate-y-1/2 pointer-events-none" />
                         </div>
                       ) : (
-                        <span className="text-xs">{statusLabel(o.status)}</span>
+                        <div className="flex flex-col items-start gap-1">
+                          <span className="text-xs">{statusLabel(o.status)}</span>
+                          {/* The dropdown is gone for a cancelled order because
+                              there is nothing left to pick. Say why, rather than
+                              letting the control vanish unexplained. */}
+                          {isAdmin && o.status === 'cancelled' && (
+                            <span className="text-[10px] text-muted-foreground leading-snug max-w-[16rem]">
+                              {t.adminOrderCancelledFinal}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -293,7 +375,8 @@ export default function AdminOrders() {
                     </tr>
                   )}
                   </Fragment>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>

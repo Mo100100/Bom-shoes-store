@@ -19,12 +19,22 @@
 //
 // verify_jwt is left at its default (true) in supabase/config.toml: the
 // anon-key frontend client calls this, and the anon key itself is a valid
-// JWT, so guest checkout still works.
+// JWT, so guest checkout still works. That also means the JWT gate keeps
+// nobody out, since the anon key ships in the JS bundle -- the real limits on
+// abuse are the rate limiter and the COD ceilings below, not the JWT.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { corsHeaders } from '../_shared/cors.ts'
 import { hmacSha256Hex } from '../_shared/kashier-crypto.ts'
-import { resolveCartPricing, evaluateCouponByCode, resolveBestDiscount, type CartItemInput } from '../_shared/pricing.ts'
+import {
+  resolveCartPricing,
+  evaluateCouponByCode,
+  resolveBestDiscount,
+  computeOrderTotal,
+  type CartItemInput,
+} from '../_shared/pricing.ts'
+import { checkRateLimit, RATE_LIMITS } from '../_shared/rate-limit.ts'
+import { getUserIdFromAuthHeader } from '../_shared/auth.ts'
 
 type OrderItemInput = CartItemInput
 
@@ -40,12 +50,29 @@ type CustomerInput = {
 
 const TAX_RATE = 0.08
 // Kashier is an Egyptian gateway and the store settles in EGP: every payment is
-// always charged in EGP, regardless of the display currency an admin picks in
-// store settings (which only controls how prices are shown to shoppers). The
-// numeric price is sent to Kashier as-is in EGP, so prices should be entered as
-// EGP amounts. Kept a fixed server-side constant (never trust a client-supplied
-// currency) so the signed hash and the charged currency can't be tampered with.
+// always charged in EGP. Prices are shown in EGP too -- the admin display-
+// currency selector that once let them disagree is gone (see
+// src/contexts/CurrencyContext.tsx). The numeric price is sent to Kashier as-is
+// in EGP, so prices should be entered as EGP amounts. Kept a fixed server-side
+// constant (never trust a client-supplied currency) so the signed hash and the
+// charged currency can't be tampered with.
 const CURRENCY = 'EGP'
+
+// Ceiling on a single cash-on-delivery order. COD is the only path that
+// decrements real stock against no payment at all, so one request must not be
+// able to swallow a whole product line.
+//
+// 20 units: this is a shoe store, where a real basket is one to five pairs.
+// Twenty is far past any consumer order and a genuine bulk buyer should be
+// talking to the store, not the checkout form.
+//
+// 50,000 EGP: nobody hands a courier that much cash, and at typical prices
+// here it sits above what the 20-unit cap allows for all but the most
+// expensive lines, so the two ceilings cover each other. Online card orders
+// are deliberately NOT capped: they are paid before anything ships and they
+// reserve no stock.
+const COD_MAX_ITEMS = 20
+const COD_MAX_TOTAL = 50000
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -64,6 +91,7 @@ Deno.serve(async (req: Request) => {
       lang?: string
       paymentMethod?: string
       regionCode?: string
+      clientRequestId?: string
     } | null
 
     const items = body?.items
@@ -75,6 +103,13 @@ Deno.serve(async (req: Request) => {
     // 'cash' = Cash on Delivery (no Kashier redirect, stock reserved now);
     // anything else = pay online via Kashier (the default).
     const isCod = body?.paymentMethod === 'cash'
+    // Idempotency key for a retry after a LOST RESPONSE: the checkout page
+    // keeps the same value when it never heard back, so the second request
+    // returns the first request's order instead of reserving the stock twice.
+    // Only kept for COD, the only path that reserves anything. Length-capped
+    // and character-restricted because it is client-supplied and goes into a
+    // uniquely-indexed column.
+    const clientRequestId = isCod ? sanitizeRequestId(body?.clientRequestId) : null
 
     if (!Array.isArray(items) || items.length === 0) {
       return jsonResponse({ error: 'Cart is empty' }, 400)
@@ -93,6 +128,38 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const admin = createClient(supabaseUrl, serviceRoleKey)
+
+    // Replay of a request whose response never reached the customer: hand back
+    // the order the first attempt created rather than creating a second one.
+    // Checked before the rate limiter so a retry never costs the customer an
+    // allowance for an order that is already placed.
+    if (clientRequestId) {
+      const existing = await findOrderByRequestId(admin, clientRequestId)
+      if (existing) return existing
+    }
+
+    // Rate limit before any real work. This endpoint reserves stock (COD),
+    // writes an order row and creates a Kashier session, and it is reachable
+    // by anyone holding the anon key out of the JS bundle. The attempt is
+    // recorded whether or not it is allowed, so hammering never wins back an
+    // allowance. Thresholds and their reasoning live in ../_shared/rate-limit.ts.
+    const rule = isCod ? RATE_LIMITS.codOrder : RATE_LIMITS.onlineOrder
+    if (!(await checkRateLimit(admin, req, rule, { phone: customer.phone }))) {
+      return jsonResponse({ error: 'Too many orders from here just now. Please wait and try again.', code: 'rate_limited' }, 429)
+    }
+
+    // Cap the size of a COD order. Quantity is checkable now, before any
+    // pricing work; the value cap needs the server-computed total and is
+    // applied further down.
+    if (isCod) {
+      const totalQuantity = items.reduce((sum, i) => sum + i.quantity, 0)
+      if (totalQuantity > COD_MAX_ITEMS) {
+        return jsonResponse(
+          { error: `Cash on delivery is limited to ${COD_MAX_ITEMS} items per order.`, code: 'cod_item_cap', limit: COD_MAX_ITEMS },
+          400,
+        )
+      }
+    }
 
     // Enforce the admin's enabled payment methods server-side -- a disabled
     // method must be rejected even if the client somehow sends it.
@@ -131,12 +198,17 @@ Deno.serve(async (req: Request) => {
     // ../_shared/pricing.ts, so the two can never disagree on the money-
     // critical bundle/BXGY math; see that function's doc comment for the
     // full explicit-code-vs-auto-promotion-vs-bundle precedence rule).
+    const userId = getUserIdFromAuthHeader(req)
+
     const couponCtx = {
       subtotal,
       items,
       productById,
       resolvedItems: orderItems,
-      customerEmail: customer.email,
+      // The verified caller, not the typed-in email: a coupon with a
+      // per-customer limit is counted against this and refused when it is
+      // null (see checkUsageLimits).
+      userId,
       shippingCost: shipping,
     }
 
@@ -151,13 +223,21 @@ Deno.serve(async (req: Request) => {
     const discountAmount = resolution.discountAmount
     const winningCouponId = resolution.couponId
 
-    // Round to cents so the stored total_amount exactly matches the amount
-    // string used in the Kashier hash/redirect below (both derive from the
-    // same rounded value, avoiding float-precision drift between the two).
-    const total = Math.round((subtotal + shipping + tax - discountAmount) * 100) / 100
+    // Rounded to cents (so the stored total_amount and the amount string in
+    // the Kashier hash below derive from one value) and floored at 0 (so no
+    // discount can ever post a negative amount to the gateway).
+    const total = computeOrderTotal(subtotal, shipping, tax, discountAmount)
+
+    // The value half of the COD ceiling, checked against the server's own
+    // total rather than anything the client said it would be.
+    if (isCod && total > COD_MAX_TOTAL) {
+      return jsonResponse(
+        { error: `Cash on delivery is limited to ${COD_MAX_TOTAL} ${CURRENCY} per order.`, code: 'cod_value_cap', limit: COD_MAX_TOTAL },
+        400,
+      )
+    }
 
     const orderRef = `BOM-${Date.now()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
-    const userId = getUserIdFromAuthHeader(req)
 
     const { data: inserted, error: insertError } = await admin
       .from('orders')
@@ -175,10 +255,18 @@ Deno.serve(async (req: Request) => {
         items: orderItems,
         coupon_id: winningCouponId,
         discount_amount: discountAmount,
+        client_request_id: clientRequestId,
       })
       .select('id')
       .single()
 
+    // 23505 = unique violation on orders_client_request_id_key: two requests
+    // carrying the same key raced past the lookup above and this one lost.
+    // The winner's order is the answer.
+    if (insertError?.code === '23505' && clientRequestId) {
+      const existing = await findOrderByRequestId(admin, clientRequestId)
+      if (existing) return existing
+    }
     if (insertError || !inserted) throw insertError ?? new Error('order insert returned no row')
 
     // Cash on Delivery: no Kashier redirect. Reserve stock atomically now
@@ -198,7 +286,21 @@ Deno.serve(async (req: Request) => {
 
     const origin = resolveAllowedOrigin(req.headers.get('origin'))
 
-    const checkoutUrl = await buildKashierCheckout({ orderRef, amount: total, origin, customerEmail: customer.email, lang })
+    // If the payment session cannot be created the customer never sees a
+    // payment page, so this order can never be paid. Close it now instead of
+    // leaving a row stuck at 'pending' forever: it holds no stock (nothing has
+    // decremented anything yet), so this is bookkeeping only. The hourly
+    // cancel-abandoned-pending-orders job is the backstop for the other way an
+    // order is orphaned, the customer simply walking away from Kashier.
+    let checkoutUrl: string
+    try {
+      checkoutUrl = await buildKashierCheckout({ orderRef, amount: total, origin, customerEmail: customer.email, lang })
+    } catch (err) {
+      await admin.from('orders')
+        .update({ status: 'cancelled', payment_status: 'failed' })
+        .eq('id', inserted.id)
+      throw err
+    }
 
     // ponytail: the frontend checkout summary needs this to show what was
     // actually applied (couponCode re-validation can differ from the Cart
@@ -235,29 +337,47 @@ function resolveAllowedOrigin(requestOrigin: string | null): string {
   return allowed[0]
 }
 
+// Client-supplied, so it is bounded and restricted before it reaches a
+// uniquely-indexed column. The checkout page sends a uuid; anything that is
+// not plausibly one is dropped rather than rejected, which just means that
+// request gets no replay protection.
+function sanitizeRequestId(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const value = raw.trim()
+  return /^[A-Za-z0-9-]{16,64}$/.test(value) ? value : null
+}
+
+// The response the first attempt would have returned, rebuilt from the stored
+// order. Only COD orders carry a client_request_id, so `cod: true` is always
+// right here. A cancelled row means place_cod_order could not reserve the
+// stock, so the retry replays that same refusal instead of reporting success.
+async function findOrderByRequestId(
+  admin: ReturnType<typeof createClient>,
+  clientRequestId: string,
+): Promise<Response | null> {
+  const { data: existing } = await admin
+    .from('orders')
+    .select('kashier_order_id, status, discount_amount')
+    .eq('client_request_id', clientRequestId)
+    .maybeSingle()
+
+  if (!existing) return null
+  if (existing.status === 'cancelled') {
+    return jsonResponse({ error: 'Sorry, one of your items just went out of stock. Please review your cart.' }, 409)
+  }
+  return jsonResponse({
+    orderId: existing.kashier_order_id,
+    cod: true,
+    checkoutUrl: null,
+    discountAmount: Number(existing.discount_amount ?? 0),
+  })
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   })
-}
-
-// The Edge Runtime already verified the caller's JWT signature before our
-// code ever runs (verify_jwt defaults to true) -- so we just read its claims,
-// no need to re-verify. Guest checkouts arrive with the anon key's JWT
-// (role: 'anon', no real user), logged-in users with their access token
-// (role: 'authenticated', sub: their user id).
-function getUserIdFromAuthHeader(req: Request): string | null {
-  try {
-    const authHeader = req.headers.get('Authorization') ?? ''
-    const token = authHeader.replace(/^Bearer\s+/i, '')
-    const payloadB64 = token.split('.')[1]
-    if (!payloadB64) return null
-    const payload = JSON.parse(atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/')))
-    return payload.role === 'authenticated' && payload.sub ? payload.sub : null
-  } catch {
-    return null
-  }
 }
 
 type CheckoutOpts = { orderRef: string; amount: number; origin: string; customerEmail: string; lang: string }

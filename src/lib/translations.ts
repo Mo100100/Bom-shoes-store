@@ -7,6 +7,10 @@ export const translations = {
     brandName: 'BOM Store',
     brandTagline: 'Built to last. Made to move.',
 
+    // Error boundary (app-wide crash screen)
+    errorBoundaryMessage: 'Something went wrong on our end. Please reload the page.',
+    errorBoundaryReload: 'Reload page',
+
     // Announcement bar
     announcement: 'Free shipping on orders over $200. Crafted slowly, shipped with care.',
 
@@ -21,6 +25,13 @@ export const translations = {
     navBrands: 'Brands',
     navSale: 'Sale',
     navPolicies: 'Policies & Cancellations',
+    navMenu: 'Menu',
+    navOpenMenu: 'Open menu',
+    navCloseMenu: 'Close menu',
+    navHome: 'BOM Store home',
+    navSwitchLanguage: 'Switch language',
+    navPauseAnnouncements: 'Pause announcements',
+    navPlayAnnouncements: 'Resume announcements',
 
     // Account menu
     myAccount: 'My account',
@@ -40,6 +51,7 @@ export const translations = {
     footerSecure: 'Secure checkout by Kashier',
     footerReturns: '30-day returns',
     footerQuote: 'Quietness is a luxury.',
+    footerViewOnMap: 'View on map',
 
     // Home
     homeEyebrow: 'Mindful Footwear',
@@ -86,6 +98,7 @@ export const translations = {
     showcaseDesc: 'Cut from a single hide. Goodyear welted. A shoe that grows with you, season after season.',
     showcaseCta: 'Discover the piece',
     showcaseScroll: 'Scroll to explore',
+    showcaseSlideLabel: (n: number) => `Go to slide ${n}`,
 
     // New: marquee strip
     marqueeLine1: 'Handcrafted in Cairo',
@@ -157,10 +170,14 @@ export const translations = {
     shopSortNewest: 'Newest',
     shopPieces: (n: number) => `${n} ${n === 1 ? 'piece' : 'pieces'}`,
     shopNoMatch: 'No pieces match this moment.',
+    shopLoadError: 'Could not load the collection. Please try again.',
     shopViewAll: 'View all',
     shopFeatured: 'Featured',
     shopNew: 'New',
     shopSale: 'Sale',
+    // Grid price when a product's sizes are not all the same price -- the
+    // number shown is the cheapest one, not the price of every size.
+    shopPriceFrom: (price: string) => `From ${price}`,
     shopOnlyLeft: (n: number) => `Only ${n} left`,
     shopSearchingFor: (q: string) => `Results for "${q}"`,
     shopClearSearch: 'Clear search',
@@ -169,24 +186,32 @@ export const translations = {
     shopPriceMax: 'Max',
     shopQuickView: 'Quick view',
     shopQuickAdd: 'Quick add',
+    quickAddError: 'Could not check stock. Please try again.',
     // Informational only -- the real discount is computed server-side at checkout.
     shopBxgyBadge: (buy: number, get: number, percent: number) =>
       percent >= 100 ? `Buy ${buy} Get ${get} Free` : `Buy ${buy} Get ${get} ${percent}% Off`,
 
     // Header search
+    searchLabel: 'Search',
+    searchClose: 'Close search',
     searchPlaceholder: 'Search for a pair…',
     searchRecent: 'Recent searches',
     searchSeeAll: (q: string) => `See all results for "${q}"`,
     searchNoResults: 'No results found',
+    searchError: 'Could not search. Please try again.',
 
     // Product Detail
     productBack: 'Back to shop',
     productColor: 'Color',
     productSize: 'Size',
-    productSizeGuide: 'Size guide',
     productAddToBag: 'Add to basket',
     productOutOfStock: 'Out of stock',
     productAdded: 'Added to your basket',
+    // Toast detail line: always names the size that went in, so a quick-add
+    // never leaves the customer guessing which one they got.
+    productAddedSize: (name: string, size: string) => `${name}, Size ${size}`,
+    productPhotoLabel: (n: number, name: string) => `View photo ${n} of ${name}`,
+    productStockMaxed: 'Your basket already holds every one we have left',
     productChooseSize: 'Please choose a size',
     productShip1: 'Free shipping on orders over $200',
     productShip2: '30-day quiet returns',
@@ -198,6 +223,7 @@ export const translations = {
     productAccordion3: 'Care',
     productAccordion3Text: 'Brush gently with a soft-bristle brush after wear. Apply a neutral cream conditioner every six weeks. Store with cedar shoe trees in a cool, dry place.',
     productNotFound: 'This piece has wandered off.',
+    productLoadError: 'Could not load this piece. Please try again.',
     productReturnShop: 'Return to shop',
     productAlsoTitle: 'You may also consider',
     productAlsoSubtitle: 'In the same spirit',
@@ -209,13 +235,17 @@ export const translations = {
     bundleSectionTitle: 'Bundle & Save',
     bundleAddButton: 'Add Bundle to Bag',
     bundleAdded: 'Bundle added to your basket',
+    bundleAddError: 'Could not add the bundle. Please try again.',
 
     // Reviews
     reviewsEyebrow: 'Customer feedback',
     reviewsTitle: 'Reviews',
     reviewsEmpty: 'No reviews yet. Be the first to write one.',
+    reviewsLoadError: 'Could not load reviews. Please try again.',
     reviewsVerifiedBadge: 'Verified Purchase',
     reviewsAnonymous: 'Customer',
+    reviewsRateStars: (n: number) => `Rate ${n} star${n > 1 ? 's' : ''}`,
+    reviewsStarsLabel: (rating: string, count: number) => `${rating} out of 5 stars, ${count} reviews`,
     reviewsWriteTitle: 'Write a review',
     reviewsEditTitle: 'Edit your review',
     reviewsTitlePlaceholder: 'Sum it up in a few words (optional)',
@@ -246,7 +276,10 @@ export const translations = {
     wishlistNavLabel: 'Wishlist',
 
     // Quick view
+    quickViewTitle: 'Quick view',
     quickViewDetails: 'View full details',
+    quickViewNotFound: 'This piece is no longer available.',
+    quickViewError: 'Could not load this piece. Please try again.',
 
     // Cart
     cartEyebrow: 'Your basket',
@@ -267,10 +300,22 @@ export const translations = {
     cartRemove: 'Remove',
     cartDecrease: 'Decrease',
     cartIncrease: 'Increase',
+    // One format for a chosen colour + size, shared by the basket and the
+    // checkout summary so the same line never reads two different ways.
+    cartVariant: (color: string, size: string) => `${color}, Size ${size}`,
     cartCouponPlaceholder: 'Coupon code',
     cartCouponApply: 'Apply',
     cartCouponInvalid: 'This code could not be applied',
+    cartCouponMinOrder: (amount: string) => `This code needs a minimum order of ${amount}`,
+    cartCouponSignIn: 'Sign in to your account to use this code',
+    cartCouponTooMany: 'Too many attempts. Please wait a moment and try again.',
     cartDiscount: 'Discount',
+    cartUpdated: 'Your basket was updated to match the store: check the prices and sizes below.',
+    cartItemUnavailable: 'No longer available',
+    cartRemoveUnavailable: 'Remove the unavailable pieces to continue',
+    cartClearConfirm: 'Clear the whole basket?',
+    cartClearYes: 'Yes, clear it',
+    cartClearCancel: 'Keep it',
 
     // Checkout
     checkoutBack: 'Back to basket',
@@ -300,10 +345,27 @@ export const translations = {
     fieldRequired: ' *',
     fieldOptional: ' (optional)',
     checkoutSelectRegion: 'Select your governorate',
+    checkoutRegionsLoading: 'Loading governorates…',
+    checkoutRegionsError: 'Could not load governorates.',
     checkoutRequired: 'Please complete all required fields',
     checkoutFailed: 'Something went quiet on our end. Please try again.',
+    checkoutUnavailable: 'Some pieces sold out while you were here. Go back to your basket to remove them.',
+    checkoutBackToBasket: 'Back to your basket',
+    checkoutTooManyOrders: 'Too many orders from here in a short time. Please wait a little and try again.',
+    checkoutCodTooManyItems: (max: number) => `Cash on delivery is limited to ${max} items per order. Please reduce your basket, or pay online instead.`,
+    // Hardcoded "EGP" and Western digits: this string is built outside any
+    // component (translations.ts has no access to formatPrice), the cap is
+    // always a real EGP amount, and Western digits match the money
+    // convention CurrencyContext.tsx documents, even in the Arabic string below.
+    checkoutCodTooExpensive: (max: number) => `Cash on delivery is limited to ${max.toLocaleString('en-US')} EGP per order. Please reduce your basket, or pay online instead.`,
 
     // Checkout success / failed
+    successChecking: 'Confirming your order',
+    successCheckingDesc: 'One moment while we check with the payment provider.',
+    pendingEyebrow: 'Almost there',
+    pendingTitle: 'Your payment is still being confirmed.',
+    pendingDesc: 'This can take a minute. Your basket stays exactly as it is until we hear back, and you will get an email the moment the payment clears.',
+    pendingCheckAgain: 'Check again',
     successEyebrow: 'Payment received',
     successTitle: 'Thank you for choosing quiet.',
     successDesc: 'Your order has been placed. A confirmation has been sent to your inbox.',
@@ -418,13 +480,19 @@ export const translations = {
     adminStatus: 'Status',
     adminNoOrdersFilter: 'No orders in this state',
     adminUpdated: 'Order updated',
+    adminOrderCancelledFinal: 'This order is cancelled. Its stock went back on the shelf, so it cannot be reopened.',
+    adminOrderNeverReserved: 'No payment and no stock is recorded for this order. If the money did arrive, use Mark paid, which takes the stock first. Otherwise it can only be cancelled.',
+    adminPaymentNotMarkable: 'Only an order still awaiting payment can be marked paid.',
+    adminFulfillFailed: 'This order could not be fulfilled, usually because a size on it is out of stock or no longer exists. Nothing was changed. The server logs say which item it was.',
+    adminCancelConfirm: 'Cancel this order? Its items go back into stock and the order cannot be reopened afterwards.',
+    adminMarkPaidConfirm: 'Confirm the payment for this online order? This takes its items out of stock, so only do it if the money really arrived.',
     adminCod: 'COD',
     adminMarkPaid: 'Mark paid',
     adminMarkedPaid: 'Marked as paid',
     adminNewOrderToast: (ref: string, name: string, total: string) => `New order ${ref} from ${name} · ${total}`,
     adminGuest: 'Guest',
 
-    // Admin — shared across banners/coupons/bundles
+    // Admin - shared across banners/coupons/bundles
     adminActiveLabel: 'Active',
     adminMoveUp: 'Move up',
     adminMoveDown: 'Move down',
@@ -445,7 +513,7 @@ export const translations = {
     adminDeleteFailed: 'Delete failed',
     adminUploadFailed: 'Upload failed',
 
-    // Admin — banners
+    // Admin - banners
     adminAddBanner: 'Add banner',
     adminBannerCount: (n: number) => `${n} ${n === 1 ? 'banner' : 'banners'}`,
     adminBannerOrderCol: 'Order',
@@ -466,7 +534,7 @@ export const translations = {
     adminBannerCreated: 'Banner created',
     adminBannerDeleted: 'Banner deleted',
 
-    // Admin — coupons
+    // Admin - coupons
     adminAddCoupon: 'Add coupon',
     adminCouponCount: (n: number) => `${n} ${n === 1 ? 'coupon' : 'coupons'}`,
     adminCouponCode: 'Code',
@@ -509,7 +577,7 @@ export const translations = {
     adminNoDateLimit: 'No date limit',
     adminAny: 'Any',
 
-    // Admin — bundles
+    // Admin - bundles
     adminAddBundle: 'Add bundle',
     adminBundleCount: (n: number) => `${n} ${n === 1 ? 'bundle' : 'bundles'}`,
     adminNoBundles: 'No bundles yet',
@@ -525,7 +593,7 @@ export const translations = {
     adminBundleCreated: 'Bundle created',
     adminBundleDeleted: 'Bundle deleted',
 
-    // Admin — activity log
+    // Admin - activity log
     adminCoupon: 'Coupon',
     adminNoActivity: 'No activity yet.',
     adminTime: 'Time',
@@ -538,15 +606,13 @@ export const translations = {
     adminExpandDetails: 'Expand details',
     adminLoadMore: 'Load more',
 
-    // Admin — settings
+    // Admin - settings
     adminLogo: 'Logo',
     adminFavicon: 'Favicon',
     adminNone: 'None',
     adminUploading: 'Uploading…',
     adminUploadLabel: (label: string) => `Upload ${label}`,
     adminCurrentLabel: (label: string) => `Current ${label}`,
-    adminDisplayCurrency: 'Display currency',
-    adminCurrencyNote: 'Shown to shoppers only. Payment is always charged in EGP by Kashier.',
     adminCategories: 'Categories',
     adminEnglishName: 'English name',
     adminDeleteCategory: 'Delete category',
@@ -591,7 +657,7 @@ export const translations = {
     adminRemoveLogo: 'Remove logo',
     adminNoLogo: 'No logo',
 
-    // Admin — users
+    // Admin - users
     adminRole: 'Role',
     adminRoleUpdated: 'Role updated',
     adminYouSuffix: ' (you)',
@@ -599,16 +665,15 @@ export const translations = {
     adminRoleAdmin: 'admin',
     adminCantChangeOwnRole: "You can't change your own role here",
 
-    // Admin — count nouns
+    // Admin - count nouns
     adminUsersCount: (n: number) => `${n} ${n === 1 ? 'user' : 'users'}`,
     adminOrdersCount: (n: number) => `${n} ${n === 1 ? 'order' : 'orders'}`,
     adminNoProducts: 'No products yet',
 
-    // Admin — product form (extra fields)
+    // Admin - product form (extra fields)
     adminBrandField: 'Brand',
-    adminBrandNoneOption: '— None (BOM Store own) —',
+    adminBrandNoneOption: '- None (BOM Store own) -',
     adminCostPrice: 'Cost Price',
-    adminSalePrice: 'Sale Price',
     adminMaterials: 'Materials',
     adminWeightGrams: 'Weight (grams)',
     adminTagsCsv: 'Tags (comma separated)',
@@ -622,11 +687,18 @@ export const translations = {
     adminColSku: 'SKU',
     adminColBarcode: 'Barcode',
     adminColPriceOverride: 'Price override',
+    adminVariantSizeHint: 'One size per row. Typing 41/42/43 creates three rows, each with the stock you enter.',
+    adminVariantSizePlaceholder: 'e.g. 41',
+    adminVariantSizeRequired: 'Enter at least one size for this row',
+    adminVariantColorRequired: 'Enter a color for this row',
+    adminVariantRowsInvalid: 'Fix the highlighted variant rows first',
+    adminVariantInLiveOrder: 'One of the sizes you removed is on an order that is still being paid for, so the sizes were not saved. Your other changes to this product were. Remove those sizes again once that order is paid or cancelled.',
+    adminProductInLiveOrder: 'This product has a size on an order that is still being paid for, so it was not deleted. Try again once that order is paid or cancelled.',
     adminDragReorder: 'Drag to reorder',
     adminSetFeatured: 'Set featured',
     adminDeleteImage: 'Delete image',
 
-    // Admin — homepage tabs
+    // Admin - homepage tabs
     adminHeroTab: 'Hero',
     adminShowcaseTab: 'Showcase',
     adminCuratedTab: 'Curated',
@@ -644,7 +716,7 @@ export const translations = {
     adminPoliciesEdit: 'Edit',
     adminTestimonialsTab: 'Testimonials',
 
-    // Admin — homepage fields
+    // Admin - homepage fields
     adminFieldEyebrow: 'Eyebrow',
     adminFieldTitleLine1: 'Title, line 1',
     adminFieldTitleLine2: 'Title, line 2',
@@ -691,7 +763,7 @@ export const translations = {
     adminSubscriberLoading: 'Loading subscriber count…',
     adminSubscriberCount: (n: number) => `${n} ${n === 1 ? 'person has' : 'people have'} subscribed`,
 
-    // Admin — testimonials
+    // Admin - testimonials
     adminTestimonialsCount: (n: number) => `${n} ${n === 1 ? 'testimonial' : 'testimonials'}`,
     adminAddTestimonial: 'Add testimonial',
     adminEditTestimonial: 'Edit testimonial',
@@ -725,6 +797,7 @@ export const translations = {
     statusCancelled: 'cancelled',
     statusPaid: 'paid',
     statusFailed: 'failed',
+    statusRefunded: 'refunded',
 
     // 404
     notFoundEyebrow: 'A quiet moment',
@@ -735,6 +808,9 @@ export const translations = {
     // Misc
     cart: 'Cart',
     account: 'Account',
+    close: 'Close',
+    loading: 'Loading',
+    guest: 'Guest',
     piece: 'piece',
     pieces: 'pieces',
     yes: 'Yes',
@@ -745,6 +821,10 @@ export const translations = {
     // Brand
     brandName: 'BOM Store',
     brandTagline: 'صنعت لتدوم، وصممت لتتحرك.',
+
+    // Error boundary (app-wide crash screen)
+    errorBoundaryMessage: 'حدث خطأ ما من جانبنا. يرجى إعادة تحميل الصفحة.',
+    errorBoundaryReload: 'إعادة تحميل الصفحة',
 
     // Announcement bar
     announcement: 'شحن مجاني للطلبات فوق 200 دولار. تصنع ببطء، تشحن بعناية.',
@@ -760,6 +840,13 @@ export const translations = {
     navBrands: 'الماركات',
     navSale: 'تخفيضات',
     navPolicies: 'السياسات والإلغاء',
+    navMenu: 'القائمة',
+    navOpenMenu: 'فتح القائمة',
+    navCloseMenu: 'إغلاق القائمة',
+    navHome: 'الصفحة الرئيسية لمتجر BOM',
+    navSwitchLanguage: 'تغيير اللغة',
+    navPauseAnnouncements: 'إيقاف الإعلانات',
+    navPlayAnnouncements: 'استئناف الإعلانات',
 
     // Account menu
     myAccount: 'حسابي',
@@ -779,6 +866,7 @@ export const translations = {
     footerSecure: 'دفع آمن عبر كاشير',
     footerReturns: 'إرجاع خلال 30 يوما',
     footerQuote: 'الهدوء ترف.',
+    footerViewOnMap: 'عرض على الخريطة',
 
     // Home
     homeEyebrow: 'أحذية بوعي',
@@ -825,6 +913,7 @@ export const translations = {
     showcaseDesc: 'مقصوص من جلدة واحدة. مخيط بطريقة Goodyear. حذاء ينمو معك، موسما بعد موسم.',
     showcaseCta: 'اكتشف القطعة',
     showcaseScroll: 'انزل للاستكشاف',
+    showcaseSlideLabel: (n: number) => `الانتقال إلى الشريحة ${n}`,
 
     // New: marquee strip
     marqueeLine1: 'يصنع باليد في القاهرة',
@@ -896,10 +985,12 @@ export const translations = {
     shopSortNewest: 'الأحدث',
     shopPieces: (n: number) => `${n} ${n === 1 ? 'قطعة' : 'قطع'}`,
     shopNoMatch: 'لا تلائم هذه اللحظة أي قطعة.',
+    shopLoadError: 'تعذر تحميل المجموعة. يرجى المحاولة مرة أخرى.',
     shopViewAll: 'عرض الكل',
     shopFeatured: 'مختارة',
     shopNew: 'جديد',
     shopSale: 'تخفيض',
+    shopPriceFrom: (price: string) => `يبدأ من ${price}`,
     shopOnlyLeft: (n: number) => `بقي ${n} فقط`,
     shopSearchingFor: (q: string) => `نتائج "${q}"`,
     shopClearSearch: 'إلغاء البحث',
@@ -908,23 +999,29 @@ export const translations = {
     shopPriceMax: 'الأعلى',
     shopQuickView: 'عرض سريع',
     shopQuickAdd: 'إضافة سريعة',
+    quickAddError: 'تعذر التحقق من المخزون. يرجى المحاولة مرة أخرى.',
     shopBxgyBadge: (buy: number, get: number, percent: number) =>
       percent >= 100 ? `اشتر ${buy} واحصل على ${get} مجانا` : `اشتر ${buy} واحصل على ${get} بخصم ${percent}٪`,
 
     // Header search
+    searchLabel: 'بحث',
+    searchClose: 'إغلاق البحث',
     searchPlaceholder: 'ابحث عن زوج…',
     searchRecent: 'عمليات بحث سابقة',
     searchSeeAll: (q: string) => `عرض جميع نتائج "${q}"`,
     searchNoResults: 'لا توجد نتائج',
+    searchError: 'تعذر البحث. يرجى المحاولة مرة أخرى.',
 
     // Product Detail
     productBack: 'العودة إلى المتجر',
     productColor: 'اللون',
     productSize: 'المقاس',
-    productSizeGuide: 'دليل المقاسات',
     productAddToBag: 'أضف إلى السلة',
     productOutOfStock: 'نفد المخزون',
     productAdded: 'أضيف إلى سلتك',
+    productAddedSize: (name: string, size: string) => `${name}، مقاس ${size}`,
+    productPhotoLabel: (n: number, name: string) => `عرض الصورة ${n} من ${name}`,
+    productStockMaxed: 'سلتك تحتوي بالفعل على كل ما تبقى لدينا',
     productChooseSize: 'يرجى اختيار مقاس',
     productShip1: 'شحن مجاني للطلبات فوق 200 دولار',
     productShip2: 'إرجاع هادئ خلال 30 يوما',
@@ -936,6 +1033,7 @@ export const translations = {
     productAccordion3: 'العناية',
     productAccordion3Text: 'امسح بفرشاة ناعمة بعد كل لبسة. استخدم ملطف جلد محايدا كل ستة أسابيع. احفظه بقوالب خشب الأرز في مكان بارد جاف.',
     productNotFound: 'هذه القطعة ضاعت.',
+    productLoadError: 'تعذر تحميل هذه القطعة. يرجى المحاولة مرة أخرى.',
     productReturnShop: 'العودة إلى المتجر',
     productAlsoTitle: 'قد تعجبك أيضا',
     productAlsoSubtitle: 'في نفس الروح',
@@ -947,13 +1045,17 @@ export const translations = {
     bundleSectionTitle: 'اشتر سويا ووفر',
     bundleAddButton: 'أضف الحزمة إلى السلة',
     bundleAdded: 'أضيفت الحزمة إلى سلتك',
+    bundleAddError: 'تعذرت إضافة الحزمة. يرجى المحاولة مرة أخرى.',
 
     // Reviews
     reviewsEyebrow: 'آراء العملاء',
     reviewsTitle: 'التقييمات',
     reviewsEmpty: 'لا توجد تقييمات بعد. كن أول من يكتب تقييما.',
+    reviewsLoadError: 'تعذر تحميل التقييمات. يرجى المحاولة مرة أخرى.',
     reviewsVerifiedBadge: 'عملية شراء موثقة',
     reviewsAnonymous: 'عميل',
+    reviewsRateStars: (n: number) => `قيّم بـ ${n} من 5 نجوم`,
+    reviewsStarsLabel: (rating: string, count: number) => `${rating} من 5 نجوم، ${count} تقييمات`,
     reviewsWriteTitle: 'اكتب تقييما',
     reviewsEditTitle: 'عدل تقييمك',
     reviewsTitlePlaceholder: 'لخص رأيك في كلمات قليلة (اختياري)',
@@ -984,7 +1086,10 @@ export const translations = {
     wishlistNavLabel: 'المفضلة',
 
     // Quick view
+    quickViewTitle: 'عرض سريع',
     quickViewDetails: 'عرض التفاصيل الكاملة',
+    quickViewNotFound: 'هذه القطعة لم تعد متوفرة.',
+    quickViewError: 'تعذر تحميل هذه القطعة. يرجى المحاولة مرة أخرى.',
 
     // Cart
     cartEyebrow: 'سلتك',
@@ -1005,10 +1110,20 @@ export const translations = {
     cartRemove: 'إزالة',
     cartDecrease: 'إنقاص',
     cartIncrease: 'زيادة',
+    cartVariant: (color: string, size: string) => `${color}، مقاس ${size}`,
     cartCouponPlaceholder: 'كود الخصم',
     cartCouponApply: 'تطبيق',
     cartCouponInvalid: 'تعذر تطبيق هذا الكود',
+    cartCouponMinOrder: (amount: string) => `هذا الكود يتطلب حد أدنى للطلب ${amount}`,
+    cartCouponSignIn: 'سجّل الدخول إلى حسابك لاستخدام هذا الكود',
+    cartCouponTooMany: 'محاولات كثيرة. يرجى الانتظار قليلاً ثم المحاولة مرة أخرى.',
     cartDiscount: 'الخصم',
+    cartUpdated: 'تم تحديث سلتك لتطابق المتجر: راجع الأسعار والمقاسات بالأسفل.',
+    cartItemUnavailable: 'لم تعد متوفرة',
+    cartRemoveUnavailable: 'أزل القطع غير المتوفرة للمتابعة',
+    cartClearConfirm: 'إفراغ السلة بالكامل؟',
+    cartClearYes: 'نعم، أفرغها',
+    cartClearCancel: 'الاحتفاظ بها',
 
     // Checkout
     checkoutBack: 'العودة إلى السلة',
@@ -1038,10 +1153,23 @@ export const translations = {
     fieldRequired: ' *',
     fieldOptional: ' (اختياري)',
     checkoutSelectRegion: 'اختر محافظتك',
+    checkoutRegionsLoading: 'جار تحميل المحافظات…',
+    checkoutRegionsError: 'تعذر تحميل المحافظات.',
     checkoutRequired: 'يرجى إكمال كافة الحقول المطلوبة',
     checkoutFailed: 'حدث شيء هادئ لدينا. يرجى المحاولة مرة أخرى.',
+    checkoutUnavailable: 'نفدت بعض القطع أثناء وجودك هنا. عد إلى سلتك لإزالتها.',
+    checkoutBackToBasket: 'العودة إلى سلتك',
+    checkoutTooManyOrders: 'طلبات كثيرة من هنا خلال وقت قصير. يرجى الانتظار قليلاً ثم المحاولة مرة أخرى.',
+    checkoutCodTooManyItems: (max: number) => `الدفع عند الاستلام محدود بـ ${max} قطعة لكل طلب. يرجى تقليل سلتك، أو الدفع أونلاين بدلاً من ذلك.`,
+    checkoutCodTooExpensive: (max: number) => `الدفع عند الاستلام محدود بـ ${max.toLocaleString('en-US')} ج.م لكل طلب. يرجى تقليل سلتك، أو الدفع أونلاين بدلاً من ذلك.`,
 
     // Checkout success / failed
+    successChecking: 'جارٍ تأكيد طلبك',
+    successCheckingDesc: 'لحظة واحدة بينما نتحقق من مزود الدفع.',
+    pendingEyebrow: 'اقتربنا',
+    pendingTitle: 'ما زال تأكيد الدفع جاريا.',
+    pendingDesc: 'قد يستغرق ذلك دقيقة. سلتك محفوظة كما هي حتى يصلنا الرد، وسيصلك بريد بمجرد اكتمال الدفع.',
+    pendingCheckAgain: 'تحقق مرة أخرى',
     successEyebrow: 'تم استلام الدفع',
     successTitle: 'شكرا لاختيارك الهدوء.',
     successDesc: 'تم وضع طلبك. أرسل تأكيد إلى بريدك.',
@@ -1156,13 +1284,19 @@ export const translations = {
     adminStatus: 'الحالة',
     adminNoOrdersFilter: 'لا طلبات في هذه الحالة',
     adminUpdated: 'تم تحديث الطلب',
+    adminOrderCancelledFinal: 'هذا الطلب ملغي وتم إرجاع مخزونه إلى الرف، لذا لا يمكن إعادة فتحه.',
+    adminOrderNeverReserved: 'لا يوجد دفع ولا مخزون محجوز مسجل لهذا الطلب. إذا وصل المبلغ فعلا فاستخدم "تحديد كمدفوع" وهو يخصم المخزون أولا، وإلا فلا يمكن إلا إلغاؤه.',
+    adminPaymentNotMarkable: 'يمكن تحديد الدفع فقط لطلب ما زال بانتظار التحصيل.',
+    adminFulfillFailed: 'تعذر تنفيذ هذا الطلب، غالبا لأن أحد المقاسات نفد أو لم يعد موجودا. لم يتغير أي شيء. سجلات الخادم توضح أي قطعة كانت السبب.',
+    adminCancelConfirm: 'إلغاء هذا الطلب؟ سترجع قطعه إلى المخزون ولا يمكن إعادة فتحه بعد ذلك.',
+    adminMarkPaidConfirm: 'تأكيد دفع هذا الطلب الإلكتروني؟ سيخصم قطعه من المخزون، لذا لا تفعل ذلك إلا إذا وصل المبلغ فعلا.',
     adminCod: 'عند الاستلام',
     adminMarkPaid: 'تحديد كمدفوع',
     adminMarkedPaid: 'تم تحديده كمدفوع',
     adminNewOrderToast: (ref: string, name: string, total: string) => `طلب جديد ${ref} من ${name} · ${total}`,
     adminGuest: 'زائر',
 
-    // Admin — shared across banners/coupons/bundles
+    // Admin - shared across banners/coupons/bundles
     adminActiveLabel: 'نشط',
     adminMoveUp: 'نقل لأعلى',
     adminMoveDown: 'نقل لأسفل',
@@ -1183,7 +1317,7 @@ export const translations = {
     adminDeleteFailed: 'فشل الحذف',
     adminUploadFailed: 'فشل الرفع',
 
-    // Admin — banners
+    // Admin - banners
     adminAddBanner: 'إضافة لافتة',
     adminBannerCount: (n: number) => `${n} ${n === 1 ? 'لافتة' : 'لافتات'}`,
     adminBannerOrderCol: 'الترتيب',
@@ -1204,7 +1338,7 @@ export const translations = {
     adminBannerCreated: 'تم إنشاء اللافتة',
     adminBannerDeleted: 'تم حذف اللافتة',
 
-    // Admin — coupons
+    // Admin - coupons
     adminAddCoupon: 'إضافة كوبون',
     adminCouponCount: (n: number) => `${n} ${n === 1 ? 'كوبون' : 'كوبونات'}`,
     adminCouponCode: 'الكود',
@@ -1247,7 +1381,7 @@ export const translations = {
     adminNoDateLimit: 'بلا حد زمني',
     adminAny: 'أي وقت',
 
-    // Admin — bundles
+    // Admin - bundles
     adminAddBundle: 'إضافة حزمة',
     adminBundleCount: (n: number) => `${n} ${n === 1 ? 'حزمة' : 'حزم'}`,
     adminNoBundles: 'لا حزم بعد',
@@ -1263,7 +1397,7 @@ export const translations = {
     adminBundleCreated: 'تم إنشاء الحزمة',
     adminBundleDeleted: 'تم حذف الحزمة',
 
-    // Admin — activity log
+    // Admin - activity log
     adminCoupon: 'كوبون',
     adminNoActivity: 'لا يوجد نشاط بعد.',
     adminTime: 'الوقت',
@@ -1276,15 +1410,13 @@ export const translations = {
     adminExpandDetails: 'عرض التفاصيل',
     adminLoadMore: 'تحميل المزيد',
 
-    // Admin — settings
+    // Admin - settings
     adminLogo: 'الشعار',
     adminFavicon: 'أيقونة الموقع',
     adminNone: 'لا شيء',
     adminUploading: 'جار الرفع…',
     adminUploadLabel: (label: string) => `رفع ${label}`,
     adminCurrentLabel: (label: string) => `الحالي ${label}`,
-    adminDisplayCurrency: 'عملة العرض',
-    adminCurrencyNote: 'تظهر للعملاء فقط. تتم عملية الدفع دائما بالجنيه المصري عبر كاشير.',
     adminCategories: 'الفئات',
     adminEnglishName: 'الاسم بالإنجليزية',
     adminDeleteCategory: 'حذف الفئة',
@@ -1329,7 +1461,7 @@ export const translations = {
     adminRemoveLogo: 'إزالة الشعار',
     adminNoLogo: 'لا يوجد شعار',
 
-    // Admin — users
+    // Admin - users
     adminRole: 'الدور',
     adminRoleUpdated: 'تم تحديث الدور',
     adminYouSuffix: ' (أنت)',
@@ -1337,16 +1469,15 @@ export const translations = {
     adminRoleAdmin: 'مسؤول',
     adminCantChangeOwnRole: 'لا يمكنك تغيير دورك من هنا',
 
-    // Admin — count nouns
+    // Admin - count nouns
     adminUsersCount: (n: number) => `${n} ${n === 1 ? 'مستخدم واحد' : 'مستخدم'}`,
     adminOrdersCount: (n: number) => `${n} ${n === 1 ? 'طلب واحد' : 'طلب'}`,
     adminNoProducts: 'لا منتجات بعد',
 
-    // Admin — product form (extra fields)
+    // Admin - product form (extra fields)
     adminBrandField: 'الماركة',
-    adminBrandNoneOption: '— بلا ماركة (منتج BOM Store) —',
+    adminBrandNoneOption: '- بلا ماركة (منتج BOM Store) -',
     adminCostPrice: 'سعر التكلفة',
-    adminSalePrice: 'سعر التخفيض',
     adminMaterials: 'الخامات',
     adminWeightGrams: 'الوزن (جرام)',
     adminTagsCsv: 'الوسوم (مفصولة بفواصل)',
@@ -1360,11 +1491,18 @@ export const translations = {
     adminColSku: 'رمز المنتج',
     adminColBarcode: 'الباركود',
     adminColPriceOverride: 'سعر مخصص',
+    adminVariantSizeHint: 'مقاس واحد في كل صف. كتابة 41/42/43 تنشئ ثلاثة صفوف، لكل منها المخزون الذي تدخله.',
+    adminVariantSizePlaceholder: 'مثال: 41',
+    adminVariantSizeRequired: 'أدخل مقاسا واحدا على الأقل لهذا الصف',
+    adminVariantColorRequired: 'أدخل لونا لهذا الصف',
+    adminVariantRowsInvalid: 'صحح صفوف المتغيرات المميزة أولا',
+    adminVariantInLiveOrder: 'أحد المقاسات التي حذفتها موجود في طلب ما زال قيد الدفع، لذا لم تحفظ المقاسات. أما بقية تعديلاتك على المنتج فقد حفظت. احذف تلك المقاسات مرة أخرى بعد دفع الطلب أو إلغائه.',
+    adminProductInLiveOrder: 'هذا المنتج يحتوي على مقاس في طلب ما زال قيد الدفع، لذا لم يحذف. حاول مرة أخرى بعد دفع الطلب أو إلغائه.',
     adminDragReorder: 'اسحب لإعادة الترتيب',
     adminSetFeatured: 'تعيين كصورة رئيسية',
     adminDeleteImage: 'حذف الصورة',
 
-    // Admin — homepage tabs
+    // Admin - homepage tabs
     adminHeroTab: 'الواجهة',
     adminShowcaseTab: 'العرض',
     adminCuratedTab: 'المختارة',
@@ -1382,7 +1520,7 @@ export const translations = {
     adminPoliciesEdit: 'تعديل',
     adminTestimonialsTab: 'آراء العملاء',
 
-    // Admin — homepage fields
+    // Admin - homepage fields
     adminFieldEyebrow: 'العنوان التمهيدي',
     adminFieldTitleLine1: 'العنوان، السطر 1',
     adminFieldTitleLine2: 'العنوان، السطر 2',
@@ -1425,11 +1563,11 @@ export const translations = {
     adminLinkN: (n: number) => `الرابط ${n}`,
     adminRemoveLink: 'إزالة الرابط',
     adminNoLinks: 'لا روابط بعد',
-    adminBrandBarNote: 'يعرض شريط الماركات ماركاتك (بالأسماء، أو بالشعارات بعد رفعها) أسفل الواجهة. محتواه يأتي من قائمة الماركات لديك — استخدم المفتاح أدناه لإظهار الشريط كله أو إخفائه في الصفحة الرئيسية.',
+    adminBrandBarNote: 'يعرض شريط الماركات ماركاتك (بالأسماء، أو بالشعارات بعد رفعها) أسفل الواجهة. محتواه يأتي من قائمة الماركات لديك - استخدم المفتاح أدناه لإظهار الشريط كله أو إخفائه في الصفحة الرئيسية.',
     adminSubscriberLoading: 'جار تحميل عدد المشتركين…',
     adminSubscriberCount: (n: number) => `اشترك ${n} ${n === 1 ? 'شخص' : 'أشخاص'}`,
 
-    // Admin — testimonials
+    // Admin - testimonials
     adminTestimonialsCount: (n: number) => `${n} ${n === 1 ? 'رأي واحد' : 'آراء'}`,
     adminAddTestimonial: 'إضافة رأي',
     adminEditTestimonial: 'تعديل الرأي',
@@ -1463,6 +1601,7 @@ export const translations = {
     statusCancelled: 'ملغي',
     statusPaid: 'مدفوع',
     statusFailed: 'فاشل',
+    statusRefunded: 'مسترجع',
 
     // 404
     notFoundEyebrow: 'لحظة هادئة',
@@ -1473,6 +1612,9 @@ export const translations = {
     // Misc
     cart: 'السلة',
     account: 'الحساب',
+    close: 'إغلاق',
+    loading: 'جار التحميل',
+    guest: 'زائر',
     piece: 'قطعة',
     pieces: 'قطع',
     yes: 'نعم',

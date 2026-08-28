@@ -1,50 +1,50 @@
 // supabase/functions/validate-coupon/index.ts
 //
-// Read-only coupon-code lookup for the storefront checkout: recomputes the
-// cart subtotal server-side via the shared pricing helper (never trusts a
-// client-sent subtotal), looks the code up, and reports whether it's
-// currently valid plus the discount it would apply. No DB writes -- a
-// redemption is only ever recorded by fulfill_order() at payment
-// confirmation (see supabase/migrations).
+// Read-only preview of what a cart will actually be charged in discounts:
+// recomputes the cart subtotal server-side via the shared pricing helper
+// (never trusts a client-sent subtotal), then runs the SAME resolution
+// create-order runs (resolveBestDiscount in ../_shared/pricing.ts). No DB
+// writes -- a redemption is only ever recorded at payment confirmation (see
+// supabase/migrations).
+//
+// `code` is optional. With one, this validates the customer's typed code and
+// previews the result. WITHOUT one it previews the auto-applied promotions
+// and bundles the cart already qualifies for, which is the point: those are
+// applied server-side at checkout, so leaving them out of the preview meant
+// the storefront's total disagreed with the amount charged whenever one
+// applied.
 //
 // This is the ONLY way a client should ever learn whether a coupon code
-// works: `coupons` has no public SELECT policy (codes must not be listable
-// by an anonymous client), so this always runs with the service-role key.
+// works: `coupons` has no public SELECT policy for codes (they must not be
+// listable by an anonymous client), so this always runs with the service-role
+// key. It is also, for that reason, an oracle over the code space, so it is
+// rate limited (../_shared/rate-limit.ts) and every rejection that would
+// otherwise confirm a code exists shares one identical reason (see
+// CouponRejectionCode in ../_shared/pricing.ts).
 //
-// This endpoint is for explicit customer-typed codes only (requires_code =
-// true). Auto-apply promotions (and a standalone, no-code-needed bundle)
-// need no lookup and are handled entirely inside create-order via
-// resolveBestDiscount.
+// resolveBestDiscount needs a real shipping cost to value a free_shipping
+// coupon at all. The caller may send `regionCode` (the checkout page does,
+// once a governorate is picked) and this looks that region's price up from
+// site_content.shipping -- the SAME config create-order prices by, and never
+// a price the client sends, which would let a caller inflate a free_shipping
+// coupon into an arbitrary discount. An unknown code is rejected exactly as
+// create-order rejects it.
 //
-// This does NOT call resolveBestDiscount itself, on purpose -- it composes
-// the same underlying building blocks (evaluateCouponByCode, findBestBundle,
-// combineCouponWithBundle) directly instead. See resolveBestDiscount's doc
-// comment in ../_shared/pricing.ts for exactly why: that function's
-// winner-selection needs a real shippingCost to correctly decide whether a
-// free_shipping coupon nets any value, which this endpoint never has. It
-// does, however, replicate resolveBestDiscount's coupon-vs-bundle precedence
-// (a bundle only stacks under a coupon that wins outright, otherwise the
-// bundle alone is reported) so the two can never disagree about that. What
-// IS fully shared, and can never drift between the two endpoints, is the
-// actual bundle-matching and BXGY math (findBestBundle/computeBxgyDiscount)
-// and the "sum + cap at subtotal, unit-overlap-safe" stacking arithmetic
-// (combineCouponWithBundle).
+// Without a regionCode (the basket page, which has no address yet) shipping
+// is 0, so a free_shipping coupon nets 0 there and can never win the
+// comparison. The freeShipping boolean carries it instead, reported when the
+// customer's own valid code grants free shipping and nothing else beat it.
 //
 // verify_jwt is left at its default (true), same reasoning as create-order:
-// the anon-key frontend client calls this, and the anon key is itself a
-// valid JWT, so guest checkout still works.
+// the anon-key frontend client calls this, and the anon key is itself a valid
+// JWT, so guest checkout still works. The caller's real identity, when there
+// is one, comes from the same verified JWT create-order reads.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { corsHeaders } from '../_shared/cors.ts'
-import {
-  resolveCartPricing,
-  evaluateCouponByCode,
-  fetchActiveBundlesWithItems,
-  findBestBundle,
-  combineCouponWithBundle,
-  type CartItemInput,
-  type Coupon,
-} from '../_shared/pricing.ts'
+import { resolveCartPricing, evaluateCouponByCode, resolveBestDiscount, type CartItemInput } from '../_shared/pricing.ts'
+import { checkRateLimit, RATE_LIMITS } from '../_shared/rate-limit.ts'
+import { getUserIdFromAuthHeader } from '../_shared/auth.ts'
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -59,15 +59,13 @@ Deno.serve(async (req: Request) => {
     const body = (await req.json().catch(() => null)) as {
       code?: string
       items?: CartItemInput[]
-      customerEmail?: string
+      regionCode?: string
     } | null
 
-    const code = body?.code?.trim()
+    const code = body?.code?.trim() ?? ''
     const items = body?.items
+    const regionCode = typeof body?.regionCode === 'string' ? body.regionCode.trim() : ''
 
-    if (!code) {
-      return jsonResponse({ valid: false, reason: 'No coupon code provided' }, 400)
-    }
     if (!Array.isArray(items) || items.length === 0) {
       return jsonResponse({ valid: false, reason: 'Cart is empty' }, 400)
     }
@@ -81,6 +79,32 @@ Deno.serve(async (req: Request) => {
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const admin = createClient(supabaseUrl, serviceRoleKey)
 
+    // Capping the guesses is what keeps this from being a usable enumeration
+    // oracle; the identical-rejection rule below is the other half. A real
+    // customer tries a handful of codes and never comes near the ceiling.
+    // See ../_shared/rate-limit.ts.
+    if (!(await checkRateLimit(admin, req, RATE_LIMITS.validateCoupon))) {
+      return jsonResponse(
+        { valid: false, code: 'rate_limited', reason: 'Too many attempts. Please wait a moment and try again.' },
+        429,
+      )
+    }
+
+    // Authoritative shipping, looked up the same way create-order looks it up
+    // (see that file around the site_content.shipping read). No region sent
+    // means no address chosen yet, which is 0 rather than an error.
+    let shippingCost = 0
+    if (regionCode) {
+      const { data: shipRow } = await admin
+        .from('site_content').select('value').eq('key', 'shipping').maybeSingle()
+      const shipRegions = ((shipRow?.value as { regions?: Array<{ code: string; price: number }> } | null)?.regions) ?? []
+      const region = shipRegions.find(r => r.code === regionCode)
+      if (!region) {
+        return jsonResponse({ valid: false, reason: 'Please choose a valid delivery region.' }, 400)
+      }
+      shippingCost = Math.max(0, Number(region.price) || 0)
+    }
+
     const pricing = await resolveCartPricing(admin, items)
     if (!pricing.ok) {
       return jsonResponse({ valid: false, reason: pricing.error }, 400)
@@ -91,58 +115,38 @@ Deno.serve(async (req: Request) => {
       items,
       productById: pricing.productById,
       resolvedItems: pricing.items,
-      customerEmail: body?.customerEmail ?? null,
+      userId: getUserIdFromAuthHeader(req),
+      shippingCost,
     }
 
-    const result = await evaluateCouponByCode(admin, code, ctx)
+    const explicit = code ? await evaluateCouponByCode(admin, code, ctx) : null
 
-    if (!result.valid) {
-      return jsonResponse({ valid: false, reason: result.reason })
+    // A typed code that cannot be used is the only thing that fails here; the
+    // no-code preview always resolves (to zero if nothing applies).
+    if (explicit && !explicit.valid) {
+      return jsonResponse({
+        valid: false,
+        reasonCode: explicit.reasonCode,
+        reason: explicit.reason,
+        minOrderAmount: explicit.minOrderAmount,
+      })
     }
 
-    // New: let a stackable code preview its bundle add-on too, so this
-    // number matches what create-order will actually charge if the customer
-    // checks out with this exact code (see resolveBestDiscount for the
-    // identical rule applied cart-wide). Mirrors resolveBestDiscount's
-    // precedence: a bundle only stacks UNDER a coupon that itself would win
-    // outright (discountAmount >= the bundle's own). If the bundle is
-    // bigger, create-order picks the bundle alone (no coupon, no stacking),
-    // so report that outcome here too rather than promising a bigger,
-    // never-actually-charged combined total.
-    let discountAmount = result.discountAmount
-    let discountType: Coupon['discount_type'] | 'bundle' = result.discountType
-    let description = result.description
-    if (result.coupon.stackable) {
-      const bundles = await fetchActiveBundlesWithItems(admin)
-      const bundleMatch = findBestBundle(pricing.items, bundles)
-      if (bundleMatch) {
-        if (result.discountAmount >= bundleMatch.discountAmount) {
-          discountAmount = combineCouponWithBundle(
-            result.coupon,
-            result.discountAmount,
-            pricing.items,
-            pricing.productById,
-            bundleMatch,
-            pricing.subtotal,
-          )
-        } else {
-          discountAmount = bundleMatch.discountAmount
-          discountType = 'bundle'
-          description = bundleMatch.bundle.name
-        }
-      }
-    }
+    // The same call create-order makes, so the previewed number and the
+    // charged number come from one implementation of the precedence rules
+    // (explicit code vs auto-promotion vs bundle, and the one stacking case).
+    const resolution = await resolveBestDiscount(admin, ctx, explicit)
 
     return jsonResponse({
       valid: true,
-      discountAmount,
-      discountType,
-      description,
-      // No shipping context here (see CouponEvalContext), so discountAmount
-      // is always 0 for free_shipping -- this flag is what lets the frontend
-      // still show the benefit (force the Shipping line to FREE) instead of
-      // silently showing nothing.
-      freeShipping: result.freeShipping,
+      discountAmount: resolution.discountAmount,
+      discountType: resolution.discountType,
+      description: resolution.description,
+      // See the free_shipping note in this file's header: only meaningful
+      // when there is no regionCode, since with a real shipping cost the
+      // waiver is already inside discountAmount (that is how create-order
+      // charges it too -- computeOrderTotal subtracts it from the total).
+      freeShipping: !!(explicit?.valid && explicit.freeShipping && resolution.discountAmount === 0),
     })
   } catch (err) {
     console.error('validate-coupon error:', err)

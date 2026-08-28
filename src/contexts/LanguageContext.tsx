@@ -10,6 +10,8 @@ type LanguageContextType = {
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined)
 
+// Also read by the inline script in index.html, which applies lang/dir before
+// first paint so an English visitor never sees a flash of RTL.
 const LANG_KEY = 'bom-store-lang'
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
@@ -17,7 +19,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     try {
       const stored = localStorage.getItem(LANG_KEY)
       if (stored === 'ar' || stored === 'en') return stored
-    } catch {}
+    } catch { /* localStorage is unavailable in private mode: fall through to the default */ }
     // Default to Arabic since the user requested Arabic support
     return 'ar'
   })
@@ -33,7 +35,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    try { localStorage.setItem(LANG_KEY, lang) } catch {}
+    try { localStorage.setItem(LANG_KEY, lang) } catch { /* localStorage is unavailable in private mode: the choice just isn't persisted */ }
     document.documentElement.lang = lang
     document.documentElement.dir = dir
     document.body.classList.toggle('font-arabic', lang === 'ar')

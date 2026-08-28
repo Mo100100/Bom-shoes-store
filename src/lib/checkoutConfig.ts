@@ -59,12 +59,18 @@ export async function fetchCheckoutConfig(): Promise<CheckoutConfig> {
   return { ...DEFAULT_CHECKOUT_CONFIG, ...(data?.value as Partial<CheckoutConfig> | undefined) }
 }
 
+// Unlike fetchCheckoutConfig above, a failure here cannot fall back to a safe
+// default: the governorate select is required, and an empty region list means
+// checkout cannot be completed at all. Throwing lets the caller (Checkout.tsx)
+// tell the customer and offer a retry, instead of silently rendering an
+// empty, unusable dropdown.
 export async function fetchShippingConfig(): Promise<ShippingConfig> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('site_content')
     .select('value')
     .eq('key', 'shipping')
     .maybeSingle()
+  if (error) throw error
   const regions = (data?.value as ShippingConfig | undefined)?.regions
   return { regions: Array.isArray(regions) ? regions : [] }
 }

@@ -1,12 +1,14 @@
-import { useEffect, useState, FormEvent } from 'react'
+import { useEffect, useState, useRef, FormEvent } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { supabase, Product, ProductImage, ProductVariant, ProductCatalogEntry, Review, Bundle, BundleItem } from '@/lib/supabase'
 import { useCart } from '@/contexts/CartContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
-import { useCurrency } from '@/contexts/CurrencyContext'
+import { useCurrency, SETTLEMENT_CURRENCY } from '@/contexts/CurrencyContext'
+import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { useRecentlyViewed } from '@/hooks/useRecentlyViewed'
 import { useSeo } from '@/hooks/useSeo'
+import { compareSizes, defaultSizeForColor, firstInStockVariant } from '@/lib/sizes'
 import WishlistButton from '@/components/WishlistButton'
 import RatingStars from '@/components/RatingStars'
 import SectionHeading from '@/components/SectionHeading'
@@ -19,6 +21,7 @@ import { toast } from 'sonner'
 // it's reachable and operable by keyboard, and each carries its own label so
 // screen readers announce something more useful than an unnamed control.
 function StarRow({ rating, size = 'w-4 h-4', onRate }: { rating: number; size?: string; onRate?: (n: number) => void }) {
+  const t = useT()
   return (
     <div className="flex gap-0.5">
       {[1, 2, 3, 4, 5].map(i => {
@@ -29,7 +32,7 @@ function StarRow({ rating, size = 'w-4 h-4', onRate }: { rating: number; size?: 
             key={i}
             type="button"
             onClick={() => onRate(i)}
-            aria-label={`Rate ${i} star${i > 1 ? 's' : ''}`}
+            aria-label={t.reviewsRateStars(i)}
             className="cursor-pointer"
           >
             {star}
@@ -46,7 +49,11 @@ function StarRow({ rating, size = 'w-4 h-4', onRate }: { rating: number; size?: 
 // (including this product itself) joined to their product row -- enough to
 // show thumbnails/names/quantities and compute the bundle price vs buying
 // separately, without a second round trip per item.
-type BundleWithItems = Bundle & { items: (BundleItem & { products: Product })[] }
+//
+// unitPrice is what ONE of that item costs in this bundle: price_override ??
+// products.price, taken from the very variant addBundleToBag will add. See
+// loadBundles.
+type BundleWithItems = Bundle & { items: (BundleItem & { products: Product; unitPrice: number })[] }
 
 export default function ProductDetail() {
   const { slug } = useParams()
@@ -59,7 +66,13 @@ export default function ProductDetail() {
   const [recentlyViewed, setRecentlyViewed] = useState<ProductCatalogEntry[]>([])
   const [reviews, setReviews] = useState<Review[]>([])
   const [reviewerNames, setReviewerNames] = useState<Map<string, string | null>>(new Map())
+  const [reviewsLoadError, setReviewsLoadError] = useState(false)
+  const [reviewsLoading, setReviewsLoading] = useState(false)
   const [loading, setLoading] = useState(true)
+  // A failed fetch and "this slug genuinely doesn't exist" are different
+  // situations and need different messages: loadError means a retry might
+  // work, product === null with no error means it really is not found.
+  const [loadError, setLoadError] = useState(false)
   const [activeImage, setActiveImage] = useState(0)
   const [size, setSize] = useState('')
   const [color, setColor] = useState('')
@@ -70,72 +83,115 @@ export default function ProductDetail() {
   const navigate = useNavigate()
   const t = useT()
   const { lang } = useLanguage()
-  const { currency, formatPrice } = useCurrency()
+  const { formatPrice } = useCurrency()
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
+  // Guards against two overlapping loads (fast slug-to-slug navigation, or a
+  // retry click while the previous attempt is still in flight): only the
+  // response matching the most recently started call is allowed to touch
+  // state, so a slow failure can't land after a fast success and paint an
+  // error over data that's already on screen (or vice versa). Also catches a
+  // thrown rejection (a flaky connection, or `data.colors[0]` if colors is
+  // ever null) so it becomes the error state instead of an infinite spinner.
+  const loadIdRef = useRef(0)
+
+  async function load() {
+    const id = ++loadIdRef.current
+    setLoading(true)
+    setLoadError(false)
+    try {
       // product_catalog (not the bare products table) so avg_rating/review_count
       // come back in the same round trip -- it's a strict superset of Product.
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('product_catalog')
         .select('*')
         .eq('slug', slug)
         .maybeSingle()
+      if (error) throw error
+      if (id !== loadIdRef.current) return
 
       if (data) {
         setProduct(data)
         setActiveImage(0)
         const [{ data: imgs }, { data: vars }, { data: rel }] = await Promise.all([
           supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
-          supabase.from('product_variants').select('*').eq('product_id', data.id),
+          supabase.from('product_variants').select('*').eq('product_id', data.id).order('size').order('color'),
           supabase.from('product_catalog').select('*').eq('category', data.category).neq('id', data.id).limit(4),
         ])
+        if (id !== loadIdRef.current) return
         setImages(imgs || [])
         setVariants(vars || [])
         setRelated(rel || [])
         loadReviews(data.id)
         loadBundles(data.id)
 
-        // Prefer a real variant combo as the default selection; fall back to
-        // the legacy flat sizes/colors arrays if this product has no variants yet.
+        // Default to a combo the customer can actually buy rather than whatever
+        // row the fetch happened to return first: the colour of the first
+        // in-stock variant, then that colour's smallest in-stock size. A fully
+        // sold-out product still lands on its first colour and smallest size so
+        // the picker is never blank. Legacy products with no variants fall back
+        // to the flat sizes/colors arrays, sorted the same way.
         if (vars && vars.length > 0) {
-          setColor(vars[0].color)
-          setSize(vars[0].size)
+          const defaultColor = (firstInStockVariant(vars) ?? vars[0]).color
+          setColor(defaultColor)
+          setSize(defaultSizeForColor(vars, defaultColor))
         } else {
           setColor(data.colors[0] ?? '')
-          setSize(data.sizes[0] ?? '')
+          setSize([...data.sizes].sort(compareSizes)[0] ?? '')
         }
+      } else {
+        setProduct(null)
       }
-      setLoading(false)
+    } catch {
+      if (id !== loadIdRef.current) return
+      setProduct(null)
+      setLoadError(true)
+    } finally {
+      if (id === loadIdRef.current) setLoading(false)
     }
+  }
+
+  useEffect(() => {
     load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug])
 
   // Reviews + the reviewing users' display names, refetched after any
   // insert/update so the list and "already reviewed" detection stay current.
+  // reviewsLoading only feeds the retry button below -- the initial call is
+  // fire-and-forget from load() and never blocks the page's own spinner.
   async function loadReviews(productId: string) {
-    const { data: revs } = await supabase
+    setReviewsLoading(true)
+    const { data: revs, error } = await supabase
       .from('reviews')
       .select('*')
       .eq('product_id', productId)
       .order('created_at', { ascending: false })
+    // A failed reviews fetch must not render as "no reviews yet" -- that
+    // tells the customer something false about the product's history.
+    if (error) {
+      setReviews([])
+      setReviewsLoadError(true)
+      setReviewsLoading(false)
+      return
+    }
+    setReviewsLoadError(false)
     setReviews(revs || [])
 
     const userIds = Array.from(new Set((revs || []).map(r => r.user_id)))
-    if (userIds.length === 0) { setReviewerNames(new Map()); return }
+    if (userIds.length === 0) { setReviewerNames(new Map()); setReviewsLoading(false); return }
     // Best-effort: if profiles RLS doesn't allow reading other users' rows,
     // this just comes back empty and everyone falls back to reviewsAnonymous.
     const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', userIds)
     setReviewerNames(new Map((profs || []).map(p => [p.id, p.full_name])))
+    setReviewsLoading(false)
   }
 
   // Fire-and-forget like loadReviews -- doesn't block the page's loading
-  // spinner. Two round trips (not N+1): first find which active bundles
-  // require this product, then fetch every item those bundles need in one
-  // batched query. Leaves `bundles` empty (not an error) for the common case
-  // of a product that isn't in any bundle -- the section below simply
-  // doesn't render.
+  // spinner. Three round trips (not N+1): find which active bundles require
+  // this product, fetch every item those bundles need in one batched query,
+  // then fetch every one of those products' variants in one more. Leaves
+  // `bundles` empty (not an error) for the common case of a product that
+  // isn't in any bundle -- the section below simply doesn't render.
   async function loadBundles(productId: string) {
     const { data: matches } = await supabase
       .from('bundle_items')
@@ -152,22 +208,52 @@ export default function ProductDetail() {
     const bundleById = new Map((matches ?? []).map((m: any) => [m.bundle_id, m.bundles]))
     const { data: items } = await supabase.from('bundle_items').select('*, products(*)').in('bundle_id', bundleIds)
 
+    // The box has to quote what addBundleToBag will actually add, and that is
+    // firstInStockVariant's price_override ?? products.price -- the rule the
+    // server charges by. Quoting products.price alone under-quoted every
+    // bundle holding an override-priced product. One batched query for all of
+    // them, ordered exactly as addBundleToBag orders its own, so the two pick
+    // the same variant.
+    const productIds = Array.from(new Set((items ?? []).map((i: any) => i.product_id as string)))
+    const { data: allVariants } = await supabase
+      .from('product_variants').select('*').in('product_id', productIds).order('size').order('color')
+    const variantsByProduct = new Map<string, ProductVariant[]>()
+    for (const v of allVariants ?? []) {
+      const arr = variantsByProduct.get(v.product_id) ?? []
+      arr.push(v)
+      variantsByProduct.set(v.product_id, arr)
+    }
+    const pricedItems = (items ?? []).map((i: any) => ({
+      ...i,
+      unitPrice: Number(firstInStockVariant(variantsByProduct.get(i.product_id) ?? [])?.price_override ?? i.products.price) || 0,
+    }))
+
     setBundles(bundleIds.map(id => ({
       ...bundleById.get(id),
-      items: (items ?? []).filter((i: any) => i.bundle_id === id),
+      items: pricedItems.filter((i: any) => i.bundle_id === id),
     })))
   }
 
   // Batches one product_variants query for every product in the bundle (not
-  // one per item), picks the first in-stock variant per product -- same
-  // "pick any sellable combo" convention Shop.tsx's quickAdd uses -- and adds
-  // each bundle item at its required quantity in one addItem call apiece.
+  // one per item), picks the smallest in-stock size per product -- same
+  // deterministic convention Shop.tsx's quickAdd uses -- and adds each bundle
+  // item at its required quantity in one addItem call apiece.
   async function addBundleToBag(bundle: BundleWithItems) {
     setAddingBundleId(bundle.id)
-    const { data: allVariants } = await supabase
+    const { data: allVariants, error } = await supabase
       .from('product_variants')
       .select('*')
       .in('product_id', bundle.items.map(i => i.product_id))
+      .order('size').order('color')
+
+    // A failed variant fetch must not fall through to the legacy no-variant
+    // path below: that path skips the stock check entirely, which would add
+    // an unsellable line and still show a success toast.
+    if (error) {
+      setAddingBundleId(null)
+      toast.error(t.bundleAddError)
+      return
+    }
 
     const variantsByProduct = new Map<string, ProductVariant[]>()
     for (const v of allVariants || []) {
@@ -179,12 +265,13 @@ export default function ProductDetail() {
     let added = 0
     for (const item of bundle.items) {
       const p = item.products
-      const variant = (variantsByProduct.get(item.product_id) ?? []).find(v => v.stock > 0)
-      const itemSize = variant?.size ?? p.sizes[0]
+      const variant = firstInStockVariant(variantsByProduct.get(item.product_id) ?? [])
+      const itemSize = variant?.size ?? [...p.sizes].sort(compareSizes)[0]
       const itemColor = variant?.color ?? p.colors[0] ?? ''
       if (!itemSize) continue // nothing sellable for this item -- skip rather than add a broken line
-      addItem(p, itemSize, itemColor, item.quantity)
-      added++
+      // A line already holding all remaining stock adds nothing, so it doesn't
+      // count toward the success toast either.
+      if (addItem(p, itemSize, itemColor, item.quantity, variant)) added++
     }
 
     setAddingBundleId(null)
@@ -219,7 +306,11 @@ export default function ProductDetail() {
 
   const hasVariants = variants.length > 0
   const colorOptions = hasVariants ? Array.from(new Set(variants.map(v => v.color))) : (product?.colors ?? [])
-  const sizeOptions = hasVariants ? Array.from(new Set(variants.map(v => v.size))) : (product?.sizes ?? [])
+  // Sorted so 9 comes before 10 and before 40; the DB can only order sizes as
+  // text, which puts 10 before 9.
+  const sizeOptions = Array.from(
+    new Set(hasVariants ? variants.map(v => v.size) : (product?.sizes ?? []))
+  ).sort(compareSizes)
   const selectedVariant = hasVariants ? variants.find(v => v.color === color && v.size === size) : undefined
   const effectivePrice = selectedVariant ? (selectedVariant.price_override ?? product?.price ?? 0) : (product?.price ?? 0)
   const outOfStock = hasVariants ? (!selectedVariant || selectedVariant.stock === 0) : (product?.stock ?? 0) === 0
@@ -229,6 +320,15 @@ export default function ProductDetail() {
     const v = variants.find(v => v.color === color && v.size === s)
     return !!v && v.stock > 0
   }
+
+  // Switching colour used to strand the picker on a size that colour doesn't
+  // stock, so the button read "Out of stock" while other sizes were sellable.
+  // Move to that colour's first in-stock size whenever the current one isn't.
+  useEffect(() => {
+    if (!hasVariants || !color) return
+    if (variants.some(v => v.color === color && v.size === size && v.stock > 0)) return
+    setSize(defaultSizeForColor(variants, color))
+  }, [variants, hasVariants, color, size])
 
   // ponytail: no product_images rows yet -> fall back to the legacy single image_url
   // so the gallery never renders a broken/blank image.
@@ -324,11 +424,15 @@ export default function ProductDetail() {
     if (!product) return
     if (!size) { toast.error(t.productChooseSize); return }
     setAdding(true)
-    addItem(product, size, color, 1)
+    const added = addItem(product, size, color, 1, selectedVariant)
     setTimeout(() => {
       setAdding(false)
+      if (!added) {
+        toast.error(t.productStockMaxed)
+        return
+      }
       toast.success(t.productAdded, {
-        description: `${product.name}, Size ${size}`,
+        description: t.productAddedSize(product.name, size),
         action: { label: t.cart, onClick: () => navigate('/cart') }
       })
     }, 400)
@@ -353,10 +457,6 @@ export default function ProductDetail() {
   // so switching between products never stacks up duplicate script tags.
   useEffect(() => {
     if (!product) return
-    // total_stock (not the deprecated per-product `stock` field) is the
-    // fallback when this product has no variants -- see the Product type note.
-    const outOfStockForLd = hasVariants ? (!selectedVariant || selectedVariant.stock === 0) : product.total_stock === 0
-
     const jsonLd: Record<string, unknown> = {
       '@context': 'https://schema.org',
       '@type': 'Product',
@@ -365,9 +465,16 @@ export default function ProductDetail() {
       description: product.description || undefined,
       offers: {
         '@type': 'Offer',
+        // Unformatted numeric price in the real settlement currency (Kashier
+        // always charges EGP) -- never the display currency and never run
+        // through Intl.NumberFormat, which Google can't parse.
         price: Number(effectivePrice).toFixed(2),
-        priceCurrency: currency,
-        availability: outOfStockForLd ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
+        priceCurrency: SETTLEMENT_CURRENCY,
+        // The SAME outOfStock the Add button uses. It used to be re-derived
+        // here from total_stock, the variants-only aggregate, so a legacy
+        // product with no variant rows was published to Google as OutOfStock
+        // while the page itself offered it for sale.
+        availability: outOfStock ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
       },
     }
     // schema.org doesn't want a fake 0/0 rating block -- omit entirely rather
@@ -388,7 +495,7 @@ export default function ProductDetail() {
       document.head.appendChild(script)
     }
     script.textContent = JSON.stringify(jsonLd)
-  }, [product, heroImage, effectivePrice, hasVariants, selectedVariant, currency])
+  }, [product, heroImage, effectivePrice, outOfStock])
 
   // Only strip the tag on unmount (leaving the product page entirely) -- not
   // on every dependency change above, which would just churn the same tag.
@@ -400,6 +507,15 @@ export default function ProductDetail() {
     return (
       <div className="min-h-[60vh] flex items-center justify-center bg-cream">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-6 bg-cream gap-4">
+        <p className="text-terracotta">{t.productLoadError}</p>
+        <button onClick={() => load()} className="text-sm border-b border-foreground pb-0.5 cursor-pointer">{t.failedTryAgain}</button>
       </div>
     )
   }
@@ -435,12 +551,14 @@ export default function ProductDetail() {
               />
             </div>
             {galleryImages.length > 1 && (
-              <div className="flex gap-2 mt-3">
+              /* Wraps rather than overflowing: a product with six or more
+                 photos ran off the edge of a 375px screen. */
+              <div className="flex flex-wrap gap-2 mt-3">
                 {galleryImages.map((url, i) => (
                   <button
                     key={i}
                     onClick={() => setActiveImage(i)}
-                    aria-label={`View photo ${i + 1} of ${product.name}`}
+                    aria-label={t.productPhotoLabel(i + 1, product.name)}
                     aria-pressed={activeImage === i}
                     className={`w-16 h-16 overflow-hidden bg-muted border transition-colors cursor-pointer ${
                       activeImage === i ? 'border-foreground' : 'border-border hover:border-foreground/50'
@@ -482,11 +600,12 @@ export default function ProductDetail() {
                 <span className="text-xs tracking-widest uppercase text-muted-foreground">{t.productColor}</span>
                 <span className="text-xs text-foreground/70">{color}</span>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {colorOptions.map(c => (
                   <button
                     key={c}
                     onClick={() => setColor(c)}
+                    aria-pressed={color === c}
                     className={`px-3.5 py-1.5 text-sm border transition-colors cursor-pointer ${
                       color === c
                         ? 'border-foreground bg-foreground text-background'
@@ -501,12 +620,7 @@ export default function ProductDetail() {
 
             {/* Size */}
             <div className="mb-10">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs tracking-widest uppercase text-muted-foreground">{t.productSize}</span>
-                <button className="text-xs text-muted-foreground underline-offset-2 hover:underline">
-                  {t.productSizeGuide}
-                </button>
-              </div>
+              <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-3">{t.productSize}</span>
               <div className="grid grid-cols-5 sm:grid-cols-8 gap-1.5">
                 {sizeOptions.map(s => {
                   const available = sizeAvailable(s)
@@ -515,7 +629,8 @@ export default function ProductDetail() {
                       key={s}
                       onClick={() => available && setSize(s)}
                       disabled={!available}
-                      className={`py-2.5 text-sm border transition-colors ${
+                      aria-pressed={size === s}
+                      className={`min-h-[44px] text-sm border transition-colors ${
                         !available
                           ? 'border-border/50 text-muted-foreground/40 cursor-not-allowed'
                           : size === s
@@ -560,7 +675,7 @@ export default function ProductDetail() {
                 <p className="text-xs tracking-widest uppercase text-muted-foreground mb-3">{t.bundleSectionTitle}</p>
                 <div className="space-y-4">
                   {bundles.map(bundle => {
-                    const regularTotal = bundle.items.reduce((sum, i) => sum + i.products.price * i.quantity, 0)
+                    const regularTotal = bundle.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0)
                     const discountedTotal = bundle.discount_type === 'percentage'
                       ? regularTotal * (1 - bundle.discount_value / 100)
                       : Math.max(0, regularTotal - bundle.discount_value)
@@ -629,7 +744,9 @@ export default function ProductDetail() {
                         value={notifyEmail}
                         onChange={e => setNotifyEmail(e.target.value)}
                         placeholder={t.notifyEmailPlaceholder}
-                        className="flex-1 min-w-0 border border-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:border-foreground"
+                        aria-label={t.notifyEmailPlaceholder}
+                        dir="ltr"
+                        className="flex-1 min-w-0 border border-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:border-foreground rtl:text-right"
                       />
                       <button
                         type="submit"
@@ -697,7 +814,19 @@ export default function ProductDetail() {
         <div className="mt-32">
           <SectionHeading eyebrow={t.reviewsEyebrow} title={t.reviewsTitle} align="between" className="mb-10" />
 
-          {reviews.length === 0 ? (
+          {reviewsLoadError ? (
+            <div className="mb-12">
+              <p className="text-sm text-terracotta mb-3">{t.reviewsLoadError}</p>
+              <button
+                onClick={() => product && loadReviews(product.id)}
+                disabled={reviewsLoading}
+                className="text-xs tracking-widest uppercase border-b border-foreground pb-0.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+              >
+                {reviewsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {t.failedTryAgain}
+              </button>
+            </div>
+          ) : reviews.length === 0 ? (
             <p className="text-sm text-foreground/70 mb-12">{t.reviewsEmpty}</p>
           ) : (
             <div className="space-y-8 mb-12 max-w-2xl">
@@ -792,14 +921,14 @@ export default function ProductDetail() {
 
 // Same card markup the Related and Recently Viewed grids both use.
 function ProductCard({ product }: { product: ProductCatalogEntry }) {
-  const { formatPrice } = useCurrency()
+  const catalogPrice = useCatalogPrice()
   return (
     <Link to={`/product/${product.slug}`} className="group block">
       <div className="aspect-square bg-muted overflow-hidden img-zoom">
         <img src={product.image_url || ''} alt={product.name} className="w-full h-full object-cover" />
       </div>
       <h3 className="mt-4 font-display text-lg group-hover:text-muted-foreground transition-colors">{product.name}</h3>
-      <p className="text-sm text-muted-foreground mt-1">{formatPrice(Number(product.min_price))}</p>
+      <p className="text-sm text-muted-foreground mt-1">{catalogPrice(product)}</p>
     </Link>
   )
 }
