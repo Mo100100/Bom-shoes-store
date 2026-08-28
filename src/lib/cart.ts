@@ -18,9 +18,14 @@ export type LineDecision =
 // The one quantity guard every caller routes through: at least one, and never
 // past the stock last seen. A null stock means the line hasn't been checked
 // against the database yet, so there is nothing to clamp to.
+//
+// The floor wins over the cap at stock 0, which is the one case where the two
+// disagree. Such a line is already flagged unavailable and counts toward no
+// total, so a quantity of 1 is just what it renders as; returning 0 would show
+// the customer a "0" they cannot increment away from.
 export function clampQuantity(stock: number | null, quantity: number): number {
   const atLeastOne = Math.max(1, Math.floor(quantity) || 1)
-  return stock != null ? Math.min(atLeastOne, stock) : atLeastOne
+  return stock != null ? Math.max(1, Math.min(atLeastOne, stock)) : atLeastOne
 }
 
 // What a cart line becomes once the database has been consulted.

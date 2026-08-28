@@ -190,6 +190,7 @@ export const translations = {
     // Toast detail line: always names the size that went in, so a quick-add
     // never leaves the customer guessing which one they got.
     productAddedSize: (name: string, size: string) => `${name}, size ${size}`,
+    productStockMaxed: 'Your basket already holds every one we have left',
     productChooseSize: 'Please choose a size',
     productShip1: 'Free shipping on orders over $200',
     productShip2: '30-day quiet returns',
@@ -311,6 +312,8 @@ export const translations = {
     checkoutSelectRegion: 'Select your governorate',
     checkoutRequired: 'Please complete all required fields',
     checkoutFailed: 'Something went quiet on our end. Please try again.',
+    checkoutUnavailable: 'Some pieces sold out while you were here. Go back to your basket to remove them.',
+    checkoutBackToBasket: 'Back to your basket',
 
     // Checkout success / failed
     successChecking: 'Confirming your order',
@@ -946,6 +949,7 @@ export const translations = {
     productOutOfStock: 'نفد المخزون',
     productAdded: 'أضيف إلى سلتك',
     productAddedSize: (name: string, size: string) => `${name}، مقاس ${size}`,
+    productStockMaxed: 'سلتك تحتوي بالفعل على كل ما تبقى لدينا',
     productChooseSize: 'يرجى اختيار مقاس',
     productShip1: 'شحن مجاني للطلبات فوق 200 دولار',
     productShip2: 'إرجاع هادئ خلال 30 يوما',
@@ -1067,6 +1071,8 @@ export const translations = {
     checkoutSelectRegion: 'اختر محافظتك',
     checkoutRequired: 'يرجى إكمال كافة الحقول المطلوبة',
     checkoutFailed: 'حدث شيء هادئ لدينا. يرجى المحاولة مرة أخرى.',
+    checkoutUnavailable: 'نفدت بعض القطع أثناء وجودك هنا. عد إلى سلتك لإزالتها.',
+    checkoutBackToBasket: 'العودة إلى سلتك',
 
     // Checkout success / failed
     successChecking: 'جارٍ تأكيد طلبك',

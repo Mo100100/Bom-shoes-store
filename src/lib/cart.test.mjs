@@ -23,6 +23,14 @@ test('clampQuantity leaves an unchecked line uncapped', () => {
   assert.equal(clampQuantity(null, 999), 999)
 })
 
+test('clampQuantity keeps its floor when the stock is zero', () => {
+  // revalidateCart writes stock: 0 onto a sold-out line, so this is reachable.
+  // The floor wins: a line rendering "0" that cannot be incremented is worse
+  // than a flagged-unavailable line showing 1.
+  assert.equal(clampQuantity(0, 3), 1)
+  assert.equal(clampQuantity(0, 0), 1)
+})
+
 test('a line is priced by price_override, falling back to the product price', () => {
   assert.deepEqual(reconcileLine(1, 500, { stock: 4, price_override: 399 }), {
     available: true, unitPrice: 399, quantity: 1, stock: 4,

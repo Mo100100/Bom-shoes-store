@@ -17,6 +17,11 @@ export type CartItem = {
   /** Stock the last revalidation saw for this exact variant, or null when the
    *  line hasn't been checked yet (nothing to clamp against). */
   stock: number | null
+  /** unitPrice is a guess (the snapshot's product price) rather than a figure
+   *  read off a variant row: true for a cart stored before unitPrice existed,
+   *  and for a line added without variant info. Revalidation then has no
+   *  earlier price to compare against, so it must not report a change. */
+  unitPriceUnverified?: boolean
   /** The product, or this size/colour of it, is gone or sold out. The line
    *  stays visible so the customer sees what happened, but it counts toward no
    *  total and blocks checkout until it's removed. */
@@ -25,7 +30,8 @@ export type CartItem = {
 
 type CartContextType = {
   items: CartItem[]
-  addItem: (product: Product, size: string, color: string, quantity?: number, variant?: VariantSnapshot | null) => void
+  /** False when the line already holds every unit in stock, so nothing was added. */
+  addItem: (product: Product, size: string, color: string, quantity?: number, variant?: VariantSnapshot | null) => boolean
   removeItem: (productId: string, size: string, color: string) => void
   updateQuantity: (productId: string, size: string, color: string, quantity: number) => void
   clearCart: () => void
@@ -43,6 +49,11 @@ const COUPON_KEY = 'zen-shoes-coupon'
 
 function variantKey(productId: string, size: string, color: string): string {
   return `${productId}::${size}::${color}`
+}
+
+// The identity of a cart line, in one place: product plus size plus colour.
+function matchesLine(item: CartItem, productId: string, size: string, color: string): boolean {
+  return item.product.id === productId && item.size === size && item.color === color
 }
 
 // A stored cart is JSON from a browser we don't control and can be months old,
@@ -64,6 +75,11 @@ function hydrateStoredCart(): CartItem[] {
         quantity: Math.max(1, Math.floor(Number(i.quantity)) || 1),
         unitPrice: Number(i.unitPrice ?? i.product.price) || 0,
         stock: null,
+        // A cart stored before unitPrice existed only has the snapshot's
+        // product price to fall back on, which is not what an override-priced
+        // line was ever going to cost. Flagged so the first revalidation after
+        // this ships doesn't announce a price change that never happened.
+        unitPriceUnverified: i.unitPrice == null,
       }))
   } catch {
     return []
@@ -112,34 +128,40 @@ export function CartProvider({ children }: { children: ReactNode }) {
   // no caller is forced to have one, but passing it means the line starts at
   // the price the server will charge and with a real stock cap, instead of
   // waiting for the next revalidateCart to correct it.
-  function addItem(product: Product, size: string, color: string, quantity = 1, variant?: VariantSnapshot | null) {
+  //
+  // Returns false when the line is already holding every unit in stock and the
+  // clamp would make this a no-op, so a caller doesn't tell the customer
+  // something was added when nothing was.
+  function addItem(product: Product, size: string, color: string, quantity = 1, variant?: VariantSnapshot | null): boolean {
+    const existing = items.find(i => matchesLine(i, product.id, size, color)) ?? null
+    const stock = variant ? variant.stock : existing?.stock ?? null
+    if (existing && stock != null && existing.quantity >= stock) return false
+
     setItems(current => {
-      const idx = current.findIndex(
-        i => i.product.id === product.id && i.size === size && i.color === color
-      )
-      const existing = idx >= 0 ? current[idx] : null
-      const stock = variant ? variant.stock : existing?.stock ?? null
-      // Rebuilt from scratch rather than spread over the old line, so re-adding
-      // something that had gone unavailable clears that flag.
+      const idx = current.findIndex(i => matchesLine(i, product.id, size, color))
       const line: CartItem = {
         product,
         size,
         color,
-        quantity: clampQuantity(stock, (existing?.quantity ?? 0) + quantity),
-        unitPrice: variant ? variant.price_override ?? product.price : existing?.unitPrice ?? product.price,
+        quantity: clampQuantity(stock, (current[idx]?.quantity ?? 0) + quantity),
+        unitPrice: variant ? variant.price_override ?? product.price : current[idx]?.unitPrice ?? product.price,
         stock,
+        // Only a variant row gives a price we can call verified. Carried over
+        // from the existing line when this add doesn't bring one.
+        unitPriceUnverified: variant ? undefined : idx < 0 || current[idx].unitPriceUnverified,
       }
+      // Rebuilt from scratch rather than spread over the old line, so re-adding
+      // something that had gone unavailable clears that flag.
       if (idx < 0) return [...current, line]
       const copy = [...current]
       copy[idx] = line
       return copy
     })
+    return true
   }
 
   function removeItem(productId: string, size: string, color: string) {
-    setItems(current => current.filter(
-      i => !(i.product.id === productId && i.size === size && i.color === color)
-    ))
+    setItems(current => current.filter(i => !matchesLine(i, productId, size, color)))
   }
 
   function updateQuantity(productId: string, size: string, color: string, quantity: number) {
@@ -148,7 +170,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       return
     }
     setItems(current => current.map(i => {
-      if (!(i.product.id === productId && i.size === size && i.color === color)) return i
+      if (!matchesLine(i, productId, size, color)) return i
       const capped = clampQuantity(i.stock, quantity)
       return capped === i.quantity ? i : { ...i, quantity: capped }
     }))
@@ -226,7 +248,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       const notify = items.some(item => {
         const next = reconcile(item)
         return next.unavailable !== item.unavailable ||
-          next.unitPrice !== item.unitPrice ||
+          (!item.unitPriceUnverified && next.unitPrice !== item.unitPrice) ||
           next.quantity !== item.quantity ||
           next.product.name !== item.product.name ||
           next.product.image_url !== item.product.image_url

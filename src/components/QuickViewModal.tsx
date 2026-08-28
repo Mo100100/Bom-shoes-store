@@ -105,7 +105,7 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
   function handleAdd() {
     if (!product) return
     if (!size) { toast.error(t.productChooseSize); return }
-    addItem(product, size, color, 1, selectedVariant)
+    if (!addItem(product, size, color, 1, selectedVariant)) { toast.error(t.productStockMaxed); return }
     toast.success(t.productAdded, { description: t.productAddedSize(product.name, size) })
     onClose()
   }

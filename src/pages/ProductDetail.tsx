@@ -190,8 +190,9 @@ export default function ProductDetail() {
       const itemSize = variant?.size ?? [...p.sizes].sort(compareSizes)[0]
       const itemColor = variant?.color ?? p.colors[0] ?? ''
       if (!itemSize) continue // nothing sellable for this item -- skip rather than add a broken line
-      addItem(p, itemSize, itemColor, item.quantity, variant)
-      added++
+      // A line already holding all remaining stock adds nothing, so it doesn't
+      // count toward the success toast either.
+      if (addItem(p, itemSize, itemColor, item.quantity, variant)) added++
     }
 
     setAddingBundleId(null)
@@ -344,9 +345,13 @@ export default function ProductDetail() {
     if (!product) return
     if (!size) { toast.error(t.productChooseSize); return }
     setAdding(true)
-    addItem(product, size, color, 1, selectedVariant)
+    const added = addItem(product, size, color, 1, selectedVariant)
     setTimeout(() => {
       setAdding(false)
+      if (!added) {
+        toast.error(t.productStockMaxed)
+        return
+      }
       toast.success(t.productAdded, {
         description: t.productAddedSize(product.name, size),
         action: { label: t.cart, onClick: () => navigate('/cart') }

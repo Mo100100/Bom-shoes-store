@@ -55,6 +55,14 @@ export default function Checkout() {
 
   const selectedRegion = regions.find(r => r.code === form.regionCode) || null
 
+  // Lines the customer can still buy. Revalidation can flag one at any moment
+  // (including while this page sits open), and totalPrice already leaves those
+  // out, so the summary and the submitted payload have to as well: otherwise
+  // this page lists three lines above a subtotal that only covers two, and the
+  // order dies server-side in resolveCartPricing with no client-side warning.
+  const sellable = items.filter(i => !i.unavailable)
+  const hasUnavailable = sellable.length !== items.length
+
   // Live preview of the coupon carried over from the Cart page, so the
   // summary/total shown here isn't missing the discount the whole time the
   // user is filling out the form -- recomputed once (items don't change on
@@ -66,7 +74,7 @@ export default function Checkout() {
     supabase.functions.invoke('validate-coupon', {
       body: {
         code: couponCode,
-        items: items.map(i => ({ product_id: i.product.id, size: i.size, color: i.color, quantity: i.quantity })),
+        items: sellable.map(i => ({ product_id: i.product.id, size: i.size, color: i.color, quantity: i.quantity })),
         customerEmail: form.email || user?.email,
       },
     }).then(({ data }) => {
@@ -91,7 +99,11 @@ export default function Checkout() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (items.length === 0) return
+    if (sellable.length === 0) return
+    if (hasUnavailable) {
+      toast.error(t.checkoutUnavailable)
+      return
+    }
     // Phone is required (the courier calls the customer); email is optional.
     // A governorate must be chosen so shipping can be priced.
     if (!form.fullName || !form.phone || !form.address || !form.city || !form.regionCode) {
@@ -108,7 +120,7 @@ export default function Checkout() {
       // id, order row, and Kashier checkout URL (with its signed hash) are
       // all generated server-side too; see supabase/functions/create-order.
       const body: CreateOrderRequest = {
-        items: items.map(i => ({
+        items: sellable.map(i => ({
           product_id: i.product.id,
           size: i.size,
           color: i.color,
@@ -278,10 +290,19 @@ export default function Checkout() {
               </div>
             </div>
 
+            {hasUnavailable && (
+              <div className="border border-terracotta/40 bg-terracotta/5 p-4 text-sm">
+                <p className="text-terracotta mb-2">{t.checkoutUnavailable}</p>
+                <Link to="/cart" className="text-xs tracking-wider uppercase underline underline-offset-4">
+                  {t.checkoutBackToBasket}
+                </Link>
+              </div>
+            )}
+
             <button
               type="submit"
-              disabled={submitting}
-              className="w-full bg-foreground text-background py-4 text-sm tracking-widest uppercase hover:bg-foreground/85 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+              disabled={submitting || hasUnavailable}
+              className="w-full bg-foreground text-background py-4 text-sm tracking-widest uppercase hover:bg-foreground/85 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
             >
               {submitting ? t.checkoutPreparing : paymentMethod === 'cash' ? (
                 <>
@@ -305,7 +326,7 @@ export default function Checkout() {
             <div className="border border-border p-6 lg:p-8 bg-card">
               <h2 className="font-display text-2xl mb-6">{t.checkoutYourOrder}</h2>
               <div className="space-y-4 mb-6 max-h-80 overflow-y-auto">
-                {items.map(item => (
+                {sellable.map(item => (
                   <div key={`${item.product.id}-${item.size}-${item.color}`} className="flex gap-3">
                     <div className="w-14 h-14 bg-muted overflow-hidden flex-shrink-0 relative">
                       <img src={item.product.image_url || ''} alt="" className="w-full h-full object-cover" />
