@@ -83,7 +83,11 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
     new Set(hasVariants ? variants.map(v => v.size) : (product?.sizes ?? []))
   ).sort(compareSizes)
   const selectedVariant = hasVariants ? variants.find(v => v.color === color && v.size === size) : undefined
-  const effectivePrice = selectedVariant ? (selectedVariant.price_override ?? product?.min_price ?? 0) : (product?.min_price ?? 0)
+  // price_override ?? products.price, matching ProductDetail and the rule the
+  // server charges by. NOT min_price: that is the cheapest variant across the
+  // whole product, so falling back to it quoted 400 for a size that has no
+  // override and therefore costs the base 500.
+  const effectivePrice = selectedVariant ? (selectedVariant.price_override ?? product?.price ?? 0) : (product?.price ?? 0)
   const outOfStock = hasVariants ? (!selectedVariant || selectedVariant.stock === 0) : (product?.total_stock ?? 0) === 0
   const mainImage = images[0]?.url || product?.image_url || ''
 

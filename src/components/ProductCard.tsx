@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { ProductCatalogEntry } from '@/lib/supabase'
 import { useT } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
+import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import WishlistButton from '@/components/WishlistButton'
 import { cn } from '@/lib/utils'
 import { Plus, Loader2 } from 'lucide-react'
@@ -37,18 +38,14 @@ export default function ProductCard({
 }: ProductCardProps) {
   const t = useT()
   const { formatPrice } = useCurrency()
+  const catalogPrice = useCatalogPrice()
   const isNew = Date.now() - new Date(p.created_at).getTime() < NEW_WINDOW_MS
-  // min_price/max_price/has_discount all come straight from product_catalog,
-  // which computes them from the rule the server actually charges by:
-  // coalesce(price_override, products.price) per variant
-  // (supabase/functions/_shared/pricing.ts). Reading has_discount rather than
-  // re-deriving it here is what keeps this badge and the /sale filter in
-  // Shop.tsx meaning the same thing.
-  const displayPrice = Number(p.min_price)
+  // has_discount comes straight from product_catalog, which computes it from
+  // the rule the server actually charges by: coalesce(price_override,
+  // products.price) per variant (supabase/functions/_shared/pricing.ts).
+  // Reading it rather than re-deriving it here is what keeps this badge and
+  // the /sale filter in Shop.tsx meaning the same thing.
   const hasSale = p.has_discount
-  // Sizes are not all the same price, so the lowest one is a starting price,
-  // not the price. Showing it bare is how a 400 card charged 500 at checkout.
-  const isFromPrice = Number(p.max_price) > displayPrice
   const topLabel = p.brand || categoryLabel
 
   return (
@@ -100,9 +97,7 @@ export default function ProductCard({
           {p.name}
         </h3>
         <div className="mt-2 flex items-baseline gap-2">
-          <span className="text-base font-bold text-foreground">
-            {isFromPrice ? t.shopPriceFrom(formatPrice(displayPrice)) : formatPrice(displayPrice)}
-          </span>
+          <span className="text-base font-bold text-foreground">{catalogPrice(p)}</span>
           {hasSale && (
             <span className="text-xs text-muted-foreground line-through">{formatPrice(Number(p.price))}</span>
           )}

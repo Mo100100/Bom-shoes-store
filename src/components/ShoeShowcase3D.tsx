@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
-import { useCurrency } from '@/contexts/CurrencyContext'
+import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { supabase, ProductCatalogEntry } from '@/lib/supabase'
 
 /**
@@ -15,7 +15,10 @@ import { supabase, ProductCatalogEntry } from '@/lib/supabase'
 type ShowcaseItem = {
   src: string
   enTitle: string
+  // Both ends of the variant price range, so the slide can say "from X" for a
+  // product whose sizes differ in price rather than quoting only the cheapest.
   minPrice: number
+  maxPrice: number
   slug: string
 }
 
@@ -26,7 +29,7 @@ const GLOW_COLOR = '#C9A98F'
 export default function ShoeShowcase3D() {
   const t = useT()
   const { lang } = useLanguage()
-  const { formatPrice } = useCurrency()
+  const catalogPrice = useCatalogPrice()
   const sectionRef = useRef<HTMLDivElement>(null)
   const [active, setActive] = useState(0)
   const [scrollProgress, setScrollProgress] = useState(0)
@@ -73,6 +76,7 @@ export default function ShoeShowcase3D() {
         src: p.image_url || '',
         enTitle: p.name,
         minPrice: p.min_price,
+        maxPrice: p.max_price,
         slug: p.slug,
       })))
       if (value.label_en || value.label_ar) {
@@ -253,7 +257,7 @@ export default function ShoeShowcase3D() {
               className="text-2xl font-light opacity-95 mb-6 text-shadow"
               style={{ animation: 'fadeUp 600ms 300ms ease-out both' }}
             >
-              {formatPrice(current.minPrice)}
+              {catalogPrice({ min_price: current.minPrice, max_price: current.maxPrice })}
             </p>
             <p
               key={`d-${active}`}

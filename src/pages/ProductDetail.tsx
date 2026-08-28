@@ -5,6 +5,7 @@ import { useCart } from '@/contexts/CartContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
+import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { useRecentlyViewed } from '@/hooks/useRecentlyViewed'
 import { useSeo } from '@/hooks/useSeo'
 import { compareSizes, defaultSizeForColor, firstInStockVariant } from '@/lib/sizes'
@@ -817,14 +818,14 @@ export default function ProductDetail() {
 
 // Same card markup the Related and Recently Viewed grids both use.
 function ProductCard({ product }: { product: ProductCatalogEntry }) {
-  const { formatPrice } = useCurrency()
+  const catalogPrice = useCatalogPrice()
   return (
     <Link to={`/product/${product.slug}`} className="group block">
       <div className="aspect-square bg-muted overflow-hidden img-zoom">
         <img src={product.image_url || ''} alt={product.name} className="w-full h-full object-cover" />
       </div>
       <h3 className="mt-4 font-display text-lg group-hover:text-muted-foreground transition-colors">{product.name}</h3>
-      <p className="text-sm text-muted-foreground mt-1">{formatPrice(Number(product.min_price))}</p>
+      <p className="text-sm text-muted-foreground mt-1">{catalogPrice(product)}</p>
     </Link>
   )
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
+import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { useWishlist } from '@/contexts/WishlistContext'
 import { useSeo } from '@/hooks/useSeo'
 import { supabase, Order, ProductCatalogEntry } from '@/lib/supabase'
@@ -29,6 +30,7 @@ export default function Account() {
   const t = useT()
   const { lang } = useLanguage()
   const { formatPrice } = useCurrency()
+  const catalogPrice = useCatalogPrice()
 
   useSeo({
     title: 'My Account · BOM Store',
@@ -158,7 +160,7 @@ export default function Account() {
                     >
                       {p.name}
                     </Link>
-                    <p className="text-sm text-muted-foreground mt-1">{formatPrice(Number(p.min_price))}</p>
+                    <p className="text-sm text-muted-foreground mt-1">{catalogPrice(p)}</p>
                   </div>
                   <WishlistButton productId={p.id} className="shrink-0" />
                 </div>

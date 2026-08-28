@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useCart } from '@/contexts/CartContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { useLanguage, useT } from '@/contexts/LanguageContext'
-import { useCurrency } from '@/contexts/CurrencyContext'
+import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { useCategories } from '@/contexts/CategoriesContext'
 import { useWishlist } from '@/contexts/WishlistContext'
 import { ShoppingBag, User, Menu, X, LogOut, LayoutDashboard, Globe, ChevronDown, Search, Instagram, Facebook, Share2, Heart } from 'lucide-react'
@@ -30,7 +30,7 @@ type ContactContent = {
   social_twitter: string | null
 }
 
-type SearchHit = Pick<ProductCatalogEntry, 'id' | 'slug' | 'name' | 'min_price' | 'image_url'>
+type SearchHit = Pick<ProductCatalogEntry, 'id' | 'slug' | 'name' | 'min_price' | 'max_price' | 'image_url'>
 
 const SEARCH_HISTORY_KEY = 'bom-store-search-history'
 const MAX_SEARCH_HISTORY = 8
@@ -51,7 +51,7 @@ export default function Layout() {
   const { lang, setLang } = useLanguage()
   const { categories } = useCategories()
   const { wishlistedIds } = useWishlist()
-  const { formatPrice } = useCurrency()
+  const catalogPrice = useCatalogPrice()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [userOpen, setUserOpen] = useState(false)
   const [langOpen, setLangOpen] = useState(false)
@@ -183,7 +183,7 @@ export default function Layout() {
     const timer = setTimeout(async () => {
       const { data } = await supabase
         .from('product_catalog')
-        .select('id, slug, name, min_price, image_url')
+        .select('id, slug, name, min_price, max_price, image_url')
         .textSearch('search_vector', q, { type: 'websearch' })
         .limit(5)
       setSuggestions(data || [])
@@ -487,7 +487,7 @@ export default function Layout() {
                               <img src={p.image_url || ''} alt={p.name} className="w-full h-full object-cover" />
                             </div>
                             <span className="flex-1 text-sm truncate">{p.name}</span>
-                            <span className="text-sm text-muted-foreground shrink-0">{formatPrice(Number(p.min_price))}</span>
+                            <span className="text-sm text-muted-foreground shrink-0">{catalogPrice(p)}</span>
                           </button>
                         ))}
                       </div>
