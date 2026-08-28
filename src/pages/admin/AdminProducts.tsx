@@ -6,6 +6,7 @@ import { useCurrency } from '@/contexts/CurrencyContext'
 import { useCategories } from '@/contexts/CategoriesContext'
 import { useBrands } from '@/contexts/BrandsContext'
 import { compressImage } from '@/lib/compressImage'
+import { diffVariants, DesiredVariant } from '@/lib/variantDiff'
 import { Loader2, Plus, X, Edit2, Trash2, Star, Search, ChevronUp, ChevronDown } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -152,17 +153,26 @@ export default function AdminProducts() {
     setVariantRows(rows => rows.filter(r => r._key !== key))
   }
 
-  // Full replace against the DB for this product: delete every existing
-  // variant row, then insert the current set in one batch. Per-row
-  // update()/insert() calls against unique(product_id, size, color) can fail
-  // mid-loop when two rows swap values (updating row A to row B's current
-  // size/color hits the constraint before row B is touched) -- delete+insert
-  // sidesteps that entirely. Fine for an admin-only, low-traffic screen.
+  // Writes the grid to product_variants as a diff that PRESERVES row ids.
+  // Orders snapshot `variant_id` and fulfill_order() looks the row up by that
+  // id, so the old delete + insert gave every variant a new uuid on every
+  // product save and killed any paid order still waiting on its webhook.
+  //
+  // unique(product_id, size, color) was the reason for delete + insert: naive
+  // per-row updates collide when two rows swap size/color. diffVariants()
+  // matches desired rows to existing rows by their natural key first and only
+  // then by id, so a swap leaves both rows on their own size/color while the
+  // other fields move across, and no update ever targets a key a surviving row
+  // still holds. Order is deletes -> updates -> inserts so a size/color or sku
+  // freed by a removed row is available again before another row reuses it.
+  //
+  // Four queries at most, whatever the row count: one read plus one batched
+  // write per operation kind.
   async function saveVariants(productId: string) {
-    const rows = variantRows
+    const desired: DesiredVariant[] = variantRows
       .filter(r => r.size.trim() && r.color.trim()) // ponytail: skip incomplete rows, don't persist half-filled variants
       .map(row => ({
-        product_id: productId,
+        id: row.id,
         size: row.size.trim(),
         color: row.color.trim(),
         sku: row.sku.trim() || null,
@@ -170,11 +180,29 @@ export default function AdminProducts() {
         stock: Number(row.stock) || 0,
         price_override: row.price_override.trim() === '' ? null : Number(row.price_override),
       }))
-    const { error: delError } = await supabase.from('product_variants').delete().eq('product_id', productId)
-    if (delError) throw delError
-    if (rows.length) {
-      const { error: insError } = await supabase.from('product_variants').insert(rows)
-      if (insError) throw insError
+
+    // Read the current rows rather than trusting the grid's copy: only the DB
+    // knows which ids are still there to be kept, updated or removed.
+    const { data: existing, error: loadError } = await supabase
+      .from('product_variants').select('id, size, color').eq('product_id', productId)
+    if (loadError) throw loadError
+
+    const { deletes, updates, inserts } = diffVariants(existing || [], desired)
+
+    if (deletes.length) {
+      const { error } = await supabase.from('product_variants').delete().in('id', deletes)
+      if (error) throw error
+    }
+    if (updates.length) {
+      // upsert on the primary key: one statement for every kept row.
+      const { error } = await supabase.from('product_variants')
+        .upsert(updates.map(row => ({ ...row, product_id: productId })))
+      if (error) throw error
+    }
+    if (inserts.length) {
+      const { error } = await supabase.from('product_variants')
+        .insert(inserts.map(row => ({ ...row, product_id: productId })))
+      if (error) throw error
     }
   }
 
