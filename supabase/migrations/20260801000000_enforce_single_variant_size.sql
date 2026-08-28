@@ -35,8 +35,16 @@ begin;
 -- ---------------------------------------------------------------------------
 -- 1. Trim padded sizes in place. ' 41 ' passes a btrim-only check but never
 --    matches a cart line, because the pricing resolver compares size exactly.
---    Skipped (and left to step 5) only when the trimmed value would collide
---    with a row that already holds it.
+--    Skipped (and left to step 5) when the trimmed value would collide with a
+--    row that already holds it.
+--
+--    TWO guards, because they catch different collisions. The NOT EXISTS sees
+--    only the statement's snapshot, so it catches rows this UPDATE is NOT
+--    touching but is blind to rows it IS touching: ' 41' and '41 ' in one
+--    product and colour both trim to '41', neither sees the other at snapshot
+--    time, and both would be set to '41' -> duplicate key, migration aborts.
+--    The second guard dedupes WITHIN the batch by letting the lowest id win;
+--    the losers fall through to step 5, which already handles collisions.
 -- ---------------------------------------------------------------------------
 update public.product_variants v
 set size = btrim(v.size)
@@ -48,6 +56,15 @@ where v.size <> btrim(v.size)
       and o.color = v.color
       and o.size = btrim(v.size)
       and o.id <> v.id
+  )
+  and v.id = (
+    select o.id from public.product_variants o
+    where o.product_id = v.product_id
+      and o.color = v.color
+      and o.size <> btrim(o.size)
+      and btrim(o.size) = btrim(v.size)
+    order by o.id
+    limit 1
   );
 
 -- ---------------------------------------------------------------------------
@@ -66,8 +83,26 @@ delete from crammed_variant_parts where part = '';
 
 -- ---------------------------------------------------------------------------
 -- 3. Rewrite each crammed row IN PLACE to its first size, keeping its id and
---    therefore its orders and its back-in-stock subscriptions. The NOT EXISTS
---    guard stands in for the ON CONFLICT that UPDATE does not have.
+--    therefore its orders and its back-in-stock subscriptions.
+--
+--    `first_part` is one candidate per crammed row: its first non-blank size.
+--    `winner` then dedupes ACROSS rows, because two crammed rows in the same
+--    product and colour can name the same first size: A = '41/42' and
+--    B = '41/43' both want '41', neither can see the other in the NOT EXISTS
+--    (a subquery sees the statement's snapshot, never the rows the statement
+--    is itself updating), and both would be set to '41' -> duplicate key on
+--    the non-deferrable unique (product_id, size, color), aborting the whole
+--    migration. Lowest id wins; the loser falls through to step 5, and step 4
+--    still re-inserts every size it was carrying, so no size is lost.
+--
+--    The NOT EXISTS is still needed alongside it: it catches collisions with
+--    rows this statement is not touching at all.
+--
+--    ponytail: always the FIRST part, never "the first part nobody else took".
+--    Picking a non-colliding part would preserve a few more ids, but which
+--    parts are free depends on what the other rows in the batch claimed, which
+--    is a sequential assignment no reviewer can check by reading. The cost is
+--    one lost id per same-first-size collision, which step 5 reports.
 --
 --    Stock: least(stock, 1). The crammed rows stored the COUNT of sizes as the
 --    stock, so keeping it would claim five pairs of every size and let the
@@ -75,20 +110,25 @@ delete from crammed_variant_parts where part = '';
 --    owner tops up real per-size counts in the admin. A row already at 0 stays
 --    at 0.
 -- ---------------------------------------------------------------------------
-update public.product_variants v
-set size = k.part,
-    stock = least(v.stock, 1)
-from (
+with first_part as (
   select distinct on (id) id, product_id, color, part
   from crammed_variant_parts
   order by id, ord
-) k
-where v.id = k.id
+), winner as (
+  select distinct on (product_id, color, part) id, product_id, color, part
+  from first_part
+  order by product_id, color, part, id
+)
+update public.product_variants v
+set size = w.part,
+    stock = least(v.stock, 1)
+from winner w
+where v.id = w.id
   and not exists (
     select 1 from public.product_variants o
-    where o.product_id = k.product_id
-      and o.color = k.color
-      and o.size = k.part
+    where o.product_id = w.product_id
+      and o.color = w.color
+      and o.size = w.part
       and o.id <> v.id
   );
 
