@@ -103,16 +103,16 @@ where payment_status = 'paid'
 --     and "we recorded that stock was taken" can never disagree. This is what
 --     lets release_order_stock() give a refunded card order's stock back.
 -- ---------------------------------------------------------------------------
--- `set app.order_write` is what lets this function's own UPDATE past
--- enforce_order_state_writer (section 4). It is part of the definition rather
--- than an ALTER FUNCTION so that anyone re-emitting this body carries it
--- across; dropping it silently breaks every payment.
+-- SECURITY DEFINER is what lets this function's own UPDATE past
+-- enforce_order_state_writer (section 4): inside a definer function
+-- current_user is the function's owner, which is also the owner of
+-- public.orders, and that is exactly what the trigger trusts. Dropping
+-- `security definer` from a re-emitted body silently breaks every payment.
 create or replace function public.fulfill_order(p_order_id uuid)
 returns boolean
 language plpgsql
 security definer
 set search_path = public, pg_temp
-set app.order_write = 'on'
 as $function$
 declare
   v_items jsonb;
@@ -269,25 +269,33 @@ grant execute on function public.fulfill_order(uuid) to service_role;
 -- table's other columns rely on); this trigger takes the two state columns out
 -- of the client's reach instead.
 --
--- What the trigger trusts is a TRANSACTION-LOCAL FLAG, not a role. Every
--- trusted database function carries `set app.order_write = 'on'` in its own
--- definition (see the ALTER FUNCTION block below for the ones defined in
--- earlier migrations), which Postgres applies for the duration of that call
--- and reverts on exit, so it can never leak to the caller or across a pooled
--- connection. A client cannot set it: PostgREST only ever sets the request.*
--- GUCs from the JWT and headers, never an arbitrary one.
+-- What the trigger trusts is WHO IS WRITING, resolved against two names it
+-- looks up rather than any privilege it has to be granted:
 --
--- Role identity is NOT used to infer trust. An earlier draft allowed anything
--- that was a member of service_role, on the assumption that the role owning
--- the SECURITY DEFINER functions is a superuser and therefore a member of
--- every role. That assumption is FALSE on Supabase cloud, where `postgres` is
--- not a superuser, and if it does not hold, every stock-moving function in the
--- schema loses its write at once: a total checkout outage. The one role name
--- still accepted is the literal 'service_role', because the edge functions
--- write orders through PostgREST (kashier-webhook marking a payment failed,
--- create-order closing an order whose payment session could not be built) and
--- cannot set a transaction-local GUC from there. That is a string comparison
--- against the role PostgREST switches to, not an inference from a grant.
+--   1. The owner of public.orders. Every trusted writer in this schema
+--      (place_cod_order, fulfill_order, release_order_stock,
+--      release_expired_cod_orders, admin_update_order_status,
+--      cancel_abandoned_pending_orders) is SECURITY DEFINER and was created by
+--      the migration role, so inside any of them current_user IS that owner.
+--      No per-function marking is needed at all, and the two pg_cron jobs run
+--      as the same role. Section 9 asserts this holds.
+--   2. The literal 'service_role', because the edge functions write orders
+--      through PostgREST (kashier-webhook marking a payment failed,
+--      create-order closing an order whose payment session could not be built)
+--      and PostgREST switches to that role for the request.
+--
+-- Two rejected alternatives, for whoever changes this next:
+--   - A custom GUC (`set app.order_write = 'on'` on every writer) cannot be
+--     installed on Supabase at all: `postgres` is not a superuser, so
+--     `ALTER FUNCTION ... SET app.order_write` fails with "permission denied
+--     to set parameter" and takes the whole migration with it.
+--   - `pg_has_role(current_user, 'service_role', 'member')` assumes the role
+--     owning the definer functions is a member of service_role. That is not
+--     guaranteed on Supabase cloud, and if it does not hold every stock-moving
+--     function loses its write at once: a total checkout outage.
+--
+-- Both arms are exact name comparisons, so `anon`, `authenticated`, and any
+-- future client-reachable role Supabase adds match neither and are refused.
 --
 -- Deliberately NOT a full state machine: the state machine lives in
 -- admin_update_order_status(), where it can also move stock. Duplicating it
@@ -299,14 +307,18 @@ language plpgsql
 set search_path = public, pg_temp
 as $function$
 begin
-  -- An ALLOWLIST: the write is refused unless it comes from inside a function
-  -- that declares app.order_write, or from the service role. Naming the client
-  -- roles to deny instead would silently stop covering any new
-  -- PostgREST-reachable role Supabase or a later migration adds; this fails
-  -- closed for every path nobody has thought of yet.
+  -- An ALLOWLIST: the write is refused unless it comes from inside a
+  -- SECURITY DEFINER function owned by the owner of public.orders, or from the
+  -- service role. Naming the client roles to deny instead would silently stop
+  -- covering any new PostgREST-reachable role Supabase or a later migration
+  -- adds; this fails closed for every path nobody has thought of yet.
   if (new.status is distinct from old.status
       or new.payment_status is distinct from old.payment_status)
-     and current_setting('app.order_write', true) is distinct from 'on'
+     and current_user <> (
+       select pg_catalog.pg_get_userbyid(c.relowner)
+       from pg_catalog.pg_class c
+       where c.oid = 'public.orders'::regclass
+     )
      and current_user <> 'service_role' then
     raise exception 'order state must be changed through admin_update_order_status()'
       using errcode = 'P0001', hint = 'order_direct_write';
@@ -330,19 +342,16 @@ create trigger enforce_order_state_writer
   before update on public.orders
   for each row execute function public.enforce_order_state_writer();
 
--- The trusted writers defined in earlier migrations get the same flag. ALTER
--- FUNCTION rather than a re-emitted body: their logic is not changing here and
--- two copies of place_cod_order in this repo would be worse than one line
--- each. Postgres applies the setting for the duration of the call and reverts
--- it on exit, exactly as it does for search_path.
+-- The trusted writers defined in earlier migrations (place_cod_order,
+-- release_order_stock, release_expired_cod_orders) need no change at all: they
+-- are already SECURITY DEFINER and already owned by the migration role, so the
+-- test above passes for them as written. That is the point of keying on
+-- ownership rather than on a marking each function has to carry.
 --
--- If a LATER migration re-emits one of these bodies, it must carry
--- `set app.order_write = 'on'` with it. The assertion at the end of this file
--- is the check for that: it fails the deploy rather than letting the store
--- discover it at the checkout.
-alter function public.place_cod_order(uuid) set app.order_write = 'on';
-alter function public.release_order_stock(uuid, text, text, boolean) set app.order_write = 'on';
-alter function public.release_expired_cod_orders(integer) set app.order_write = 'on';
+-- If a LATER migration re-emits one of these bodies, it must keep
+-- `security definer`. The assertion at the end of this file is the check for
+-- that: it fails the deploy rather than letting the store discover it at the
+-- checkout.
 
 -- ---------------------------------------------------------------------------
 -- 5. The one way an admin changes an order's state.
@@ -392,7 +401,9 @@ alter function public.release_expired_cod_orders(integer) set app.order_write = 
 -- SECURITY DEFINER and callable by `authenticated`, unlike the service-role
 -- functions in this schema: the admin order list calls it from the browser.
 -- It is gated internally by is_admin(), the same pattern the admin RLS
--- policies use, and anon is revoked outright.
+-- policies use, and anon is revoked outright. SECURITY DEFINER is also what
+-- gets its writes past enforce_order_state_writer (section 4), so a re-emitted
+-- body dropping it would break every admin status change.
 -- ---------------------------------------------------------------------------
 create or replace function public.admin_update_order_status(
   p_order_id uuid,
@@ -403,9 +414,6 @@ returns boolean
 language plpgsql
 security definer
 set search_path to 'public', 'pg_temp'
--- See fulfill_order above: this is what gets its writes past
--- enforce_order_state_writer, and it must survive any re-emission.
-set app.order_write = 'on'
 as $function$
 declare
   v_status text;
@@ -686,16 +694,16 @@ create unique index if not exists orders_client_request_id_key
 -- transaction.
 --
 -- A function rather than the one inline statement the rate-limit purge in
--- 20260806000000 uses, for one reason: it writes orders.status, so it needs to
--- carry `set app.order_write = 'on'` past enforce_order_state_writer, and a
--- cron command string has nowhere to put that.
+-- 20260806000000 uses, for one reason: it writes orders.status, so it has to
+-- run as the owner of public.orders to get past enforce_order_state_writer,
+-- and only a SECURITY DEFINER function guarantees that regardless of who ends
+-- up invoking it.
 -- ---------------------------------------------------------------------------
 create or replace function public.cancel_abandoned_pending_orders(p_older_than_hours integer default 72)
 returns integer
 language plpgsql
 security definer
 set search_path to 'public', 'pg_temp'
-set app.order_write = 'on'
 as $function$
 declare
   v_cancelled integer := 0;
@@ -743,24 +751,35 @@ select cron.schedule(
 );
 
 -- ---------------------------------------------------------------------------
--- 9. Assert the write flag actually landed.
+-- 9. Assert every trusted writer can actually still write.
 --
--- enforce_order_state_writer refuses any order state change that does not
--- carry app.order_write, so a typo in one of the ALTER FUNCTION lines above
--- takes out that path completely: COD checkout, payment fulfilment, refunds,
--- cancellations. Fail the deploy here instead of finding out at the checkout.
+-- enforce_order_state_writer admits a writer only when current_user is the
+-- owner of public.orders (or the literal service_role). A trusted function
+-- that is not SECURITY DEFINER, or that is owned by some other role, therefore
+-- loses its order-state write completely: COD checkout, payment fulfilment,
+-- refunds, cancellations. This checks exactly the condition the trigger tests,
+-- so it cannot fail on anything that would in fact have worked. It also
+-- confirms the trigger itself is present and enabled, since a disabled trigger
+-- is a silently open door rather than a silently shut one.
 --
--- Scope, precisely: this catches a typo the FIRST time this migration is
+-- Scope, precisely: this catches a mistake the FIRST time this migration is
 -- applied, and nothing after that. An applied migration never runs again, so
--- a LATER migration re-emitting one of these bodies without the setting is
--- NOT caught here -- whoever writes it has to re-assert, or copy this block.
+-- a LATER migration re-emitting one of these bodies without `security definer`
+-- is NOT caught here -- whoever writes it has to re-assert, or copy this block.
 -- ---------------------------------------------------------------------------
 do $assert$
 declare
-  v_missing text;
+  v_owner name;
+  v_broken text;
+  v_state "char";
 begin
+  select pg_catalog.pg_get_userbyid(c.relowner)
+  into v_owner
+  from pg_catalog.pg_class c
+  where c.oid = 'public.orders'::regclass;
+
   select string_agg(p.proname, ', ')
-  into v_missing
+  into v_broken
   from pg_proc p
   join pg_namespace n on n.oid = p.pronamespace
   where n.nspname = 'public'
@@ -769,10 +788,24 @@ begin
       'admin_update_order_status', 'release_expired_cod_orders',
       'cancel_abandoned_pending_orders'
     )
-    and not coalesce(array_to_string(p.proconfig, ',') like '%app.order_write=on%', false);
+    and (not p.prosecdef or pg_catalog.pg_get_userbyid(p.proowner) <> v_owner);
 
-  if v_missing is not null then
-    raise exception 'app.order_write is not set on: %. Order state writes from those functions would be refused.', v_missing;
+  if v_broken is not null then
+    raise exception 'these functions are not security definer owned by %, so enforce_order_state_writer would refuse their order state writes: %',
+      v_owner, v_broken;
+  end if;
+
+  select t.tgenabled
+  into v_state
+  from pg_trigger t
+  where t.tgrelid = 'public.orders'::regclass
+    and t.tgname = 'enforce_order_state_writer'
+    and not t.tgisinternal;
+
+  if v_state is null then
+    raise exception 'enforce_order_state_writer trigger is missing from public.orders';
+  elsif v_state = 'D' then
+    raise exception 'enforce_order_state_writer trigger is disabled on public.orders';
   end if;
 end;
 $assert$;
