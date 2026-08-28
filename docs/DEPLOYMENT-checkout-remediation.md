@@ -39,11 +39,34 @@ and section 2 explains why that matters more than usual.
 
 ---
 
-## 2. THE BIG RISK, stated first and honestly
+## 2. THE BIG RISK, now partly retired
+
+> **STATUS UPDATE: all five migrations have since been applied to the live
+> database and succeeded.** `supabase db push` reported `Finished supabase db
+> push` with exit 0. Verified afterwards against real data: the 4 crammed
+> variant rows became 15 correct per-size rows with zero still crammed; the
+> `product_catalog` view carries `max_price` and `has_discount` and no longer
+> carries `sale_price`; `rate_limit_attempts` and `cod_expiry_epoch` exist; the
+> storefront catalog query returns all 4 products. `products.sale_price` held
+> **0 rows**, so the irreversible drop destroyed nothing.
+>
+> One migration failed on its first attempt and was fixed before succeeding.
+> `20260808000000` used a custom `app.order_write` setting to mark trusted
+> writers; Supabase's `postgres` role is not a superuser and cannot install
+> one (`ERROR: permission denied to set parameter`). It now keys on the owner
+> of `public.orders` instead. See section 8 for why that matters and what not
+> to reintroduce.
+>
+> **What is still unverified** is everything that needs live traffic rather
+> than a migration run: the Kashier signature match, the `x-forwarded-for`
+> shape behind the rate limiter, and the refund path. Sections 6, 8 and 10
+> still apply in full. The rest of this section is kept as written, because it
+> explains why the checks below exist.
 
 Five migrations, `20260801000000`, `20260805000000`, `20260806000000`,
 `20260807000000`, and `20260808000000`, totalling roughly 1,800 lines of SQL,
-were written and reviewed by reading only. They were **never executed**. The
+were written and reviewed by reading only. They were **never executed** at the
+time this document was written. The
 environment this branch was built in had no Docker and no local Postgres, so
 `supabase db start` and `supabase db push` could not run here. Every implementer
 and every reviewer on this branch independently rated their SQL confidence as
@@ -145,9 +168,10 @@ attention:
 - **Task 8's deploy assertion (`20260808000000`, section 9).** A `do $assert$`
   block checks that six trusted functions (`fulfill_order`,
   `admin_update_order_status`, `cancel_abandoned_pending_orders`,
-  `place_cod_order`, `release_order_stock`, `release_expired_cod_orders`) all
-  carry the `app.order_write = 'on'` setting that the new
-  `enforce_order_state_writer` trigger requires. If this migration fails here,
+  `place_cod_order`, `release_order_stock`, `release_expired_cod_orders`) are
+  all SECURITY DEFINER and all owned by the same role that owns
+  `public.orders`, which is the condition the new
+  `enforce_order_state_writer` trigger tests. If this migration fails here,
   **do not proceed to the edge function deploy.** The trigger it is protecting
   gates every write to `orders.status` / `orders.payment_status`; if the
   assertion is failing, checkout, fulfilment, refunds and cancellations are
@@ -195,12 +219,16 @@ select pronargs from pg_proc where proname = 'release_order_stock';
 -- expect exactly one row, pronargs = 4
 select jobname from cron.job where jobname = 'cancel-abandoned-pending-orders';
 -- expect it scheduled
--- confirm the six trusted functions all carry the write flag
-select proname, proconfig from pg_proc
-where proname in ('fulfill_order', 'admin_update_order_status',
+-- confirm the six trusted functions are SECURITY DEFINER and share the
+-- owner of public.orders, which is what the trigger tests
+select p.proname, p.prosecdef, pg_get_userbyid(p.proowner) as fn_owner,
+       (select pg_get_userbyid(c.relowner) from pg_class c
+        where c.oid = 'public.orders'::regclass) as orders_owner
+from pg_proc p
+where p.proname in ('fulfill_order', 'admin_update_order_status',
   'cancel_abandoned_pending_orders', 'place_cod_order',
   'release_order_stock', 'release_expired_cod_orders');
--- expect 'app.order_write=on' inside every proconfig array
+-- expect prosecdef = true and fn_owner = orders_owner on every row
 ```
 
 ---
@@ -395,11 +423,20 @@ live database or deployment:
   be `paid`", "amount must match the full order total", and a per-order
   ledger entry closes the gap as far as reasoning alone can, but it was never
   tested against a real Kashier refund.
-- The deploy assertion in `20260808000000` (section 3.4) only catches a typo
-  the first time that migration is applied. A future migration that
-  re-emits one of the six guarded function bodies without the
-  `app.order_write` setting is not caught by anything automatic; whoever
-  writes it has to remember to re-assert or copy the block.
+- The deploy assertion in `20260808000000` (section 3.4) only runs the first
+  time that migration is applied. A future migration that re-creates one of
+  the six guarded functions under a different owner, or drops SECURITY
+  DEFINER from it, is not caught by anything automatic; whoever writes it has
+  to remember to re-assert or copy the block.
+- The order-write guard keys on the owner of `public.orders`. An earlier
+  attempt used a custom `app.order_write` setting, which **failed on the real
+  database**: Supabase's `postgres` role is not a superuser and cannot install
+  a custom parameter on a function (`ERROR: permission denied to set parameter
+  "app.order_write"`). An attempt before that inferred trust from
+  `service_role` membership, which is not guaranteed either. The ownership
+  test needs no special privilege and fails closed. This is recorded because
+  both dead ends look reasonable on paper and someone will be tempted to
+  reintroduce one.
 
 ---
 
@@ -426,14 +463,13 @@ Plain language, no jargon.
 - **Cancelling an order now asks you to confirm first**, and it puts the
   stock back into inventory for good when you do. There is no undo: if you
   cancel by mistake, the customer has to place a new order.
-- **Editing an order's status directly in Supabase's SQL editor is now
-  refused**, on purpose, unless you turn it on first in the same session:
-  ```sql
-  select set_config('app.order_write', 'on', true);
-  ```
-  This is a safety measure so nobody, including you by accident, can quietly
-  overwrite an order's paid or shipped state from outside the app. Run that
-  one line first, then your edit will go through in the same session.
+- **The app can no longer change an order's paid or shipped state behind the
+  scenes.** A database rule now refuses any change to an order's status or
+  payment status unless it comes from the store's own trusted code paths or
+  from the admin panel. This stops a bug, or a stolen public key, from quietly
+  rewriting whether an order was paid. Editing an order by hand in Supabase's
+  SQL editor still works normally, because that runs as the database owner,
+  which the rule trusts.
 - **The "Size guide" button on product pages is gone.** It was a button that
   did nothing when clicked; there was no size guide content anywhere to open.
 - **Clicking "Mark paid" now really takes the stock out of inventory**, the
