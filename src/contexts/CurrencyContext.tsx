@@ -1,12 +1,15 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
-import { supabase } from '@/lib/supabase'
+import { createContext, useContext, ReactNode } from 'react'
 import { useLanguage } from '@/contexts/LanguageContext'
 
-// Singleton row id -- see supabase/migrations. Always read this exact id.
-const STORE_SETTINGS_ID = '00000000-0000-0000-0000-000000000001'
+// Kashier is an Egyptian gateway and every order is settled in EGP, no matter
+// what a shopper sees (see supabase/functions/create-order). There is no FX
+// rate source anywhere in this project, so a display currency that differs
+// from the settlement currency would show one number and charge another.
+// The store used to let an admin pick a display currency for cosmetics only
+// (see supabase/migrations/20260704010000_store_currency.sql) -- that selector
+// is removed; the display currency is now always the settlement currency.
+export const SETTLEMENT_CURRENCY = 'EGP'
 
-// Display currency only -- Kashier always settles in EGP (see create-order).
-// This just controls how prices are shown to shoppers.
 type CurrencyContextType = {
   currency: string
   formatPrice: (amount: number) => string
@@ -14,50 +17,31 @@ type CurrencyContextType = {
 
 const CurrencyContext = createContext<CurrencyContextType | undefined>(undefined)
 
-// Symbol + side per currency code, bilingual. PREFIX => "$420";
-// SUFFIX => "420 ج.م". Unknown codes fall back to "<code> <amount>".
-function symbolFor(code: string, lang: string): { symbol: string; side: 'prefix' | 'suffix' } | null {
-  switch (code) {
-    case 'USD': return { symbol: '$', side: 'prefix' }
-    case 'EUR': return { symbol: '€', side: 'prefix' }
-    case 'GBP': return { symbol: '£', side: 'prefix' }
-    case 'EGP': return { symbol: 'EGP', side: 'suffix' }
-    case 'SAR': return { symbol: lang === 'ar' ? 'ر.س' : 'SAR', side: 'suffix' }
-    case 'AED': return { symbol: lang === 'ar' ? 'د.إ' : 'AED', side: 'suffix' }
-    default: return null
-  }
-}
-
 export function CurrencyProvider({ children }: { children: ReactNode }) {
   const { lang } = useLanguage()
-  const [currency, setCurrency] = useState('EGP')
 
-  // One-time fetch of the admin-configured display currency. Stays 'EGP' on a
-  // missing row or fetch error (two-arg .then, never .catch on the query
-  // builder -- it's a thenable, not a real promise).
-  useEffect(() => {
-    let cancelled = false
-    supabase
-      .from('store_settings')
-      .select('currency')
-      .eq('id', STORE_SETTINGS_ID)
-      .maybeSingle()
-      .then(
-        ({ data }) => { if (!cancelled) setCurrency(data?.currency || 'EGP') },
-        () => {} // leave 'EGP' default
-      )
-    return () => { cancelled = true }
-  }, [])
-
+  // Intl.NumberFormat replaces the old hand-rolled symbol + Math.round
+  // concatenation: it rounds to the currency's minor unit instead of
+  // discarding it, adds thousands separators, and wraps the result in RLM/LRM
+  // marks so it can't reorder inside an Arabic sentence.
+  //
+  // ar-EG's default numbering system renders Arabic-Indic digits (verified
+  // with Intl.NumberFormat('ar-EG', ...) locally), but every other money
+  // string in this app uses Western digits even in Arabic text (see
+  // checkoutCodTooExpensive in translations.ts, which calls
+  // `.toLocaleString('en-US')` on its own Arabic translation) while dates
+  // elsewhere DO use Arabic-Indic digits. Money follows the Western-digit
+  // convention here, so numberingSystem is pinned to 'latn' for Arabic too.
   function formatPrice(amount: number): string {
-    const rounded = Math.round(amount)
-    const fmt = symbolFor(currency, lang)
-    if (!fmt) return `${currency} ${rounded}`
-    return fmt.side === 'prefix' ? `${fmt.symbol}${rounded}` : `${rounded} ${fmt.symbol}`
+    return new Intl.NumberFormat(lang === 'ar' ? 'ar-EG' : 'en-US', {
+      style: 'currency',
+      currency: SETTLEMENT_CURRENCY,
+      numberingSystem: 'latn',
+    }).format(amount)
   }
 
   return (
-    <CurrencyContext.Provider value={{ currency, formatPrice }}>
+    <CurrencyContext.Provider value={{ currency: SETTLEMENT_CURRENCY, formatPrice }}>
       {children}
     </CurrencyContext.Provider>
   )

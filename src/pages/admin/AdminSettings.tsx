@@ -18,7 +18,7 @@ type Translations = ReturnType<typeof useT>
 const STORE_SETTINGS_ID = '00000000-0000-0000-0000-000000000001'
 
 type UploadField = 'logo_url' | 'favicon_url'
-type SettingsState = Pick<StoreSettings, 'logo_url' | 'favicon_url' | 'currency'>
+type SettingsState = Pick<StoreSettings, 'logo_url' | 'favicon_url'>
 
 type WhatsAppContent = { phone: string; message_en: string; message_ar: string }
 type ContactContentState = {
@@ -33,7 +33,6 @@ type ContactContentState = {
   social_twitter: string
 }
 
-const CURRENCY_VALUES = ['EGP', 'USD', 'SAR', 'AED', 'EUR', 'GBP']
 const EMPTY_WHATSAPP: WhatsAppContent = { phone: '', message_en: '', message_ar: '' }
 const EMPTY_CONTACT: ContactContentState = {
   email: '', phone: '', address_en: '', address_ar: '', map_url: '',
@@ -70,10 +69,10 @@ export default function AdminSettings() {
     setLoading(true)
     const { data } = await supabase
       .from('store_settings')
-      .select('logo_url, favicon_url, currency')
+      .select('logo_url, favicon_url')
       .eq('id', STORE_SETTINGS_ID)
       .maybeSingle()
-    setSettings(data || { logo_url: null, favicon_url: null, currency: 'EGP' })
+    setSettings(data || { logo_url: null, favicon_url: null })
 
     const { data: content } = await supabase
       .from('site_content')
@@ -130,18 +129,6 @@ export default function AdminSettings() {
     toast.success(t.adminSaved)
   }
 
-  // UPDATE the seeded singleton, never upsert -- same RLS reason as the logo/
-  // favicon writes below (no insert policy; an upsert's INSERT arm 500s).
-  async function handleCurrencyChange(currency: string) {
-    setSettings(prev => ({ ...(prev || { logo_url: null, favicon_url: null, currency: 'EGP' }), currency }))
-    const { error } = await supabase
-      .from('store_settings')
-      .update({ currency })
-      .eq('id', STORE_SETTINGS_ID)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
-    toast.success(t.adminSaved)
-  }
-
   async function handleUpload(field: UploadField, raw: File | undefined, setUploading: (v: boolean) => void) {
     if (!raw) return
     setUploading(true)
@@ -163,7 +150,7 @@ export default function AdminSettings() {
         .update({ [field]: pub.publicUrl })
         .eq('id', STORE_SETTINGS_ID)
       if (dbErr) throw dbErr
-      setSettings(prev => ({ ...(prev || { logo_url: null, favicon_url: null, currency: 'EGP' }), [field]: pub.publicUrl }))
+      setSettings(prev => ({ ...(prev || { logo_url: null, favicon_url: null }), [field]: pub.publicUrl }))
       toast.success(t.adminSaved)
     } catch (e: any) {
       toast.error(e.message || t.adminUploadFailed)
@@ -369,22 +356,6 @@ export default function AdminSettings() {
         onChange={file => handleUpload('favicon_url', file, setUploadingFavicon)}
         t={t}
       />
-      <div className="border border-border bg-card p-6">
-        <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-4">{t.adminDisplayCurrency}</span>
-        <select
-          value={settings?.currency || 'EGP'}
-          onChange={e => handleCurrencyChange(e.target.value)}
-          className="w-full bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none cursor-pointer"
-        >
-          {CURRENCY_VALUES.map(c => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-        <p className="text-[11px] text-muted-foreground mt-3">
-          {t.adminCurrencyNote}
-        </p>
-      </div>
-
       {/* ----- Payment methods at checkout ----- */}
       <div className="border border-border bg-card p-6 space-y-4">
         <div>

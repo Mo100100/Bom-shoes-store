@@ -4,7 +4,7 @@ import { supabase, Product, ProductImage, ProductVariant, ProductCatalogEntry, R
 import { useCart } from '@/contexts/CartContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
-import { useCurrency } from '@/contexts/CurrencyContext'
+import { useCurrency, SETTLEMENT_CURRENCY } from '@/contexts/CurrencyContext'
 import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { useRecentlyViewed } from '@/hooks/useRecentlyViewed'
 import { useSeo } from '@/hooks/useSeo'
@@ -72,7 +72,7 @@ export default function ProductDetail() {
   const navigate = useNavigate()
   const t = useT()
   const { lang } = useLanguage()
-  const { currency, formatPrice } = useCurrency()
+  const { formatPrice } = useCurrency()
 
   useEffect(() => {
     async function load() {
@@ -391,8 +391,11 @@ export default function ProductDetail() {
       description: product.description || undefined,
       offers: {
         '@type': 'Offer',
+        // Unformatted numeric price in the real settlement currency (Kashier
+        // always charges EGP) -- never the display currency and never run
+        // through Intl.NumberFormat, which Google can't parse.
         price: Number(effectivePrice).toFixed(2),
-        priceCurrency: currency,
+        priceCurrency: SETTLEMENT_CURRENCY,
         availability: outOfStockForLd ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
       },
     }
@@ -414,7 +417,7 @@ export default function ProductDetail() {
       document.head.appendChild(script)
     }
     script.textContent = JSON.stringify(jsonLd)
-  }, [product, heroImage, effectivePrice, hasVariants, selectedVariant, currency])
+  }, [product, heroImage, effectivePrice, hasVariants, selectedVariant])
 
   // Only strip the tag on unmount (leaving the product page entirely) -- not
   // on every dependency change above, which would just churn the same tag.

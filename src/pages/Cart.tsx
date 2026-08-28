@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useCart, CartItem } from '@/contexts/CartContext'
-import { couponRejectionMessage } from '@/lib/cart'
+import { couponRejectionMessage, TAX_RATE } from '@/lib/cart'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { supabase, readServerError } from '@/lib/supabase'
@@ -108,7 +108,7 @@ export default function Cart() {
   // one yet here), so it's excluded from this running total and shown as
   // "calculated at checkout". A free-shipping coupon is noted but doesn't
   // change the number shown here.
-  const tax = totalPrice * 0.08
+  const tax = totalPrice * TAX_RATE
   const hasDiscount = !!discount && discount.amount > 0
   const grand = totalPrice + tax - (hasDiscount ? discount!.amount : 0)
 

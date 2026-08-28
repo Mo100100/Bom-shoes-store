@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { supabase, readServerError } from '@/lib/supabase'
-import { couponRejectionMessage } from '@/lib/cart'
+import { couponRejectionMessage, TAX_RATE } from '@/lib/cart'
 import type { CreateOrderRequest, CreateOrderResponse } from '@/lib/kashier'
 import {
   DEFAULT_CHECKOUT_CONFIG, fetchCheckoutConfig, fetchShippingConfig, regionLabel,
@@ -109,7 +109,7 @@ export default function Checkout() {
   // coupon granting free shipping still zeroes it out. The server recomputes
   // this authoritatively from regionCode in create-order.
   const shipping = freeShipping ? 0 : selectedRegion?.price ?? 0
-  const tax = totalPrice * 0.08
+  const tax = totalPrice * TAX_RATE
   const grand = totalPrice + shipping + tax - discountAmount
 
   function setField(k: keyof typeof form, v: string) {
