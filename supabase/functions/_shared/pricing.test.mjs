@@ -12,6 +12,8 @@ import { test } from 'node:test'
 import {
   COUPON_UNAVAILABLE,
   checkUsageLimits,
+  clampPercent,
+  computeBxgyDiscount,
   computeDiscount,
   computeOrderTotal,
   evaluateCouponByCode,
@@ -59,6 +61,17 @@ function ctx(subtotal, overrides = {}) {
 
 // --- percentage clamping -----------------------------------------------------
 
+// Asserted directly, not only through computeDiscount: inside it the
+// percentage clamp and the subtotal clamp are mutually redundant, so neither
+// is observable in the output while the other stands (see computeDiscount's
+// comment). This is what actually pins the percentage clamp down.
+test('a percentage is clamped into 0..100 whatever an admin typed', () => {
+  assert.equal(clampPercent(20), 20)
+  assert.equal(clampPercent(150), 100)
+  assert.equal(clampPercent(-50), 0)
+  assert.equal(clampPercent(100), 100)
+})
+
 test('a percentage discount applies normally', () => {
   const { discountAmount } = computeDiscount(coupon({ discount_value: 20 }), ctx(1000))
   assert.equal(discountAmount, 200)
@@ -86,9 +99,44 @@ test('max_discount_amount still applies to an over-100 percentage', () => {
   assert.equal(discountAmount, 120)
 })
 
+// The two clamps in computeDiscount are mutually redundant, so with a small
+// max_discount_amount either one alone still produces the right answer and
+// removing either survives every assertion above. A cap ABOVE the subtotal
+// separates them: only the percentage clamp keeps this at 1000, and only the
+// subtotal clamp keeps it there if the percentage clamp goes.
+test('an over-100 percentage under a cap larger than the cart is still capped at the cart', () => {
+  const { discountAmount } = computeDiscount(coupon({ discount_value: 150, max_discount_amount: 5000 }), ctx(1000))
+  assert.equal(discountAmount, 1000)
+})
+
+// Likewise the Math.max(0, ...): with a negative cap, Math.min picks the cap
+// and only the floor stops the discount becoming a surcharge.
+test('a negative max_discount_amount never becomes a surcharge', () => {
+  const { discountAmount } = computeDiscount(coupon({ discount_value: 20, max_discount_amount: -500 }), ctx(1000))
+  assert.equal(discountAmount, 0)
+})
+
 test('a fixed discount is capped at the subtotal', () => {
   const { discountAmount } = computeDiscount(coupon({ discount_type: 'fixed', discount_value: 5000 }), ctx(1000))
   assert.equal(discountAmount, 1000)
+})
+
+// Unlike the percentage branch above, nothing downstream caps a buy-x-get-y
+// discount at the subtotal (resolveBestDiscount only caps when a bundle
+// stacks), so this clamp is the only thing standing between a typo and a
+// discount worth more than the goods.
+test('an over-100 get_discount_percent gives the free units away, not more', () => {
+  const bxgy = coupon({
+    discount_type: 'buy_x_get_y',
+    buy_quantity: 2,
+    get_quantity: 1,
+    get_discount_percent: 150,
+  })
+  const items = [
+    { product_id: 'p1', variant_id: 'v1', name: 'Shoe', size: '42', color: 'Black', quantity: 3, price: 500, image_url: null },
+  ]
+  // One complete set of 3, so exactly one unit at 100% off: 500, not 750.
+  assert.equal(computeBxgyDiscount(bxgy, items, new Map()), 500)
 })
 
 // --- the charged total -------------------------------------------------------
@@ -141,10 +189,18 @@ test('an expired coupon is rejected identically too', () => {
   assert.deepEqual(expired.rejection, COUPON_UNAVAILABLE)
 })
 
-test('a minimum order below the cart keeps its own actionable message', () => {
+test('a cart within reach of the minimum keeps the actionable message', () => {
+  // 1000 of a 2000 minimum: exactly at MIN_ORDER_HINT_RATIO.
   const belowMin = getBasicEligibility(coupon({ min_order_amount: 2000 }), ctx(1000))
   assert.equal(belowMin.rejection.reasonCode, 'min_order')
   assert.equal(belowMin.rejection.minOrderAmount, 2000)
+})
+
+test('a cart far below the minimum reveals nothing about the code', () => {
+  // 1000 of a 5000 minimum. Otherwise a dictionary guess with a near-empty
+  // cart confirms which codes exist.
+  const farBelow = getBasicEligibility(coupon({ min_order_amount: 5000 }), ctx(1000))
+  assert.deepEqual(farBelow.rejection, COUPON_UNAVAILABLE)
 })
 
 // --- per-customer limits -----------------------------------------------------
@@ -153,6 +209,25 @@ test('a per-customer-limited coupon is refused when there is no signed-in user',
   const result = checkUsageLimits(coupon({ per_customer_limit: 1 }), new Map(), null)
   assert.equal(result.ok, false)
   assert.equal(result.rejection.reasonCode, 'sign_in_required')
+})
+
+test('an AUTO-applied promotion still reaches a guest despite a per-customer limit', () => {
+  // A guest cannot hunt for an auto promotion, so there is nothing to refuse;
+  // withholding it would silently stop serving every guest in a guest-checkout
+  // store. Matches findBestAutoPromotion, which skips usage checks entirely.
+  const result = checkUsageLimits(coupon({ per_customer_limit: 1 }), new Map(), null, {
+    enforcePerCustomerLimit: false,
+  })
+  assert.equal(result.ok, true)
+})
+
+test('an AUTO-applied promotion still respects the global usage limit', () => {
+  const counts = new Map([['c1', { total: 100, customer: 0 }]])
+  const result = checkUsageLimits(coupon({ usage_limit: 100, per_customer_limit: 1 }), counts, null, {
+    enforcePerCustomerLimit: false,
+  })
+  assert.equal(result.ok, false)
+  assert.deepEqual(result.rejection, COUPON_UNAVAILABLE)
 })
 
 test('a per-customer-limited coupon applies for a signed-in user under the limit', () => {

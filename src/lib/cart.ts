@@ -47,3 +47,31 @@ export function reconcileLine(
     stock: variant.stock,
   }
 }
+
+// Just the coupon strings, structurally, so this module stays free of the
+// translations import (same reason VariantSnapshot is structural above).
+export type CouponStrings = {
+  cartCouponMinOrder: (amount: string) => string
+  cartCouponSignIn: string
+  cartCouponInvalid: string
+}
+
+// Turns validate-coupon's machine-readable rejection into a translated
+// message. Shared by the Cart and Checkout pages so the same rejection never
+// reads differently on the two, and because the server's own `reason` is
+// English-only and must never reach an Arabic customer.
+//
+// Every rejection that would otherwise confirm a code exists arrives as the
+// same 'unavailable' (validate-coupon is a code oracle otherwise), so there is
+// one generic message plus the two the customer can actually act on.
+export function couponRejectionMessage(
+  rejection: { reasonCode?: string; minOrderAmount?: number } | null | undefined,
+  t: CouponStrings,
+  formatPrice: (value: number) => string,
+): string {
+  if (rejection?.reasonCode === 'min_order' && typeof rejection.minOrderAmount === 'number') {
+    return t.cartCouponMinOrder(formatPrice(rejection.minOrderAmount))
+  }
+  if (rejection?.reasonCode === 'sign_in_required') return t.cartCouponSignIn
+  return t.cartCouponInvalid
+}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useCart, CartItem } from '@/contexts/CartContext'
+import { couponRejectionMessage } from '@/lib/cart'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { supabase, readServerError } from '@/lib/supabase'
@@ -54,17 +55,6 @@ export default function Cart() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Every rejection that would otherwise confirm a code exists comes back as
-  // the same 'unavailable' from the server (it is a code oracle otherwise),
-  // so there is one generic message plus the two the customer can act on.
-  function couponMessage(data: { reasonCode?: string; minOrderAmount?: number } | null): string {
-    if (data?.reasonCode === 'min_order' && typeof data.minOrderAmount === 'number') {
-      return t.cartCouponMinOrder(formatPrice(data.minOrderAmount))
-    }
-    if (data?.reasonCode === 'sign_in_required') return t.cartCouponSignIn
-    return t.cartCouponInvalid
-  }
-
   // `code` is optional: with one this validates it, without one it previews
   // whatever the cart qualifies for on its own.
   async function previewDiscount(code: string | null, opts?: { silent?: boolean }) {
@@ -82,7 +72,7 @@ export default function Cart() {
         // no-code preview, so a dead code doesn't also hide a promotion the
         // cart still qualifies for.
         if (opts?.silent) setCouponCode(null)
-        else toast.error(couponMessage(data))
+        else toast.error(couponRejectionMessage(data, t, formatPrice))
         setDiscount(null)
         if (code) void previewDiscount(null, { silent: true })
         return

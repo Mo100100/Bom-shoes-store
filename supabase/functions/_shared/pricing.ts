@@ -191,6 +191,20 @@ export const COUPON_UNAVAILABLE: CouponRejection = {
   reason: 'This code cannot be applied to your cart',
 }
 
+// How close to a coupon's min_order_amount a cart has to be before the
+// rejection names the figure instead of staying generic. See
+// getBasicEligibility for why the helpful message is gated at all.
+export const MIN_ORDER_HINT_RATIO = 0.5
+
+// Every percentage an admin can type, from any column, goes through this: a
+// value outside 0..100 is a typo, and the only sane reading of one is the
+// nearest real percentage. Shared by computeDiscount (coupons.discount_value)
+// and computeBxgyDiscount (coupons.get_discount_percent), which had the same
+// expression written out twice.
+export function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, value))
+}
+
 // Coupon codes are stored upper case (see the coupons_code_upper_check
 // constraint in the 20260807000000 migration and AdminCoupons' save), so
 // `save20` and `SAVE20` are the same code instead of one working and one
@@ -247,13 +261,22 @@ export function getBasicEligibility(
   if (coupon.ends_at && now > new Date(coupon.ends_at).getTime()) {
     return { ok: false, rejection: COUPON_UNAVAILABLE }
   }
-  // Deliberately NOT merged into COUPON_UNAVAILABLE: "spend 200 more and this
-  // works" is the one rejection that is worth money to the store, so it keeps
-  // its own message and its figure. The residual leak is narrow and is
-  // covered by the rate limit: it only ever confirms the existence of codes
-  // that carry a minimum, and only to a caller who is already inside the
-  // per-IP ceiling in ../_shared/rate-limit.ts.
+  // "Spend 200 more and this works" is the one rejection worth real money to
+  // the store, so it keeps its own message and its figure -- but only for a
+  // customer who is plausibly about to qualify. An enumerator guessing
+  // dictionary words (WELCOME10, SAVE20, EID25) with a near-empty cart would
+  // otherwise get "this code exists" for every hit, which is the oracle this
+  // whole endpoint is supposed to have closed.
+  //
+  // MIN_ORDER_HINT_RATIO is where that line sits: at 50%, a cart already
+  // halfway to the minimum is treated as a real shopper who deserves to be
+  // told what to add, and anything below it gets the generic rejection that
+  // reveals nothing. 50% is a starting point, not a measured optimum -- raise
+  // it to tighten the leak further, lower it to be more helpful.
   if (coupon.min_order_amount != null && ctx.subtotal < coupon.min_order_amount) {
+    if (ctx.subtotal < coupon.min_order_amount * MIN_ORDER_HINT_RATIO) {
+      return { ok: false, rejection: COUPON_UNAVAILABLE }
+    }
     return {
       ok: false,
       rejection: {
@@ -295,7 +318,12 @@ export async function fetchRedemptionCounts(
 ): Promise<RedemptionCounts> {
   const counts: RedemptionCounts = new Map()
 
-  const ids = coupons.filter(c => c.usage_limit != null || c.per_customer_limit != null).map(c => c.id)
+  // A per_customer_limit is uncountable without a signed-in customer, and
+  // checkUsageLimits refuses before it ever reads the number, so a guest must
+  // not pay for the round trip that would produce it.
+  const ids = coupons
+    .filter(c => c.usage_limit != null || (c.per_customer_limit != null && userId))
+    .map(c => c.id)
   if (ids.length === 0) return counts
 
   const { data, error } = await admin.rpc('coupon_redemption_counts', {
@@ -321,13 +349,25 @@ export async function fetchRedemptionCounts(
 // checkout and never verified: leaving it blank skipped the check and gave
 // unlimited redemptions, and filling in another address reset the count. So a
 // coupon that limits redemptions per customer now needs a customer we can
-// actually identify, and is refused outright for a guest rather than quietly
-// granted. That refusal is deliberately its own message, since "sign in" is
-// something the customer can act on.
+// actually identify, and a guest who TYPED such a code is refused outright
+// rather than quietly granted unlimited redemptions. That refusal is
+// deliberately its own message, since "sign in" is something the customer can
+// act on.
+//
+// enforcePerCustomerLimit = false is for the AUTO-APPLIED path, where that
+// reasoning inverts. A guest cannot hunt for an auto promotion; it simply
+// applies, so there is no abuse to refuse. Withholding it would instead mean
+// an owner who sets "once per customer" on an auto promo silently stops
+// serving it to every guest in a guest-checkout store, with no symptom
+// anywhere but a sales dip. So the auto path enforces the GLOBAL usage_limit
+// only, which is also exactly what findBestAutoPromotion (its
+// percentage/fixed/free_shipping sibling) does by skipping this check
+// entirely.
 export function checkUsageLimits(
   coupon: Coupon,
   counts: RedemptionCounts,
   userId: string | null,
+  opts: { enforcePerCustomerLimit?: boolean } = {},
 ): { ok: true } | { ok: false; rejection: CouponRejection } {
   const count = counts.get(coupon.id)
 
@@ -335,7 +375,7 @@ export function checkUsageLimits(
     return { ok: false, rejection: COUPON_UNAVAILABLE }
   }
 
-  if (coupon.per_customer_limit != null) {
+  if (coupon.per_customer_limit != null && opts.enforcePerCustomerLimit !== false) {
     if (!userId) {
       return {
         ok: false,
@@ -365,13 +405,17 @@ export function computeDiscount(
 ): { discountAmount: number; freeShipping: boolean } {
   if (coupon.discount_type === 'percentage') {
     // discount_value is constrained to 0..100 in the database (see the
-    // 20260807000000 migration) and clamped again here, the same way
-    // computeBxgyDiscount already clamps get_discount_percent. Without it a
-    // typo of 150 discounted 1.5x the subtotal and posted a NEGATIVE amount
-    // to Kashier, which hard-breaks checkout. The final Math.min against the
-    // subtotal makes that impossible for any discount_value at all, whatever
-    // a legacy row or a direct SQL edit holds.
-    const percent = Math.max(0, Math.min(100, coupon.discount_value)) / 100
+    // 20260807000000 migration) and clamped again here. Without it a typo of
+    // 150 discounted 1.5x the subtotal and posted a NEGATIVE amount to
+    // Kashier, which hard-breaks checkout.
+    //
+    // The Math.min against the subtotal below is deliberately redundant with
+    // that clamp: while both stand, neither is individually observable in the
+    // output (min(min(100,v)/100*S, M) equals min(min(v/100*S, M), S) for
+    // every input), which is exactly the point -- weakening either one alone
+    // cannot produce a discount larger than the cart. It is the pair that is
+    // load-bearing, so do not delete one as "dead".
+    const percent = clampPercent(coupon.discount_value) / 100
     const raw = ctx.subtotal * percent
     const capped = coupon.max_discount_amount != null ? Math.min(raw, coupon.max_discount_amount) : raw
     return { discountAmount: Math.max(0, Math.min(capped, ctx.subtotal)), freeShipping: false }
@@ -471,11 +515,13 @@ export async function findBestAutoPromotion(
 
 // Same as findBestAutoPromotion, but for the OTHER independent candidate
 // group: auto-apply (requires_code = false) buy_x_get_y promotions only.
-// Per the task spec, BXGY coupons also get their usage_limit/
-// per_customer_limit enforced even when auto-applied (unlike the
-// percentage/fixed/free_shipping auto-promotions above, which deliberately
-// skip that check -- see getBasicEligibility's doc comment) since a BXGY
-// promo can reasonably be capped ("first 100 orders").
+// Per the task spec, BXGY coupons get their GLOBAL usage_limit enforced even
+// when auto-applied (unlike the percentage/fixed/free_shipping
+// auto-promotions above, which skip usage checks entirely -- see
+// getBasicEligibility's doc comment) since a BXGY promo can reasonably be
+// capped ("first 100 orders"). per_customer_limit is deliberately NOT
+// enforced here; see checkUsageLimits for why an auto promotion must never
+// withhold itself from a guest.
 export async function findBestAutoBxgyPromotion(
   admin: SupabaseClient,
   ctx: CouponEvalContext,
@@ -500,7 +546,9 @@ export async function findBestAutoBxgyPromotion(
   const counts = await fetchRedemptionCounts(admin, candidates, userId)
 
   for (const coupon of candidates) {
-    if (!checkUsageLimits(coupon, counts, userId).ok) continue
+    // Global usage_limit only: see checkUsageLimits for why an auto-applied
+    // promotion must not withhold itself from a guest over per_customer_limit.
+    if (!checkUsageLimits(coupon, counts, userId, { enforcePerCustomerLimit: false }).ok) continue
 
     const { discountAmount } = computeDiscount(coupon, ctx)
     if (!best || discountAmount > best.discountAmount) {
@@ -555,7 +603,7 @@ export function computeBxgyDiscount(
   const discountedUnitCount = sets * coupon.get_quantity
   const cheapestUnits = unitPrices.slice(0, discountedUnitCount)
 
-  const percent = Math.max(0, Math.min(100, coupon.get_discount_percent)) / 100
+  const percent = clampPercent(coupon.get_discount_percent) / 100
   return cheapestUnits.reduce((sum, price) => sum + price * percent, 0)
 }
 

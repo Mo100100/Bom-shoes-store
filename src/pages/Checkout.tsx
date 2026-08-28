@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { supabase, readServerError } from '@/lib/supabase'
+import { couponRejectionMessage } from '@/lib/cart'
 import type { CreateOrderRequest, CreateOrderResponse } from '@/lib/kashier'
 import {
   DEFAULT_CHECKOUT_CONFIG, fetchCheckoutConfig, fetchShippingConfig, regionLabel,
@@ -37,6 +38,7 @@ export default function Checkout() {
   })
   const [discountAmount, setDiscountAmount] = useState(0)
   const [freeShipping, setFreeShipping] = useState(false)
+  const [couponError, setCouponError] = useState<string | null>(null)
   const [paymentMethod, setPaymentMethod] = useState<'online' | 'cash'>('online')
   const [checkoutConfig, setCheckoutConfig] = useState<CheckoutConfig>(DEFAULT_CHECKOUT_CONFIG)
   const [regions, setRegions] = useState<ShippingRegion[]>([])
@@ -83,7 +85,12 @@ export default function Checkout() {
       if (cancelled) return
       setDiscountAmount(data?.valid ? data.discountAmount : 0)
       setFreeShipping(!!data?.valid && !!data?.freeShipping)
-    }).catch(() => { if (!cancelled) { setDiscountAmount(0); setFreeShipping(false) } })
+      // A code carried over from the basket can be rejected here (it expired,
+      // or it is limited per customer and this shopper is not signed in). The
+      // discount silently vanishing between the two pages, with the same code
+      // still shown as applied, is worse than saying why.
+      setCouponError(couponCode && data && !data.valid ? couponRejectionMessage(data, t, formatPrice) : null)
+    }).catch(() => { if (!cancelled) { setDiscountAmount(0); setFreeShipping(false); setCouponError(null) } })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [couponCode])
@@ -355,6 +362,9 @@ export default function Checkout() {
                   </div>
                 ))}
               </div>
+              {couponError && (
+                <p className="text-xs text-terracotta mb-4">{couponError}</p>
+              )}
               <dl className="space-y-2 text-sm border-t border-border pt-4">
                 <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartSubtotal}</dt><dd>{formatPrice(totalPrice)}</dd></div>
                 {discountAmount > 0 && (

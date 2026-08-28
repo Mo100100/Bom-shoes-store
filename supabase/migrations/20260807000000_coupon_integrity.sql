@@ -79,6 +79,30 @@ where c.code is not null
     where o.id <> c.id and upper(o.code) = upper(c.code)
   );
 
+-- A skipped pair is not harmless: the lookup upper-cases every code a
+-- customer types, so once this migration runs NEITHER member of the pair
+-- resolves, where before it the exactly-typed one worked. Refusing to guess a
+-- winner is right; doing it silently is not, so name them in the migration
+-- output for the owner to fix by hand.
+do $$
+declare
+  v_stranded text;
+begin
+  select string_agg(c.id::text || ' (' || c.code || ')', ', ' order by c.code)
+  into v_stranded
+  from public.coupons c
+  where c.code is not null
+    and c.code <> upper(c.code)
+    and exists (
+      select 1 from public.coupons o
+      where o.id <> c.id and upper(o.code) = upper(c.code)
+    );
+
+  if v_stranded is not null then
+    raise notice 'coupon_integrity: these coupon codes collide once case is ignored, so none of them were upper-cased and NONE of them can now be redeemed. Pick one of each pair, delete or rename the other, then upper-case the survivor: %', v_stranded;
+  end if;
+end $$;
+
 alter table public.coupons drop constraint if exists coupons_code_upper_check;
 
 alter table public.coupons
