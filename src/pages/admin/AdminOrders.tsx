@@ -84,10 +84,17 @@ export default function AdminOrders() {
     if (hint === 'order_cancelled') return t.adminOrderCancelledFinal
     if (hint === 'order_never_reserved') return t.adminOrderNeverReserved
     if (hint === 'payment_not_markable') return t.adminPaymentNotMarkable
+    if (hint === 'fulfill_failed') return t.adminFulfillFailed
     return fallback
   }
 
   async function updateStatus(order: Order, newStatus: string) {
+    // Cancelling is the one status change that moves inventory and cannot be
+    // undone: the items go back on the shelf and the order is closed for good.
+    // It sits in the same dropdown as the everyday moves, one scroll position
+    // away from 'delivered', so it gets the same confirm() a product deletion
+    // gets in AdminProducts.
+    if (newStatus === 'cancelled' && !confirm(t.adminCancelConfirm)) return
     const { error } = await supabase.rpc('admin_update_order_status', {
       p_order_id: order.id,
       p_status: newStatus,
@@ -97,11 +104,16 @@ export default function AdminOrders() {
     load()
   }
 
-  // Cash-on-Delivery orders reserve stock at placement but stay payment
-  // 'pending' until the cash is collected -- this is how the admin records
-  // that. Online orders are marked paid only by the Kashier webhook, never
-  // here.
+  // Two shapes, both "the money arrived":
+  //   cash   -- stock was reserved at placement, so this only records the
+  //             collection. Normal, everyday, no confirmation.
+  //   online -- the payment landed but the webhook never did. The database
+  //             runs the order through fulfill_order() here, which TAKES the
+  //             stock, so it is confirmed first. Without this the owner's only
+  //             answer to a dropped webhook would be cancelling an order the
+  //             customer has already paid for.
   async function markPaid(order: Order) {
+    if (order.payment_method !== 'cash' && !confirm(t.adminMarkPaidConfirm)) return
     const { error } = await supabase.rpc('admin_update_order_status', {
       p_order_id: order.id,
       p_payment_status: 'paid',
@@ -248,12 +260,16 @@ export default function AdminOrders() {
                         }`}>
                           {o.payment_method === 'cash' ? `${statusLabel(o.payment_status)} · ${t.adminCod}` : statusLabel(o.payment_status)}
                         </span>
-                        {/* Only a still-pending cash order can be marked collected.
-                            A 'failed' payment_status is terminal: it means either
-                            place_cod_order could not reserve the stock, or
+                        {/* Cash: records the collection. Online: only offered on
+                            an order still sitting at 'pending', where it means
+                            the payment landed but the webhook never did, and it
+                            takes the stock through fulfill_order.
+                            A 'failed' payment_status is terminal either way: it
+                            means place_cod_order could not reserve the stock, or
                             release_order_stock gave the stock back, and in both
                             cases those goods are on the shelf again. */}
-                        {isAdmin && o.payment_method === 'cash' && o.payment_status === 'pending' && o.status !== 'cancelled' && (
+                        {isAdmin && o.payment_status === 'pending' && o.status !== 'cancelled'
+                          && (o.payment_method === 'cash' || o.status === 'pending') && (
                           <button
                             onClick={e => { e.stopPropagation(); markPaid(o) }}
                             className="text-[10px] tracking-wider uppercase border border-emerald-700/50 text-emerald-700 px-2 py-0.5 hover:bg-emerald-700 hover:text-white transition-colors cursor-pointer"
@@ -283,7 +299,17 @@ export default function AdminOrders() {
                           <ChevronDown className="w-3 h-3 absolute end-2 top-1/2 -translate-y-1/2 pointer-events-none" />
                         </div>
                       ) : (
-                        <span className="text-xs">{statusLabel(o.status)}</span>
+                        <div className="flex flex-col items-start gap-1">
+                          <span className="text-xs">{statusLabel(o.status)}</span>
+                          {/* The dropdown is gone for a cancelled order because
+                              there is nothing left to pick. Say why, rather than
+                              letting the control vanish unexplained. */}
+                          {isAdmin && o.status === 'cancelled' && (
+                            <span className="text-[10px] text-muted-foreground leading-snug max-w-[16rem]">
+                              {t.adminOrderCancelledFinal}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </td>
                   </tr>

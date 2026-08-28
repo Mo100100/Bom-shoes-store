@@ -267,7 +267,7 @@ grant execute on function public.fulfill_order(uuid) to service_role;
 -- but the function OWNER inside a SECURITY DEFINER function, and
 -- 'service_role' for an edge function. So place_cod_order, fulfill_order,
 -- release_order_stock, admin_update_order_status and the edge functions all
--- pass, and only a direct client write is refused.
+-- pass, and a direct client write is refused.
 --
 -- Deliberately NOT a full state machine: the state machine lives in
 -- admin_update_order_status(), where it can also move stock. Duplicating it
@@ -279,9 +279,16 @@ language plpgsql
 set search_path = public, pg_temp
 as $function$
 begin
+  -- An ALLOWLIST, not a denylist: anything that is not a member of
+  -- service_role is refused. Naming the client roles instead would silently
+  -- stop covering any new PostgREST-reachable role Supabase or a later
+  -- migration adds. service_role is a member of itself, and the owner of the
+  -- SECURITY DEFINER functions (and the cron role) is a superuser, which
+  -- pg_has_role reports as a member of every role -- so the legitimate writers
+  -- pass and everything unknown fails closed.
   if (new.status is distinct from old.status
       or new.payment_status is distinct from old.payment_status)
-     and current_user in ('anon', 'authenticated') then
+     and not pg_has_role(current_user, 'service_role', 'member') then
     raise exception 'order state must be changed through admin_update_order_status()'
       using errcode = 'P0001', hint = 'order_direct_write';
   end if;
@@ -330,10 +337,19 @@ create trigger enforce_order_state_writer
 --                          yet" and only create-order can produce it.
 --
 -- payment_status is separately settable to 'paid' and to nothing else, and
--- only for a cash order that is still pending and not cancelled: that is the
--- admin list's "mark cash collected" button. Online payments are marked paid
--- by the Kashier webhook and never here, and no admin action ever writes
--- 'refunded' -- only a real refund reported by Kashier does.
+-- only on an order still awaiting payment that has not been cancelled or
+-- released. Two shapes:
+--   cash order            -- the goods were reserved at placement, so this is
+--                            just the "cash collected" button.
+--   pending online order  -- the payment landed but the webhook never did.
+--                            This one goes through fulfill_order(), so the
+--                            stock is actually taken, and it writes an
+--                            ORDER_FULFILLED_BY_ADMIN activity_logs entry.
+--                            Without it the owner's only answer to a dropped
+--                            webhook would be to cancel an order the customer
+--                            has already paid for.
+-- No admin action ever writes 'refunded' -- only a real refund reported by
+-- Kashier does.
 --
 -- Cancelling a PAID order leaves payment_status alone (release_order_stock
 -- treats a null p_payment_status as "keep it"). The money really was taken;
@@ -379,12 +395,12 @@ begin
       using errcode = 'P0001', hint = 'order_not_found';
   end if;
 
-  -- Marking the cash collected. Anything other than 'paid', or an order that
-  -- is not a still-pending cash order, is refused: a released or cancelled
-  -- order's goods are back on the shelf and must never read as paid.
+  -- Recording that the money arrived. 'paid' is the only value an admin may
+  -- ever write, and only on an order that is still awaiting payment and has
+  -- not been cancelled or released: a released order's goods are back on the
+  -- shelf and must never read as paid.
   if p_payment_status is not null and p_payment_status is distinct from v_payment_status then
     if p_payment_status <> 'paid'
-       or v_payment_method <> 'cash'
        or v_payment_status <> 'pending'
        or v_status = 'cancelled'
        or v_released_at is not null then
@@ -393,7 +409,47 @@ begin
         using errcode = 'P0001', hint = 'payment_not_markable';
     end if;
 
-    update public.orders set payment_status = 'paid' where id = p_order_id;
+    if v_payment_method = 'cash' then
+      -- Cash on delivery: the stock was reserved at placement, so the money
+      -- arriving changes nothing but the payment status.
+      update public.orders set payment_status = 'paid' where id = p_order_id;
+
+    elsif v_status = 'pending' and v_reserved_at is null then
+      -- An online order whose webhook never arrived. Kashier has the money,
+      -- the order holds no stock, and without this the owner's only options
+      -- would be to cancel a paid order or to run SQL by hand.
+      --
+      -- This is the ONLY admin path that takes stock, and it takes it the same
+      -- way the webhook does: fulfill_order() locks every referenced row,
+      -- refuses if any line cannot be satisfied, decrements, marks the order
+      -- paid and stamps stock_reserved_at. Re-raising on a false return rolls
+      -- back its own "payment failed" marking with it, so an order that could
+      -- not be fulfilled today is left exactly as it was and can be retried
+      -- once the shelf is restocked.
+      if not public.fulfill_order(p_order_id) then
+        raise exception 'admin_update_order_status: could not fulfil order %', p_order_id
+          using errcode = 'P0001', hint = 'fulfill_failed';
+      end if;
+
+      -- Stock moving on an admin's say-so rather than a verified payment is
+      -- exactly the kind of thing that must never be silent.
+      insert into public.activity_logs (action, entity_type, entity_id, actor_id, details)
+      values (
+        'ORDER_FULFILLED_BY_ADMIN',
+        'orders',
+        p_order_id,
+        auth.uid(),
+        jsonb_build_object('reason', 'payment confirmed by admin, webhook never arrived')
+      );
+
+      -- fulfill_order moved the order on as well as marking it paid.
+      v_status := 'processing';
+
+    else
+      raise exception 'admin_update_order_status: order % cannot be marked paid from status %', p_order_id, v_status
+        using errcode = 'P0001', hint = 'payment_not_markable';
+    end if;
+
     -- Keep the local copy honest: a caller passing both arguments at once must
     -- not have the status branch below act on the payment status this call
     -- just replaced.
@@ -436,9 +492,12 @@ begin
   end if;
 
   -- Everything left is a move into the active set. Only an order that holds
-  -- stock may be advanced.
+  -- stock may be advanced. If the money really did arrive, marking it paid is
+  -- the way in: that path takes the stock first (see above). This refusal
+  -- says only what the database can actually know, which is that no payment
+  -- and no reservation is recorded -- never that the customer did not pay.
   if v_status = 'pending' and v_payment_status <> 'paid' and v_reserved_at is null then
-    raise exception 'admin_update_order_status: order % never reserved stock and cannot be advanced', p_order_id
+    raise exception 'admin_update_order_status: order % has no payment or reservation recorded and cannot be advanced', p_order_id
       using errcode = 'P0001', hint = 'order_never_reserved';
   end if;
 
@@ -448,7 +507,7 @@ end;
 $function$;
 
 comment on function public.admin_update_order_status(uuid, text, text) is
-  'The only way an admin changes an order''s status or marks a cash order paid. Enforces the order state machine (cancellations are terminal, an order that never reserved stock cannot be advanced, only a pending cash order can be marked paid) and routes every cancellation through release_order_stock() so stock is given back exactly once. Admin-gated by is_admin().';
+  'The only way an admin changes an order''s status or records that it was paid. Enforces the order state machine (cancellations are terminal, an order holding no stock cannot be advanced) and routes every cancellation through release_order_stock() and every admin fulfilment of a pending online order through fulfill_order(), so stock moves exactly once and never silently. Admin-gated by is_admin().';
 
 revoke execute on function public.admin_update_order_status(uuid, text, text) from anon, public;
 grant execute on function public.admin_update_order_status(uuid, text, text) to authenticated;
@@ -556,10 +615,18 @@ create unique index if not exists orders_client_request_id_key
 -- prevent_live_variant_delete above blocking, and nothing else will ever
 -- resolve it.
 --
--- These orders hold NO stock (only place_cod_order and fulfill_order take
--- stock, and neither has run for them), so this is bookkeeping and not
--- inventory: it needs no epoch guard like release_expired_cod_orders, and it
--- can safely include orders that predate this migration.
+-- Two bounds carried over from release_expired_cod_orders in 20260806000000,
+-- because "pending orders never held stock" is only true of orders this
+-- system produced. The admin dropdown this task replaces offered 'pending' as
+-- a freely selectable value, so a COD order the owner ever set back to
+-- 'pending' reads exactly like an abandoned one, was NOT covered by that
+-- migration's backfill (which skips 'pending'), and would be cancelled here
+-- with its held stock never returned:
+--   - cod_expiry_epoch: nothing created at or before the instant that feature
+--     landed is ever considered. Pre-existing orders are the owner's business.
+--   - payment_method <> 'cash': a cash order is never abandoned in this sense.
+--     It reserves its stock at placement, and release_expired_cod_orders owns
+--     its expiry.
 --
 -- 72 hours, not a few: Kashier retries a webhook for 24 hours, and cancelling
 -- an order whose delivery is merely late would leave a real payment attached
@@ -588,8 +655,10 @@ select cron.schedule(
       select id from public.orders
       where status = 'pending'
         and payment_status = 'pending'
+        and payment_method <> 'cash'
         and stock_reserved_at is null
         and stock_released_at is null
+        and created_at > (select effective_from from public.cod_expiry_epoch limit 1)
         and created_at < now() - interval '72 hours'
       order by created_at
       limit 500

@@ -115,6 +115,15 @@ test('a full refund of a paid order releases its stock', () => {
   assert.equal(planStockRelease(paidOrder, paidPayload(), 'VOID').action, 'release')
 })
 
+test('a replayed refund cannot release the same order twice', () => {
+  // `event` is not signed and transactionId is not in REQUIRED_SIGNATURE_KEYS,
+  // so one captured payment body can be resent as a refund under a fresh
+  // transaction id. Once the order has been released, the branch is inert.
+  const released = { payment_status: 'paid', total_amount: 499, stock_released_at: '2026-08-08T10:00:00Z' }
+  assert.equal(planStockRelease(released, paidPayload(), 'refund').action, 'ignore')
+  assert.equal(planStockRelease(released, paidPayload({ transactionId: 'TX-forged' }), 'refund').action, 'ignore')
+})
+
 test('nothing else releases stock', () => {
   const paidOrder = { payment_status: 'paid', total_amount: 499 }
   // A payment is not a refund.

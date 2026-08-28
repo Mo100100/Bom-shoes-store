@@ -158,11 +158,16 @@ export function checkPaidAmount(
 //     checkPaidAmount the payment path uses. A partial refund does not put a
 //     whole order's goods back, and this store has no way to know which lines
 //     it covered, so it is left for a human.
+//   - the order must not have been released already. release_order_stock is
+//     idempotent on its own, but this makes the whole branch inert on a
+//     replay: an attacker resending one captured payment body as a refund
+//     under a fresh transactionId can move an order's stock at most once, and
+//     the caller's per-order ledger entry stops even that.
 // `isRefund` is reported separately from the action so the caller can log a
 // refund it is declining to apply (a partial one, say) loudly, and stay quiet
 // about the ordinary payment deliveries that also pass through here.
 export function planStockRelease(
-  order: { payment_status?: string | null; total_amount?: number | null },
+  order: { payment_status?: string | null; total_amount?: number | null; stock_released_at?: string | null },
   data: KashierWebhookData,
   event?: unknown,
 ): { action: 'release' | 'ignore'; isRefund: boolean; reason: string } {
@@ -171,6 +176,9 @@ export function planStockRelease(
   }
   if ((order.payment_status ?? '') !== 'paid') {
     return { action: 'ignore', isRefund: true, reason: 'order is not paid, so there is nothing to refund' }
+  }
+  if (order.stock_released_at) {
+    return { action: 'ignore', isRefund: true, reason: 'this order has already had its stock released' }
   }
   if (String(data.status ?? '').toUpperCase() !== 'SUCCESS') {
     return { action: 'ignore', isRefund: true, reason: 'refund did not succeed' }

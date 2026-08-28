@@ -93,7 +93,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: order, error: orderLookupError } = await admin
       .from('orders')
-      .select('id, status, payment_status, customer_name, customer_email, items, total_amount, kashier_order_id')
+      .select('id, status, payment_status, customer_name, customer_email, items, total_amount, kashier_order_id, stock_released_at')
       .eq('kashier_order_id', merchantOrderId)
       .single()
 
@@ -110,6 +110,27 @@ Deno.serve(async (req: Request) => {
     // before the payment state machine below and leaves it untouched.
     const releasePlan = planStockRelease(order, payload.data, payload.event)
     if (releasePlan.action === 'release') {
+      // Replay defence. `event` is not signed, and neither is transactionId
+      // guaranteed to be (it is not in REQUIRED_SIGNATURE_KEYS), so the
+      // idempotency ledger keyed on transactionId does not stop one captured
+      // payment body being resent as a refund under a fresh transaction id.
+      // A key on the ORDER does: one refund per order, whatever id it carries.
+      // Adding transactionId to the required signature keys was the other
+      // option and was rejected -- if Kashier does not sign that field, every
+      // legitimate webhook would start failing and we cannot verify from here
+      // which fields it signs.
+      const refundEventId = `refund:${merchantOrderId}`
+      const { data: refundSeen } = await admin
+        .from('processed_webhook_events')
+        .select('event_id')
+        .eq('event_id', refundEventId)
+        .maybeSingle()
+
+      if (refundSeen) {
+        console.log(`kashier-webhook: refund for ${merchantOrderId} already applied`)
+        return new Response('already processed', { status: 200 })
+      }
+
       const { data: released, error: releaseError } = await admin.rpc('release_order_stock', {
         p_order_id: order.id,
         p_status: 'cancelled',
@@ -133,7 +154,9 @@ Deno.serve(async (req: Request) => {
       // Inventory moving because of a refund is worth a line in the logs even
       // when everything worked: the owner has goods back to reshelve.
       console.log(`kashier-webhook: refund applied to ${merchantOrderId} (stock returned: ${released === true})`)
-      await admin.from('processed_webhook_events').insert({ event_id: eventId })
+      // Both keys: the per-order one closes the replay above, the event one
+      // keeps an ordinary Kashier redelivery on the normal fast path.
+      await admin.from('processed_webhook_events').insert([{ event_id: refundEventId }, { event_id: eventId }])
       return new Response('ok', { status: 200 })
     }
     if (releasePlan.isRefund) {
