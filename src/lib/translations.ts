@@ -274,6 +274,12 @@ export const translations = {
     cartCouponApply: 'Apply',
     cartCouponInvalid: 'This code could not be applied',
     cartDiscount: 'Discount',
+    cartUpdated: 'Your basket was updated to match the store: check the prices and sizes below.',
+    cartItemUnavailable: 'No longer available',
+    cartRemoveUnavailable: 'Remove the unavailable pieces to continue',
+    cartClearConfirm: 'Clear the whole basket?',
+    cartClearYes: 'Yes, clear it',
+    cartClearCancel: 'Keep it',
 
     // Checkout
     checkoutBack: 'Back to basket',
@@ -1024,6 +1030,12 @@ export const translations = {
     cartCouponApply: 'تطبيق',
     cartCouponInvalid: 'تعذر تطبيق هذا الكود',
     cartDiscount: 'الخصم',
+    cartUpdated: 'تم تحديث سلتك لتطابق المتجر: راجع الأسعار والمقاسات بالأسفل.',
+    cartItemUnavailable: 'لم تعد متوفرة',
+    cartRemoveUnavailable: 'أزل القطع غير المتوفرة للمتابعة',
+    cartClearConfirm: 'إفراغ السلة بالكامل؟',
+    cartClearYes: 'نعم، أفرغها',
+    cartClearCancel: 'الاحتفاظ بها',
 
     // Checkout
     checkoutBack: 'العودة إلى السلة',

@@ -317,7 +317,7 @@ export default function Checkout() {
                       <p className="text-sm font-medium truncate">{item.product.name}</p>
                       <p className="text-xs text-muted-foreground">{item.color}, {item.size}</p>
                     </div>
-                    <p className="text-sm">{formatPrice(item.product.price * item.quantity)}</p>
+                    <p className="text-sm">{formatPrice(item.unitPrice * item.quantity)}</p>
                   </div>
                 ))}
               </div>

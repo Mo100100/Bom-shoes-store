@@ -79,7 +79,7 @@ export default function Home() {
     const variant = firstInStockVariant(variants ?? [])
     setQuickAddingId(null)
     if (!variant) { toast.error(t.productOutOfStock); return }
-    addItem(p, variant.size, variant.color, 1)
+    addItem(p, variant.size, variant.color, 1, variant)
     toast.success(t.productAdded, { description: t.productAddedSize(p.name, variant.size) })
   }
 

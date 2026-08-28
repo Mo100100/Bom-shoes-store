@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { useCart } from '@/contexts/CartContext'
+import { useCart, CartItem } from '@/contexts/CartContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
@@ -11,8 +11,13 @@ import { useSeo } from '@/hooks/useSeo'
 
 type CouponPreview = { amount: number; description: string | null; freeShipping: boolean }
 
+// Same identity a cart line is keyed by everywhere else: product + size + colour.
+function lineKey(item: CartItem): string {
+  return `${item.product.id}-${item.size}-${item.color}`
+}
+
 export default function Cart() {
-  const { items, updateQuantity, removeItem, totalItems, totalPrice, clearCart, couponCode, setCouponCode } = useCart()
+  const { items, updateQuantity, removeItem, totalItems, totalPrice, clearCart, revalidateCart, couponCode, setCouponCode } = useCart()
   const { user } = useAuth()
   const navigate = useNavigate()
   const t = useT()
@@ -24,13 +29,24 @@ export default function Cart() {
   const [couponInput, setCouponInput] = useState('')
   const [applying, setApplying] = useState(false)
   const [discount, setDiscount] = useState<CouponPreview | null>(null)
+  const [confirmingClear, setConfirmingClear] = useState(false)
+  const [brokenImages, setBrokenImages] = useState<string[]>([])
 
-  // Re-preview a coupon already applied in a previous visit (persisted in
+  // Lines the customer can still buy. A line whose product or variant has
+  // disappeared is shown but excluded here, so it never reaches the coupon
+  // preview (the server would reject the whole cart because of it).
+  const sellable = items.filter(i => !i.unavailable)
+  const hasUnavailable = sellable.length !== items.length
+
+  // Re-check the cart against the database for the customer who left this tab
+  // open since yesterday (the provider only does it at hydration), then
+  // re-preview a coupon already applied in a previous visit (persisted in
   // localStorage) -- silently drops it if it's no longer valid. Only runs
   // once on mount; a later cart-quantity edit won't refresh this preview
   // (see task note: reasonable preview, not bulletproof) -- the authoritative
   // number is always recomputed at order creation regardless.
   useEffect(() => {
+    void revalidateCart()
     if (couponCode && items.length > 0) {
       void applyCoupon(couponCode, { silent: true })
     }
@@ -43,7 +59,7 @@ export default function Cart() {
       const { data, error } = await supabase.functions.invoke('validate-coupon', {
         body: {
           code,
-          items: items.map(i => ({ product_id: i.product.id, size: i.size, color: i.color, quantity: i.quantity })),
+          items: sellable.map(i => ({ product_id: i.product.id, size: i.size, color: i.color, quantity: i.quantity })),
           customerEmail: user?.email,
         },
       })
@@ -117,17 +133,31 @@ export default function Cart() {
         <div className="grid lg:grid-cols-[1fr_400px] gap-12 lg:gap-16">
           {/* Items */}
           <div className="space-y-8">
-            {items.map(item => (
+            {items.map(item => {
+              const key = lineKey(item)
+              // An empty src re-requests the page itself and renders a broken
+              // image, so the placeholder stands in for both a product with no
+              // image and one whose image URL has since died.
+              const showImage = !!item.product.image_url && !brokenImages.includes(key)
+              const atMax = item.stock != null && item.quantity >= item.stock
+              return (
               <div
-                key={`${item.product.id}-${item.size}-${item.color}`}
-                className="flex gap-4 sm:gap-6 pb-8 border-b border-border last:border-0"
+                key={key}
+                className={`flex gap-4 sm:gap-6 pb-8 border-b border-border last:border-0${item.unavailable ? ' opacity-60' : ''}`}
               >
                 <Link to={`/product/${item.product.slug}`} className="flex-shrink-0 w-24 sm:w-32 aspect-square bg-muted overflow-hidden">
-                  <img
-                    src={item.product.image_url || ''}
-                    alt={item.product.name}
-                    className="w-full h-full object-cover"
-                  />
+                  {showImage ? (
+                    <img
+                      src={item.product.image_url}
+                      alt={item.product.name}
+                      className="w-full h-full object-cover"
+                      onError={() => setBrokenImages(current => current.includes(key) ? current : [...current, key])}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center" aria-hidden="true">
+                      <ShoppingBag className="w-6 h-6 text-muted-foreground" />
+                    </div>
+                  )}
                 </Link>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-4">
@@ -153,39 +183,78 @@ export default function Cart() {
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                  <div className="mt-4 flex items-center justify-between">
-                    <div className="flex items-center border border-border">
+                  {item.unavailable ? (
+                    <div className="mt-4 flex items-center justify-between gap-4">
+                      <p className="text-sm text-terracotta">{t.cartItemUnavailable}</p>
                       <button
-                        onClick={() => updateQuantity(item.product.id, item.size, item.color, item.quantity - 1)}
-                        className="p-2 hover:bg-muted transition-colors cursor-pointer"
-                        aria-label={t.cartDecrease}
+                        onClick={() => removeItem(item.product.id, item.size, item.color)}
+                        className="text-xs tracking-wider uppercase border border-border px-3 py-2 hover:bg-muted transition-colors cursor-pointer"
                       >
-                        <Minus className="w-3 h-3" />
-                      </button>
-                      <span className="w-10 text-center text-sm">{item.quantity}</span>
-                      <button
-                        onClick={() => updateQuantity(item.product.id, item.size, item.color, item.quantity + 1)}
-                        className="p-2 hover:bg-muted transition-colors cursor-pointer"
-                        aria-label={t.cartIncrease}
-                      >
-                        <Plus className="w-3 h-3" />
+                        {t.cartRemove}
                       </button>
                     </div>
-                    <p className="text-sm font-medium">
-                      {formatPrice(item.product.price * item.quantity)}
-                    </p>
-                  </div>
+                  ) : (
+                    <div className="mt-4 flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center border border-border">
+                          <button
+                            onClick={() => updateQuantity(item.product.id, item.size, item.color, item.quantity - 1)}
+                            className="p-2 hover:bg-muted transition-colors cursor-pointer"
+                            aria-label={t.cartDecrease}
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className="w-10 text-center text-sm">{item.quantity}</span>
+                          <button
+                            onClick={() => updateQuantity(item.product.id, item.size, item.color, item.quantity + 1)}
+                            disabled={atMax}
+                            className="p-2 hover:bg-muted transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            aria-label={t.cartIncrease}
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </div>
+                        {atMax && (
+                          <p className="text-[11px] text-muted-foreground mt-1.5">{t.shopOnlyLeft(item.stock!)}</p>
+                        )}
+                      </div>
+                      <p className="text-sm font-medium">
+                        {formatPrice(item.unitPrice * item.quantity)}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
-            ))}
+              )
+            })}
 
-            <div className="flex items-center justify-between pt-4">
-              <button
-                onClick={clearCart}
-                className="text-xs text-muted-foreground hover:text-foreground transition-colors tracking-wider uppercase cursor-pointer"
-              >
-                {t.cartClear}
-              </button>
+            <div className="flex items-center justify-between gap-4 pt-4">
+              {/* Two-step: emptying the whole basket is one tap on a small
+                  target, and there is no undo. */}
+              {confirmingClear ? (
+                <div className="flex items-center gap-3 text-xs">
+                  <span className="text-muted-foreground">{t.cartClearConfirm}</span>
+                  <button
+                    onClick={() => { clearCart(); setConfirmingClear(false) }}
+                    className="tracking-wider uppercase border border-border px-3 py-2 hover:bg-muted transition-colors cursor-pointer"
+                  >
+                    {t.cartClearYes}
+                  </button>
+                  <button
+                    onClick={() => setConfirmingClear(false)}
+                    className="tracking-wider uppercase text-muted-foreground hover:text-foreground transition-colors px-2 py-2 cursor-pointer"
+                  >
+                    {t.cartClearCancel}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmingClear(true)}
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors tracking-wider uppercase cursor-pointer"
+                >
+                  {t.cartClear}
+                </button>
+              )}
               <Link
                 to="/shop"
                 className="text-xs text-muted-foreground hover:text-foreground transition-colors tracking-wider uppercase"
@@ -265,11 +334,15 @@ export default function Cart() {
               </dl>
               <button
                 onClick={() => navigate('/checkout')}
-                className="mt-6 w-full bg-foreground text-background py-4 text-sm tracking-widest uppercase hover:bg-foreground/85 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                disabled={hasUnavailable}
+                className="mt-6 w-full bg-foreground text-background py-4 text-sm tracking-widest uppercase hover:bg-foreground/85 transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {t.cartCheckout}
                 <ArrowRight className="w-4 h-4 flip-rtl" />
               </button>
+              {hasUnavailable && (
+                <p className="text-[11px] text-terracotta text-center mt-3">{t.cartRemoveUnavailable}</p>
+              )}
               <p className="text-[11px] text-muted-foreground text-center mt-4">
                 {t.cartSecure}
               </p>

@@ -190,7 +190,7 @@ export default function ProductDetail() {
       const itemSize = variant?.size ?? [...p.sizes].sort(compareSizes)[0]
       const itemColor = variant?.color ?? p.colors[0] ?? ''
       if (!itemSize) continue // nothing sellable for this item -- skip rather than add a broken line
-      addItem(p, itemSize, itemColor, item.quantity)
+      addItem(p, itemSize, itemColor, item.quantity, variant)
       added++
     }
 
@@ -344,7 +344,7 @@ export default function ProductDetail() {
     if (!product) return
     if (!size) { toast.error(t.productChooseSize); return }
     setAdding(true)
-    addItem(product, size, color, 1)
+    addItem(product, size, color, 1, selectedVariant)
     setTimeout(() => {
       setAdding(false)
       toast.success(t.productAdded, {
