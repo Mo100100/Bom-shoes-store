@@ -13,6 +13,7 @@ import ProductCard from '@/components/ProductCard'
 import CountdownTimer from '@/components/CountdownTimer'
 import { useSeo } from '@/hooks/useSeo'
 import { useBrands } from '@/contexts/BrandsContext'
+import { firstInStockVariant } from '@/lib/sizes'
 
 const TRUST_ICONS: Record<string, typeof Truck> = {
   Truck, ShieldCheck, RotateCcw, Lock, Package, Award, Heart, Star, CreditCard, Clock, Gift, Sparkles, Globe,
@@ -72,12 +73,14 @@ export default function Home() {
     e.preventDefault()
     e.stopPropagation()
     setQuickAddingId(p.id)
-    const { data: variants } = await supabase.from('product_variants').select('*').eq('product_id', p.id)
-    const variant = variants?.find(v => v.stock > 0)
+    const { data: variants } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size')
+    // Smallest in-stock size, not whatever row came back first, so the customer
+    // gets a size they can predict and the toast tells them which one it is.
+    const variant = firstInStockVariant(variants ?? [])
     setQuickAddingId(null)
     if (!variant) { toast.error(t.productOutOfStock); return }
     addItem(p, variant.size, variant.color, 1)
-    toast.success(t.productAdded, { description: `${p.name}, ${variant.size}` })
+    toast.success(t.productAdded, { description: t.productAddedSize(p.name, variant.size) })
   }
 
   const pool = featured.length > 0 ? featured : recent

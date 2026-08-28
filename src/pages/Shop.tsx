@@ -9,6 +9,7 @@ import QuickViewModal from '@/components/QuickViewModal'
 import ProductCard from '@/components/ProductCard'
 import { useSeo } from '@/hooks/useSeo'
 import { useCategories } from '@/contexts/CategoriesContext'
+import { compareSizes, firstInStockVariant } from '@/lib/sizes'
 
 const SORT_VALUES = ['featured', 'price-asc', 'price-desc', 'newest']
 
@@ -119,7 +120,8 @@ export default function Shop() {
 
   // Color/size chips derive from what's already loaded -- no extra query.
   const availableColors = useMemo(() => Array.from(new Set(products.flatMap(p => p.available_colors))), [products])
-  const availableSizes = useMemo(() => Array.from(new Set(products.flatMap(p => p.available_sizes))), [products])
+  // Sorted so the chips read 9, 10, 40 rather than 10, 40, 9.
+  const availableSizes = useMemo(() => Array.from(new Set(products.flatMap(p => p.available_sizes))).sort(compareSizes), [products])
 
   // Client-side on top of the server-filtered set: color/size/price. Empty
   // selection = no filter, and all four filter dimensions compose (AND).
@@ -158,15 +160,17 @@ export default function Shop() {
     e.preventDefault()
     e.stopPropagation()
     setQuickAddingId(p.id)
-    const { data: variants } = await supabase.from('product_variants').select('*').eq('product_id', p.id)
-    const variant = variants?.find(v => v.stock > 0)
+    const { data: variants } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size')
+    // Smallest in-stock size, not whatever row came back first, so the customer
+    // gets a size they can predict and the toast tells them which one it is.
+    const variant = firstInStockVariant(variants ?? [])
     setQuickAddingId(null)
     if (!variant) {
       toast.error(t.productOutOfStock)
       return
     }
     addItem(p, variant.size, variant.color, 1)
-    toast.success(t.productAdded, { description: `${p.name}, ${variant.size}` })
+    toast.success(t.productAdded, { description: t.productAddedSize(p.name, variant.size) })
   }
 
   return (

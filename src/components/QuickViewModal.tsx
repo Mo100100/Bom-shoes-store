@@ -8,6 +8,7 @@ import { useCart } from '@/contexts/CartContext'
 import { useT } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import RatingStars from '@/components/RatingStars'
+import { compareSizes, defaultSizeForColor, firstInStockVariant } from '@/lib/sizes'
 
 type QuickViewModalProps = {
   productId: string | null
@@ -43,20 +44,24 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
         setProduct(data)
         const [{ data: imgs }, { data: vars }] = await Promise.all([
           supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
-          supabase.from('product_variants').select('*').eq('product_id', data.id),
+          supabase.from('product_variants').select('*').eq('product_id', data.id).order('size'),
         ])
         if (cancelled) return
         setImages(imgs || [])
         setVariants(vars || [])
 
-        // Same preference as ProductDetail: a real variant combo first, legacy
-        // flat arrays as a fallback for products with no variants yet.
+        // Same preference as ProductDetail: the first in-stock combo, then the
+        // legacy flat arrays for products with no variants yet. Those arrays
+        // are products.sizes/colors, NOT the catalog view's available_sizes /
+        // available_colors, which are aggregated FROM the variants and so are
+        // always empty on exactly the products this branch is meant to serve.
         if (vars && vars.length > 0) {
-          setColor(vars[0].color)
-          setSize(vars[0].size)
+          const defaultColor = (firstInStockVariant(vars) ?? vars[0]).color
+          setColor(defaultColor)
+          setSize(defaultSizeForColor(vars, defaultColor))
         } else {
-          setColor(data.available_colors[0] ?? '')
-          setSize(data.available_sizes[0] ?? '')
+          setColor(data.colors[0] ?? '')
+          setSize([...data.sizes].sort(compareSizes)[0] ?? '')
         }
       } else {
         setProduct(null)
@@ -71,8 +76,12 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
   const ready = !loading && product?.id === productId
 
   const hasVariants = variants.length > 0
-  const colorOptions = hasVariants ? Array.from(new Set(variants.map(v => v.color))) : (product?.available_colors ?? [])
-  const sizeOptions = hasVariants ? Array.from(new Set(variants.map(v => v.size))) : (product?.available_sizes ?? [])
+  const colorOptions = hasVariants ? Array.from(new Set(variants.map(v => v.color))) : (product?.colors ?? [])
+  // Sorted so 9 comes before 10 and before 40; the DB can only order sizes as
+  // text, which puts 10 before 9.
+  const sizeOptions = Array.from(
+    new Set(hasVariants ? variants.map(v => v.size) : (product?.sizes ?? []))
+  ).sort(compareSizes)
   const selectedVariant = hasVariants ? variants.find(v => v.color === color && v.size === size) : undefined
   const effectivePrice = selectedVariant ? (selectedVariant.price_override ?? product?.min_price ?? 0) : (product?.min_price ?? 0)
   const outOfStock = hasVariants ? (!selectedVariant || selectedVariant.stock === 0) : (product?.total_stock ?? 0) === 0
@@ -84,11 +93,20 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
     return !!v && v.stock > 0
   }
 
+  // Switching colour used to strand the picker on a size that colour doesn't
+  // stock, so the button read "Out of stock" while other sizes were sellable.
+  // Move to that colour's first in-stock size whenever the current one isn't.
+  useEffect(() => {
+    if (!hasVariants || !color) return
+    if (variants.some(v => v.color === color && v.size === size && v.stock > 0)) return
+    setSize(defaultSizeForColor(variants, color))
+  }, [variants, hasVariants, color, size])
+
   function handleAdd() {
     if (!product) return
     if (!size) { toast.error(t.productChooseSize); return }
     addItem(product, size, color, 1)
-    toast.success(t.productAdded, { description: `${product.name}, Size ${size}` })
+    toast.success(t.productAdded, { description: t.productAddedSize(product.name, size) })
     onClose()
   }
 

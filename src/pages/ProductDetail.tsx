@@ -7,6 +7,7 @@ import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { useRecentlyViewed } from '@/hooks/useRecentlyViewed'
 import { useSeo } from '@/hooks/useSeo'
+import { compareSizes, defaultSizeForColor, firstInStockVariant } from '@/lib/sizes'
 import WishlistButton from '@/components/WishlistButton'
 import RatingStars from '@/components/RatingStars'
 import SectionHeading from '@/components/SectionHeading'
@@ -88,7 +89,7 @@ export default function ProductDetail() {
         setActiveImage(0)
         const [{ data: imgs }, { data: vars }, { data: rel }] = await Promise.all([
           supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
-          supabase.from('product_variants').select('*').eq('product_id', data.id),
+          supabase.from('product_variants').select('*').eq('product_id', data.id).order('size'),
           supabase.from('product_catalog').select('*').eq('category', data.category).neq('id', data.id).limit(4),
         ])
         setImages(imgs || [])
@@ -97,14 +98,19 @@ export default function ProductDetail() {
         loadReviews(data.id)
         loadBundles(data.id)
 
-        // Prefer a real variant combo as the default selection; fall back to
-        // the legacy flat sizes/colors arrays if this product has no variants yet.
+        // Default to a combo the customer can actually buy rather than whatever
+        // row the fetch happened to return first: the colour of the first
+        // in-stock variant, then that colour's smallest in-stock size. A fully
+        // sold-out product still lands on its first colour and smallest size so
+        // the picker is never blank. Legacy products with no variants fall back
+        // to the flat sizes/colors arrays, sorted the same way.
         if (vars && vars.length > 0) {
-          setColor(vars[0].color)
-          setSize(vars[0].size)
+          const defaultColor = (firstInStockVariant(vars) ?? vars[0]).color
+          setColor(defaultColor)
+          setSize(defaultSizeForColor(vars, defaultColor))
         } else {
           setColor(data.colors[0] ?? '')
-          setSize(data.sizes[0] ?? '')
+          setSize([...data.sizes].sort(compareSizes)[0] ?? '')
         }
       }
       setLoading(false)
@@ -159,15 +165,16 @@ export default function ProductDetail() {
   }
 
   // Batches one product_variants query for every product in the bundle (not
-  // one per item), picks the first in-stock variant per product -- same
-  // "pick any sellable combo" convention Shop.tsx's quickAdd uses -- and adds
-  // each bundle item at its required quantity in one addItem call apiece.
+  // one per item), picks the smallest in-stock size per product -- same
+  // deterministic convention Shop.tsx's quickAdd uses -- and adds each bundle
+  // item at its required quantity in one addItem call apiece.
   async function addBundleToBag(bundle: BundleWithItems) {
     setAddingBundleId(bundle.id)
     const { data: allVariants } = await supabase
       .from('product_variants')
       .select('*')
       .in('product_id', bundle.items.map(i => i.product_id))
+      .order('size')
 
     const variantsByProduct = new Map<string, ProductVariant[]>()
     for (const v of allVariants || []) {
@@ -179,8 +186,8 @@ export default function ProductDetail() {
     let added = 0
     for (const item of bundle.items) {
       const p = item.products
-      const variant = (variantsByProduct.get(item.product_id) ?? []).find(v => v.stock > 0)
-      const itemSize = variant?.size ?? p.sizes[0]
+      const variant = firstInStockVariant(variantsByProduct.get(item.product_id) ?? [])
+      const itemSize = variant?.size ?? [...p.sizes].sort(compareSizes)[0]
       const itemColor = variant?.color ?? p.colors[0] ?? ''
       if (!itemSize) continue // nothing sellable for this item -- skip rather than add a broken line
       addItem(p, itemSize, itemColor, item.quantity)
@@ -219,7 +226,11 @@ export default function ProductDetail() {
 
   const hasVariants = variants.length > 0
   const colorOptions = hasVariants ? Array.from(new Set(variants.map(v => v.color))) : (product?.colors ?? [])
-  const sizeOptions = hasVariants ? Array.from(new Set(variants.map(v => v.size))) : (product?.sizes ?? [])
+  // Sorted so 9 comes before 10 and before 40; the DB can only order sizes as
+  // text, which puts 10 before 9.
+  const sizeOptions = Array.from(
+    new Set(hasVariants ? variants.map(v => v.size) : (product?.sizes ?? []))
+  ).sort(compareSizes)
   const selectedVariant = hasVariants ? variants.find(v => v.color === color && v.size === size) : undefined
   const effectivePrice = selectedVariant ? (selectedVariant.price_override ?? product?.price ?? 0) : (product?.price ?? 0)
   const outOfStock = hasVariants ? (!selectedVariant || selectedVariant.stock === 0) : (product?.stock ?? 0) === 0
@@ -229,6 +240,15 @@ export default function ProductDetail() {
     const v = variants.find(v => v.color === color && v.size === s)
     return !!v && v.stock > 0
   }
+
+  // Switching colour used to strand the picker on a size that colour doesn't
+  // stock, so the button read "Out of stock" while other sizes were sellable.
+  // Move to that colour's first in-stock size whenever the current one isn't.
+  useEffect(() => {
+    if (!hasVariants || !color) return
+    if (variants.some(v => v.color === color && v.size === size && v.stock > 0)) return
+    setSize(defaultSizeForColor(variants, color))
+  }, [variants, hasVariants, color, size])
 
   // ponytail: no product_images rows yet -> fall back to the legacy single image_url
   // so the gallery never renders a broken/blank image.
@@ -328,7 +348,7 @@ export default function ProductDetail() {
     setTimeout(() => {
       setAdding(false)
       toast.success(t.productAdded, {
-        description: `${product.name}, Size ${size}`,
+        description: t.productAddedSize(product.name, size),
         action: { label: t.cart, onClick: () => navigate('/cart') }
       })
     }, 400)
