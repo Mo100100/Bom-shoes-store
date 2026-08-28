@@ -25,12 +25,18 @@ type Outcome = 'checking' | 'confirmed' | 'pending' | 'failed'
 // also where every unknown lands (see the caller): a webhook still in flight,
 // an unreachable endpoint, a missing reference. It claims nothing.
 function outcomeOf(s: OrderStatus): Exclude<Outcome, 'checking'> {
-  if (s.paymentStatus === 'failed' || s.status === 'cancelled' || s.status === 'refunded') return 'failed'
+  // Paid is tested FIRST, before any failure test. An admin can cancel an
+  // already-paid order (AdminOrders.tsx) when stock turns out to be missing
+  // after payment, and sending that customer to /checkout/failed would tell
+  // them "nothing was charged" about money that left their account.
   if (s.paymentStatus === 'paid') return 'confirmed'
+  if (s.paymentStatus === 'failed' || s.status === 'cancelled') return 'failed'
   // Cash on delivery has no payment to wait for: place_cod_order() already
   // confirmed the order and reserved its stock, and payment_status stays
-  // 'pending' until an admin marks the cash as collected.
-  if (s.paymentMethod === 'cash' && s.status === 'confirmed') return 'confirmed'
+  // 'pending' the whole way through 'confirmed' -> 'processing' -> 'shipped'
+  // -> 'delivered', until an admin marks the cash as collected. So any status
+  // past 'pending' is a placed order ('cancelled' already returned above).
+  if (s.paymentMethod === 'cash' && s.status !== 'pending') return 'confirmed'
   return 'pending'
 }
 
@@ -54,8 +60,13 @@ export default function CheckoutSuccess() {
   const check = useCallback(async () => {
     if (!orderId) return
     setChecking(true)
+    // functions-js only installs an AbortController when a timeout is passed,
+    // and browser fetch has none of its own: without this a stalled request
+    // (network handover, a cold start that never returns) leaves the customer
+    // on the spinner forever, right after handing over their card details.
     const { data, error } = await supabase.functions.invoke<OrderStatus>('order-status', {
       body: { orderId },
+      timeout: 15000,
     })
     setOrder(error ? null : data)
     setChecking(false)
@@ -122,13 +133,17 @@ export default function CheckoutSuccess() {
           </p>
         )}
         <div className="flex flex-wrap items-center justify-center gap-4 mt-4">
-          <button
-            type="button"
-            onClick={check}
-            className="bg-primary text-primary-foreground px-7 py-3.5 text-sm tracking-widest uppercase hover:bg-primary/90 transition-colors cursor-pointer"
-          >
-            {t.pendingCheckAgain}
-          </button>
+          {/* Without a reference there is nothing to re-check, so the button
+              would be inert: only the basket link is offered. */}
+          {orderId && (
+            <button
+              type="button"
+              onClick={check}
+              className="bg-primary text-primary-foreground px-7 py-3.5 text-sm tracking-widest uppercase hover:bg-primary/90 transition-colors cursor-pointer"
+            >
+              {t.pendingCheckAgain}
+            </button>
+          )}
           <Link
             to="/cart"
             className="text-sm tracking-wider border-b border-foreground/30 pb-1 hover:border-foreground"
@@ -140,9 +155,9 @@ export default function CheckoutSuccess() {
     )
   }
 
-  // Read from the server's payment_method, not the `cod=1` marker Checkout.tsx
-  // puts in the URL: the query string is the customer's to edit, and which
-  // copy they see should follow the same truth the outcome above does.
+  // From the server's payment_method, never the query string (which is the
+  // customer's to edit): which copy they see follows the same truth the
+  // outcome above does.
   const isCod = order?.paymentMethod === 'cash'
 
   return (

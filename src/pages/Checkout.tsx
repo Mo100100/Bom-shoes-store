@@ -142,7 +142,7 @@ export default function Checkout() {
       // straight to the thank-you page (no Kashier redirect).
       if (data?.cod) {
         clearCart()
-        navigate(`/checkout/success?orderId=${encodeURIComponent(data.orderId)}&cod=1`)
+        navigate(`/checkout/success?orderId=${encodeURIComponent(data.orderId)}`)
         return
       }
 
