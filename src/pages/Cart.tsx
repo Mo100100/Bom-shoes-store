@@ -11,9 +11,12 @@ import { useSeo } from '@/hooks/useSeo'
 
 type CouponPreview = { amount: number; description: string | null; freeShipping: boolean }
 
-// Same identity a cart line is keyed by everywhere else: product + size + colour.
+// Same identity a cart line is keyed by everywhere else: product + size +
+// colour, joined with '::' exactly as CartContext's variantKey and the
+// server's _shared/pricing.ts do. A single-dash join also collided on any
+// size or colour containing a hyphen.
 function lineKey(item: CartItem): string {
-  return `${item.product.id}-${item.size}-${item.color}`
+  return `${item.product.id}::${item.size}::${item.color}`
 }
 
 export default function Cart() {
@@ -312,7 +315,10 @@ export default function Cart() {
                     <button
                       type="button"
                       onClick={handleRemoveCoupon}
-                      className="p-1 -m-1 text-muted-foreground hover:text-foreground transition-colors cursor-pointer flex-shrink-0"
+                      // 44px, matching the line-remove X further up this same
+                      // page. -my-2 absorbs the extra height into the row's
+                      // padding so the coupon chip doesn't grow.
+                      className="-my-2 w-11 h-11 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors cursor-pointer flex-shrink-0"
                       aria-label={t.cartRemove}
                     >
                       <X className="w-4 h-4" />

@@ -16,6 +16,26 @@ import { toast } from 'sonner'
 import { Link } from 'react-router-dom'
 import { useSeo } from '@/hooks/useSeo'
 
+const REQUEST_ID_KEY = 'bom-checkout-request-id'
+
+// A new key, persisted so a reload picks it back up. Storage is wrapped the
+// way CartContext wraps its own: in private mode it simply throws, and an
+// unpersisted key is no worse than the ref-only behaviour this replaces.
+function mintRequestId(): string {
+  const id = crypto.randomUUID()
+  try { sessionStorage.setItem(REQUEST_ID_KEY, id) }
+  catch { /* sessionStorage is unavailable in private mode: the key just isn't persisted */ }
+  return id
+}
+
+function readOrMintRequestId(): string {
+  try {
+    const stored = sessionStorage.getItem(REQUEST_ID_KEY)
+    if (stored) return stored
+  } catch { /* sessionStorage is unavailable in private mode: mint a fresh key */ }
+  return mintRequestId()
+}
+
 export default function Checkout() {
   const { items, totalPrice, clearCart, couponCode } = useCart()
   const { user, profile } = useAuth()
@@ -37,7 +57,6 @@ export default function Checkout() {
     notes: '',
   })
   const [discountAmount, setDiscountAmount] = useState(0)
-  const [freeShipping, setFreeShipping] = useState(false)
   const [couponError, setCouponError] = useState<string | null>(null)
   const [paymentMethod, setPaymentMethod] = useState<'online' | 'cash'>('online')
   const [checkoutConfig, setCheckoutConfig] = useState<CheckoutConfig>(DEFAULT_CHECKOUT_CONFIG)
@@ -53,7 +72,14 @@ export default function Checkout() {
   // order instead. It is regenerated only when the server actually answered:
   // that answer decided the attempt, so the next press is a genuinely new
   // order rather than a retry.
-  const requestIdRef = useRef(crypto.randomUUID())
+  //
+  // Held in sessionStorage, not just a ref: what a customer actually does
+  // when "Place order" hangs is RELOAD the page, and a ref does not survive
+  // that. A fresh uuid would sail past orders_client_request_id_key and place
+  // a second COD order against the same stock. sessionStorage is the right
+  // scope -- per tab, survives a reload, gone when the tab closes.
+  const requestIdRef = useRef('')
+  if (!requestIdRef.current) requestIdRef.current = readOrMintRequestId()
 
   // Which governorates can be shipped to (site_content.shipping). The select
   // is required, so a failed fetch here would otherwise leave the customer
@@ -111,37 +137,46 @@ export default function Checkout() {
   // resolves both (the same call create-order makes), so this runs even with
   // no coupon code -- an auto-promotion used to be applied at checkout but
   // never previewed, which made the summary disagree with the amount charged.
-  // Recomputed once, since items don't change on this page. The authoritative
-  // number still comes back from create-order at submit time below and
-  // overwrites this if it differs.
+  // The authoritative number still comes back from create-order at submit
+  // time below and overwrites this if it differs.
+  //
+  // regionCode goes with it because a free_shipping coupon is worth exactly
+  // the shipping cost: without it the preview valued every such candidate at
+  // 0, so an auto free-shipping promo was never shown and an explicit
+  // free-shipping code could lose a comparison here that it wins server-side.
+  // The client sends only the CODE; validate-coupon prices it itself from the
+  // same config create-order uses.
   useEffect(() => {
-    if (sellable.length === 0) { setDiscountAmount(0); setFreeShipping(false); return }
+    if (sellable.length === 0) { setDiscountAmount(0); return }
     let cancelled = false
     supabase.functions.invoke('validate-coupon', {
       body: {
         ...(couponCode ? { code: couponCode } : {}),
         items: sellable.map(i => ({ product_id: i.product.id, size: i.size, color: i.color, quantity: i.quantity })),
+        ...(form.regionCode ? { regionCode: form.regionCode } : {}),
       },
     }).then(({ data }) => {
       if (cancelled) return
       setDiscountAmount(data?.valid ? data.discountAmount : 0)
-      setFreeShipping(!!data?.valid && !!data?.freeShipping)
       // A code carried over from the basket can be rejected here (it expired,
       // or it is limited per customer and this shopper is not signed in). The
       // discount silently vanishing between the two pages, with the same code
       // still shown as applied, is worse than saying why.
       setCouponError(couponCode && data && !data.valid ? couponRejectionMessage(data, t, formatPrice) : null)
-    }).catch(() => { if (!cancelled) { setDiscountAmount(0); setFreeShipping(false); setCouponError(null) } })
+    }).catch(() => { if (!cancelled) { setDiscountAmount(0); setCouponError(null) } })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [couponCode])
+  }, [couponCode, form.regionCode])
 
-  // Shipping = the selected governorate's price (0 until one is picked). A
-  // coupon granting free shipping still zeroes it out. The server recomputes
-  // this authoritatively from regionCode in create-order.
-  const shipping = freeShipping ? 0 : selectedRegion?.price ?? 0
+  // Exactly the server's own arithmetic (computeOrderTotal in
+  // supabase/functions/_shared/pricing.ts): shipping is always the selected
+  // governorate's price, and a waiver arrives as part of discountAmount
+  // rather than by zeroing this. Zeroing it here as well double-counted the
+  // waiver, which is why the whole total is reconciled from the preview now
+  // and not just the discount line.
+  const shipping = selectedRegion?.price ?? 0
   const tax = totalPrice * TAX_RATE
-  const grand = totalPrice + shipping + tax - discountAmount
+  const grand = Math.max(0, totalPrice + shipping + tax - discountAmount)
 
   function setField(k: keyof typeof form, v: string) {
     setForm(f => ({ ...f, [k]: v }))
@@ -196,6 +231,12 @@ export default function Checkout() {
 
       if (error) throw error
 
+      // The server answered and the order exists: this key has done its job.
+      // Retiring it now (and out of sessionStorage) means a customer who
+      // comes back to checkout in the same tab places a genuinely new order
+      // instead of being handed this one again.
+      requestIdRef.current = mintRequestId()
+
       // Reconcile with what the server actually applied (it re-validates the
       // coupon independently and may land on a different number than the
       // preview above, e.g. it just expired).
@@ -221,7 +262,7 @@ export default function Checkout() {
       // cap): the next press is a new order, not a retry of this one. A
       // failure with no response leaves the key in place so a retry can be
       // recognised as the same order.
-      if (responded) requestIdRef.current = crypto.randomUUID()
+      if (responded) requestIdRef.current = mintRequestId()
       // The cap messages quote the ceiling, so they are only used when the
       // server actually sent one -- a body that could not be read falls back
       // to the generic message rather than telling the customer they are
@@ -448,7 +489,7 @@ export default function Checkout() {
                 {discountAmount > 0 && (
                   <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartDiscount}</dt><dd>−{formatPrice(discountAmount)}</dd></div>
                 )}
-                <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartShipping}</dt><dd>{!selectedRegion && !freeShipping ? '-' : shipping === 0 ? t.cartFree : formatPrice(shipping)}</dd></div>
+                <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartShipping}</dt><dd>{!selectedRegion ? '-' : shipping === 0 ? t.cartFree : formatPrice(shipping)}</dd></div>
                 <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartTax}</dt><dd>{formatPrice(tax)}</dd></div>
                 <div className="pt-3 border-t border-border flex justify-between items-baseline">
                   <dt>{t.cartTotal}</dt>

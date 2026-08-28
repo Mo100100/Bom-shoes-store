@@ -6,10 +6,12 @@
 // (see verifyKashierSignature in ./verify.ts), per
 // developers.kashier.io/payment/webhook.
 //
-// This is the ONLY place an order is ever marked paid: it calls the
-// fulfill_order() Postgres function (SECURITY DEFINER, atomic stock check +
-// decrement) and only emails the order confirmation if that succeeds. Because
-// of that, everything the decision rests on has to be signed and checked:
+// This is the only place a payment GATEWAY can mark an order paid (the owner
+// can also do it by hand from the admin, see send-order-confirmation): it
+// calls the fulfill_order() Postgres function (SECURITY DEFINER, atomic stock
+// check + decrement) and only emails the order confirmation if that succeeds.
+// Because everything here is decided by an unauthenticated caller, everything
+// the decision rests on has to be signed and checked:
 // the signature must cover the order id, amount, currency and status
 // (verify.ts), the paid amount must match the stored total, and the order's
 // current state must allow the transition.

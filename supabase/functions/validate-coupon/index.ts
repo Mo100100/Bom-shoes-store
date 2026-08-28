@@ -22,13 +22,18 @@
 // otherwise confirm a code exists shares one identical reason (see
 // CouponRejectionCode in ../_shared/pricing.ts).
 //
-// One preview gap remains, and it is customer-favourable: resolveBestDiscount
-// needs a real shipping cost to value a free_shipping coupon, and this
-// endpoint has none, so such a coupon nets 0 here and can never win the
+// resolveBestDiscount needs a real shipping cost to value a free_shipping
+// coupon at all. The caller may send `regionCode` (the checkout page does,
+// once a governorate is picked) and this looks that region's price up from
+// site_content.shipping -- the SAME config create-order prices by, and never
+// a price the client sends, which would let a caller inflate a free_shipping
+// coupon into an arbitrary discount. An unknown code is rejected exactly as
+// create-order rejects it.
+//
+// Without a regionCode (the basket page, which has no address yet) shipping
+// is 0, so a free_shipping coupon nets 0 there and can never win the
 // comparison. The freeShipping boolean carries it instead, reported when the
 // customer's own valid code grants free shipping and nothing else beat it.
-// An AUTOMATIC free_shipping promotion is therefore still not previewed: the
-// customer is charged less than shown, never more.
 //
 // verify_jwt is left at its default (true), same reasoning as create-order:
 // the anon-key frontend client calls this, and the anon key is itself a valid
@@ -54,10 +59,12 @@ Deno.serve(async (req: Request) => {
     const body = (await req.json().catch(() => null)) as {
       code?: string
       items?: CartItemInput[]
+      regionCode?: string
     } | null
 
     const code = body?.code?.trim() ?? ''
     const items = body?.items
+    const regionCode = typeof body?.regionCode === 'string' ? body.regionCode.trim() : ''
 
     if (!Array.isArray(items) || items.length === 0) {
       return jsonResponse({ valid: false, reason: 'Cart is empty' }, 400)
@@ -83,6 +90,21 @@ Deno.serve(async (req: Request) => {
       )
     }
 
+    // Authoritative shipping, looked up the same way create-order looks it up
+    // (see that file around the site_content.shipping read). No region sent
+    // means no address chosen yet, which is 0 rather than an error.
+    let shippingCost = 0
+    if (regionCode) {
+      const { data: shipRow } = await admin
+        .from('site_content').select('value').eq('key', 'shipping').maybeSingle()
+      const shipRegions = ((shipRow?.value as { regions?: Array<{ code: string; price: number }> } | null)?.regions) ?? []
+      const region = shipRegions.find(r => r.code === regionCode)
+      if (!region) {
+        return jsonResponse({ valid: false, reason: 'Please choose a valid delivery region.' }, 400)
+      }
+      shippingCost = Math.max(0, Number(region.price) || 0)
+    }
+
     const pricing = await resolveCartPricing(admin, items)
     if (!pricing.ok) {
       return jsonResponse({ valid: false, reason: pricing.error }, 400)
@@ -94,6 +116,7 @@ Deno.serve(async (req: Request) => {
       productById: pricing.productById,
       resolvedItems: pricing.items,
       userId: getUserIdFromAuthHeader(req),
+      shippingCost,
     }
 
     const explicit = code ? await evaluateCouponByCode(admin, code, ctx) : null
@@ -119,8 +142,10 @@ Deno.serve(async (req: Request) => {
       discountAmount: resolution.discountAmount,
       discountType: resolution.discountType,
       description: resolution.description,
-      // See the free_shipping note in this file's header: reported only when
-      // nothing else won, which is exactly when create-order would apply it.
+      // See the free_shipping note in this file's header: only meaningful
+      // when there is no regionCode, since with a real shipping cost the
+      // waiver is already inside discountAmount (that is how create-order
+      // charges it too -- computeOrderTotal subtracts it from the total).
       freeShipping: !!(explicit?.valid && explicit.freeShipping && resolution.discountAmount === 0),
     })
   } catch (err) {

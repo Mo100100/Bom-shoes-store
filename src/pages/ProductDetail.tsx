@@ -49,7 +49,11 @@ function StarRow({ rating, size = 'w-4 h-4', onRate }: { rating: number; size?: 
 // (including this product itself) joined to their product row -- enough to
 // show thumbnails/names/quantities and compute the bundle price vs buying
 // separately, without a second round trip per item.
-type BundleWithItems = Bundle & { items: (BundleItem & { products: Product })[] }
+//
+// unitPrice is what ONE of that item costs in this bundle: price_override ??
+// products.price, taken from the very variant addBundleToBag will add. See
+// loadBundles.
+type BundleWithItems = Bundle & { items: (BundleItem & { products: Product; unitPrice: number })[] }
 
 export default function ProductDetail() {
   const { slug } = useParams()
@@ -183,11 +187,11 @@ export default function ProductDetail() {
   }
 
   // Fire-and-forget like loadReviews -- doesn't block the page's loading
-  // spinner. Two round trips (not N+1): first find which active bundles
-  // require this product, then fetch every item those bundles need in one
-  // batched query. Leaves `bundles` empty (not an error) for the common case
-  // of a product that isn't in any bundle -- the section below simply
-  // doesn't render.
+  // spinner. Three round trips (not N+1): find which active bundles require
+  // this product, fetch every item those bundles need in one batched query,
+  // then fetch every one of those products' variants in one more. Leaves
+  // `bundles` empty (not an error) for the common case of a product that
+  // isn't in any bundle -- the section below simply doesn't render.
   async function loadBundles(productId: string) {
     const { data: matches } = await supabase
       .from('bundle_items')
@@ -204,9 +208,29 @@ export default function ProductDetail() {
     const bundleById = new Map((matches ?? []).map((m: any) => [m.bundle_id, m.bundles]))
     const { data: items } = await supabase.from('bundle_items').select('*, products(*)').in('bundle_id', bundleIds)
 
+    // The box has to quote what addBundleToBag will actually add, and that is
+    // firstInStockVariant's price_override ?? products.price -- the rule the
+    // server charges by. Quoting products.price alone under-quoted every
+    // bundle holding an override-priced product. One batched query for all of
+    // them, ordered exactly as addBundleToBag orders its own, so the two pick
+    // the same variant.
+    const productIds = Array.from(new Set((items ?? []).map((i: any) => i.product_id as string)))
+    const { data: allVariants } = await supabase
+      .from('product_variants').select('*').in('product_id', productIds).order('size').order('color')
+    const variantsByProduct = new Map<string, ProductVariant[]>()
+    for (const v of allVariants ?? []) {
+      const arr = variantsByProduct.get(v.product_id) ?? []
+      arr.push(v)
+      variantsByProduct.set(v.product_id, arr)
+    }
+    const pricedItems = (items ?? []).map((i: any) => ({
+      ...i,
+      unitPrice: Number(firstInStockVariant(variantsByProduct.get(i.product_id) ?? [])?.price_override ?? i.products.price) || 0,
+    }))
+
     setBundles(bundleIds.map(id => ({
       ...bundleById.get(id),
-      items: (items ?? []).filter((i: any) => i.bundle_id === id),
+      items: pricedItems.filter((i: any) => i.bundle_id === id),
     })))
   }
 
@@ -433,10 +457,6 @@ export default function ProductDetail() {
   // so switching between products never stacks up duplicate script tags.
   useEffect(() => {
     if (!product) return
-    // total_stock (not the deprecated per-product `stock` field) is the
-    // fallback when this product has no variants -- see the Product type note.
-    const outOfStockForLd = hasVariants ? (!selectedVariant || selectedVariant.stock === 0) : product.total_stock === 0
-
     const jsonLd: Record<string, unknown> = {
       '@context': 'https://schema.org',
       '@type': 'Product',
@@ -450,7 +470,11 @@ export default function ProductDetail() {
         // through Intl.NumberFormat, which Google can't parse.
         price: Number(effectivePrice).toFixed(2),
         priceCurrency: SETTLEMENT_CURRENCY,
-        availability: outOfStockForLd ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
+        // The SAME outOfStock the Add button uses. It used to be re-derived
+        // here from total_stock, the variants-only aggregate, so a legacy
+        // product with no variant rows was published to Google as OutOfStock
+        // while the page itself offered it for sale.
+        availability: outOfStock ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
       },
     }
     // schema.org doesn't want a fake 0/0 rating block -- omit entirely rather
@@ -471,7 +495,7 @@ export default function ProductDetail() {
       document.head.appendChild(script)
     }
     script.textContent = JSON.stringify(jsonLd)
-  }, [product, heroImage, effectivePrice, hasVariants, selectedVariant])
+  }, [product, heroImage, effectivePrice, outOfStock])
 
   // Only strip the tag on unmount (leaving the product page entirely) -- not
   // on every dependency change above, which would just churn the same tag.
@@ -651,7 +675,7 @@ export default function ProductDetail() {
                 <p className="text-xs tracking-widest uppercase text-muted-foreground mb-3">{t.bundleSectionTitle}</p>
                 <div className="space-y-4">
                   {bundles.map(bundle => {
-                    const regularTotal = bundle.items.reduce((sum, i) => sum + i.products.price * i.quantity, 0)
+                    const regularTotal = bundle.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0)
                     const discountedTotal = bundle.discount_type === 'percentage'
                       ? regularTotal * (1 - bundle.discount_value / 100)
                       : Math.max(0, regularTotal - bundle.discount_value)

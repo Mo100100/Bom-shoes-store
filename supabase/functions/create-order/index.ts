@@ -50,11 +50,12 @@ type CustomerInput = {
 
 const TAX_RATE = 0.08
 // Kashier is an Egyptian gateway and the store settles in EGP: every payment is
-// always charged in EGP, regardless of the display currency an admin picks in
-// store settings (which only controls how prices are shown to shoppers). The
-// numeric price is sent to Kashier as-is in EGP, so prices should be entered as
-// EGP amounts. Kept a fixed server-side constant (never trust a client-supplied
-// currency) so the signed hash and the charged currency can't be tampered with.
+// always charged in EGP. Prices are shown in EGP too -- the admin display-
+// currency selector that once let them disagree is gone (see
+// src/contexts/CurrencyContext.tsx). The numeric price is sent to Kashier as-is
+// in EGP, so prices should be entered as EGP amounts. Kept a fixed server-side
+// constant (never trust a client-supplied currency) so the signed hash and the
+// charged currency can't be tampered with.
 const CURRENCY = 'EGP'
 
 // Ceiling on a single cash-on-delivery order. COD is the only path that

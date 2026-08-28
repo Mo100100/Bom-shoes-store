@@ -9,7 +9,7 @@
 // and coupon codes at full speed.
 //
 // The counting lives in public.record_rate_limit_attempt() (see
-// supabase/migrations/20260802000000_checkout_abuse_controls.sql) so the
+// supabase/migrations/20260806000000_checkout_abuse_controls.sql) so the
 // count-and-record is one atomic round trip rather than a read followed by a
 // write that another request can slip between. This module owns the two things
 // the database should not: how a caller is identified, and what the limits are.

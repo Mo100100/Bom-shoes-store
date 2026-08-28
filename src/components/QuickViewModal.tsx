@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import * as Dialog from '@radix-ui/react-dialog'
 import { Loader2, ShoppingBag, X } from 'lucide-react'
@@ -32,14 +32,17 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
   const t = useT()
   const { formatPrice } = useCurrency()
 
-  useEffect(() => {
+  // useLayoutEffect, not useEffect: the reset below has to land BEFORE the
+  // browser paints. A passive effect runs after paint, so opening product B
+  // right after product A failed showed A's error for one frame -- and so did
+  // reopening the same product that just failed. Moving the reset out of the
+  // async load() body did nothing about that (calling an async function
+  // already runs it synchronously up to its first await, so both versions
+  // queued the reset in the same pass); running the pass earlier is the fix.
+  useLayoutEffect(() => {
     if (!productId) return
     let cancelled = false
 
-    // Reset synchronously here, not inside the async load() body below: this
-    // runs immediately when productId changes, before the network round trip
-    // starts, so opening product B right after product A's error never
-    // paints A's stale notFound/loadError over B while B is still loading.
     setLoading(true)
     setNotFound(false)
     setLoadError(false)
@@ -110,7 +113,11 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
   // whole product, so falling back to it quoted 400 for a size that has no
   // override and therefore costs the base 500.
   const effectivePrice = selectedVariant ? (selectedVariant.price_override ?? product?.price ?? 0) : (product?.price ?? 0)
-  const outOfStock = hasVariants ? (!selectedVariant || selectedVariant.stock === 0) : (product?.total_stock ?? 0) === 0
+  // products.stock for the no-variant fallback, exactly as ProductDetail does
+  // it. NOT total_stock: that is the catalog view's sum over the variant rows,
+  // so a legacy product with none always read 0 and offered a disabled
+  // "Out of stock" button for stock it actually had.
+  const outOfStock = hasVariants ? (!selectedVariant || selectedVariant.stock === 0) : (product?.stock ?? 0) === 0
   const mainImage = images[0]?.url || product?.image_url || ''
 
   function sizeAvailable(s: string) {

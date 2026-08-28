@@ -662,7 +662,19 @@ create unique index if not exists orders_client_request_id_key
 --     landed is ever considered. Pre-existing orders are the owner's business.
 --   - payment_method <> 'cash': a cash order is never abandoned in this sense.
 --     It reserves its stock at placement, and release_expired_cod_orders owns
---     its expiry.
+--     its expiry -- but only for a CONFIRMED one, which is the gap below.
+--
+-- KNOWN GAP, deliberately left to the admin rather than automated. A COD order
+-- stuck at status = 'pending' belongs to neither job: this one excludes it by
+-- payment_method, and release_expired_cod_orders requires status =
+-- 'confirmed'. It is produced by one narrow failure -- create-order committed
+-- the insert but the place_cod_order RPC never completed -- so it holds no
+-- stock and costs no money. What it does do is match prevent_live_variant_delete
+-- forever, permanently blocking removal of the variants it references. The
+-- remedy is manual and already available: admin cancel is allowed from any
+-- status. Automating it was judged the riskier option, because widening either
+-- job's predicate to reach these rows also brings genuinely stock-holding COD
+-- orders into range of a cancellation that would not return their stock.
 --
 -- 72 hours, not a few: Kashier retries a webhook for 24 hours, and cancelling
 -- an order whose delivery is merely late would leave a real payment attached
@@ -734,10 +746,14 @@ select cron.schedule(
 -- 9. Assert the write flag actually landed.
 --
 -- enforce_order_state_writer refuses any order state change that does not
--- carry app.order_write, so a typo in one of the ALTER FUNCTION lines above,
--- or a later migration re-emitting one of these bodies without the setting,
+-- carry app.order_write, so a typo in one of the ALTER FUNCTION lines above
 -- takes out that path completely: COD checkout, payment fulfilment, refunds,
 -- cancellations. Fail the deploy here instead of finding out at the checkout.
+--
+-- Scope, precisely: this catches a typo the FIRST time this migration is
+-- applied, and nothing after that. An applied migration never runs again, so
+-- a LATER migration re-emitting one of these bodies without the setting is
+-- NOT caught here -- whoever writes it has to re-assert, or copy this block.
 -- ---------------------------------------------------------------------------
 do $assert$
 declare
