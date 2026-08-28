@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useCart, CartItem } from '@/contexts/CartContext'
-import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
-import { supabase } from '@/lib/supabase'
+import { supabase, readServerError } from '@/lib/supabase'
 import { Minus, Plus, X, ArrowRight, ShoppingBag } from 'lucide-react'
 import { toast } from 'sonner'
 import { useSeo } from '@/hooks/useSeo'
@@ -18,7 +17,6 @@ function lineKey(item: CartItem): string {
 
 export default function Cart() {
   const { items, updateQuantity, removeItem, totalItems, totalPrice, clearCart, revalidateCart, couponCode, setCouponCode } = useCart()
-  const { user } = useAuth()
   const navigate = useNavigate()
   const t = useT()
   const { lang } = useLanguage()
@@ -40,41 +38,61 @@ export default function Cart() {
 
   // Re-check the cart against the database for the customer who left this tab
   // open since yesterday (the provider only does it at hydration), then
-  // re-preview a coupon already applied in a previous visit (persisted in
-  // localStorage) -- silently drops it if it's no longer valid. Only runs
-  // once on mount; a later cart-quantity edit won't refresh this preview
-  // (see task note: reasonable preview, not bulletproof) -- the authoritative
-  // number is always recomputed at order creation regardless.
+  // preview the discount -- a coupon already applied in a previous visit
+  // (persisted in localStorage), and with or without one, any auto-applied
+  // promotion or bundle the cart already qualifies for. Those are applied at
+  // checkout whether or not they are shown, so leaving them out made this
+  // total disagree with the amount charged. Only runs once on mount; a later
+  // cart-quantity edit won't refresh this preview (see task note: reasonable
+  // preview, not bulletproof) -- the authoritative number is always recomputed
+  // at order creation regardless.
   useEffect(() => {
     void revalidateCart()
-    if (couponCode && items.length > 0) {
-      void applyCoupon(couponCode, { silent: true })
+    if (items.length > 0) {
+      void previewDiscount(couponCode, { silent: true })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  async function applyCoupon(code: string, opts?: { silent?: boolean }) {
+  // Every rejection that would otherwise confirm a code exists comes back as
+  // the same 'unavailable' from the server (it is a code oracle otherwise),
+  // so there is one generic message plus the two the customer can act on.
+  function couponMessage(data: { reasonCode?: string; minOrderAmount?: number } | null): string {
+    if (data?.reasonCode === 'min_order' && typeof data.minOrderAmount === 'number') {
+      return t.cartCouponMinOrder(formatPrice(data.minOrderAmount))
+    }
+    if (data?.reasonCode === 'sign_in_required') return t.cartCouponSignIn
+    return t.cartCouponInvalid
+  }
+
+  // `code` is optional: with one this validates it, without one it previews
+  // whatever the cart qualifies for on its own.
+  async function previewDiscount(code: string | null, opts?: { silent?: boolean }) {
     setApplying(true)
     try {
       const { data, error } = await supabase.functions.invoke('validate-coupon', {
         body: {
-          code,
+          ...(code ? { code } : {}),
           items: sellable.map(i => ({ product_id: i.product.id, size: i.size, color: i.color, quantity: i.quantity })),
-          customerEmail: user?.email,
         },
       })
       if (error) throw error
       if (!data?.valid) {
+        // Only a typed code can be rejected. Drop it and fall back to the
+        // no-code preview, so a dead code doesn't also hide a promotion the
+        // cart still qualifies for.
         if (opts?.silent) setCouponCode(null)
-        else toast.error(data?.reason || t.cartCouponInvalid)
+        else toast.error(couponMessage(data))
         setDiscount(null)
+        if (code) void previewDiscount(null, { silent: true })
         return
       }
-      setCouponCode(code)
+      if (code) setCouponCode(code)
       setDiscount({ amount: data.discountAmount, description: data.description, freeShipping: !!data.freeShipping })
-    } catch (err: any) {
+    } catch (err) {
       console.error(err)
-      if (!opts?.silent) toast.error(err?.message || t.cartCouponInvalid)
+      const { code: errorCode } = await readServerError(err)
+      if (!opts?.silent) toast.error(errorCode === 'rate_limited' ? t.cartCouponTooMany : t.cartCouponInvalid)
       setDiscount(null)
     } finally {
       setApplying(false)
@@ -84,13 +102,16 @@ export default function Cart() {
   function handleApplyClick() {
     const code = couponInput.trim()
     if (!code) return
-    void applyCoupon(code)
+    void previewDiscount(code)
   }
 
   function handleRemoveCoupon() {
     setCouponCode(null)
     setDiscount(null)
     setCouponInput('')
+    // Removing the code doesn't remove an auto-applied promotion, so re-preview
+    // without it rather than showing a total the checkout won't charge.
+    void previewDiscount(null, { silent: true })
   }
 
   // Shipping is priced per governorate at checkout (the customer hasn't chosen

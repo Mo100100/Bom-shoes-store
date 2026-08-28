@@ -4,7 +4,7 @@ import { useCart } from '@/contexts/CartContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
-import { supabase } from '@/lib/supabase'
+import { supabase, readServerError } from '@/lib/supabase'
 import type { CreateOrderRequest, CreateOrderResponse } from '@/lib/kashier'
 import {
   DEFAULT_CHECKOUT_CONFIG, fetchCheckoutConfig, fetchShippingConfig, regionLabel,
@@ -14,25 +14,6 @@ import { ArrowLeft, CreditCard, Banknote } from 'lucide-react'
 import { toast } from 'sonner'
 import { Link } from 'react-router-dom'
 import { useSeo } from '@/hooks/useSeo'
-
-// create-order rejects an over-cap or rate-limited request with a machine-
-// readable `code` (and the ceiling that was hit) in the response body, so the
-// customer can be told what to actually change rather than "please try again".
-// functions.invoke surfaces any non-2xx as a FunctionsHttpError whose
-// `context` is the raw Response, which is the only place that body is
-// reachable from. Anything else (a network drop, a 5xx with no body) yields
-// nothing and falls through to the generic message.
-async function readServerError(err: unknown): Promise<{ code?: string; limit?: number }> {
-  const context = (err as { context?: unknown } | null)?.context
-  if (!(context instanceof Response)) return {}
-  // clone() itself throws synchronously if the body was already read, so the
-  // whole read is guarded, not just the json() promise.
-  try {
-    return await context.clone().json()
-  } catch {
-    return {}
-  }
-}
 
 export default function Checkout() {
   const { items, totalPrice, clearCart, couponCode } = useCart()
@@ -82,19 +63,21 @@ export default function Checkout() {
   const sellable = items.filter(i => !i.unavailable)
   const hasUnavailable = sellable.length !== items.length
 
-  // Live preview of the coupon carried over from the Cart page, so the
-  // summary/total shown here isn't missing the discount the whole time the
-  // user is filling out the form -- recomputed once (items don't change on
-  // this page). The authoritative number always comes back from create-order
-  // at submit time below, which overwrites this if it differs.
+  // Live preview of every discount this cart gets: the coupon carried over
+  // from the Cart page AND any auto-applied promotion or bundle. The server
+  // resolves both (the same call create-order makes), so this runs even with
+  // no coupon code -- an auto-promotion used to be applied at checkout but
+  // never previewed, which made the summary disagree with the amount charged.
+  // Recomputed once, since items don't change on this page. The authoritative
+  // number still comes back from create-order at submit time below and
+  // overwrites this if it differs.
   useEffect(() => {
-    if (!couponCode) { setDiscountAmount(0); setFreeShipping(false); return }
+    if (sellable.length === 0) { setDiscountAmount(0); setFreeShipping(false); return }
     let cancelled = false
     supabase.functions.invoke('validate-coupon', {
       body: {
-        code: couponCode,
+        ...(couponCode ? { code: couponCode } : {}),
         items: sellable.map(i => ({ product_id: i.product.id, size: i.size, color: i.color, quantity: i.quantity })),
-        customerEmail: form.email || user?.email,
       },
     }).then(({ data }) => {
       if (cancelled) return

@@ -26,8 +26,15 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { corsHeaders } from '../_shared/cors.ts'
 import { hmacSha256Hex } from '../_shared/kashier-crypto.ts'
-import { resolveCartPricing, evaluateCouponByCode, resolveBestDiscount, type CartItemInput } from '../_shared/pricing.ts'
+import {
+  resolveCartPricing,
+  evaluateCouponByCode,
+  resolveBestDiscount,
+  computeOrderTotal,
+  type CartItemInput,
+} from '../_shared/pricing.ts'
 import { checkRateLimit, RATE_LIMITS } from '../_shared/rate-limit.ts'
+import { getUserIdFromAuthHeader } from '../_shared/auth.ts'
 
 type OrderItemInput = CartItemInput
 
@@ -173,12 +180,17 @@ Deno.serve(async (req: Request) => {
     // ../_shared/pricing.ts, so the two can never disagree on the money-
     // critical bundle/BXGY math; see that function's doc comment for the
     // full explicit-code-vs-auto-promotion-vs-bundle precedence rule).
+    const userId = getUserIdFromAuthHeader(req)
+
     const couponCtx = {
       subtotal,
       items,
       productById,
       resolvedItems: orderItems,
-      customerEmail: customer.email,
+      // The verified caller, not the typed-in email: a coupon with a
+      // per-customer limit is counted against this and refused when it is
+      // null (see checkUsageLimits).
+      userId,
       shippingCost: shipping,
     }
 
@@ -193,10 +205,10 @@ Deno.serve(async (req: Request) => {
     const discountAmount = resolution.discountAmount
     const winningCouponId = resolution.couponId
 
-    // Round to cents so the stored total_amount exactly matches the amount
-    // string used in the Kashier hash/redirect below (both derive from the
-    // same rounded value, avoiding float-precision drift between the two).
-    const total = Math.round((subtotal + shipping + tax - discountAmount) * 100) / 100
+    // Rounded to cents (so the stored total_amount and the amount string in
+    // the Kashier hash below derive from one value) and floored at 0 (so no
+    // discount can ever post a negative amount to the gateway).
+    const total = computeOrderTotal(subtotal, shipping, tax, discountAmount)
 
     // The value half of the COD ceiling, checked against the server's own
     // total rather than anything the client said it would be.
@@ -208,7 +220,6 @@ Deno.serve(async (req: Request) => {
     }
 
     const orderRef = `BOM-${Date.now()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
-    const userId = getUserIdFromAuthHeader(req)
 
     const { data: inserted, error: insertError } = await admin
       .from('orders')
@@ -291,24 +302,6 @@ function jsonResponse(body: unknown, status = 200) {
     status,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   })
-}
-
-// The Edge Runtime already verified the caller's JWT signature before our
-// code ever runs (verify_jwt defaults to true) -- so we just read its claims,
-// no need to re-verify. Guest checkouts arrive with the anon key's JWT
-// (role: 'anon', no real user), logged-in users with their access token
-// (role: 'authenticated', sub: their user id).
-function getUserIdFromAuthHeader(req: Request): string | null {
-  try {
-    const authHeader = req.headers.get('Authorization') ?? ''
-    const token = authHeader.replace(/^Bearer\s+/i, '')
-    const payloadB64 = token.split('.')[1]
-    if (!payloadB64) return null
-    const payload = JSON.parse(atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/')))
-    return payload.role === 'authenticated' && payload.sub ? payload.sub : null
-  } catch {
-    return null
-  }
 }
 
 type CheckoutOpts = { orderRef: string; amount: number; origin: string; customerEmail: string; lang: string }

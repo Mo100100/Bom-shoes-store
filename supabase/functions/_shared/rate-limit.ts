@@ -56,15 +56,23 @@ const HOUR = 3600
 // order_status and validate_coupon are read-only existence oracles, and both
 // are called AUTOMATICALLY rather than only on a user action: order-status on
 // every CheckoutSuccess mount, and validate-coupon on every Cart and Checkout
-// mount that carries a coupon (Cart.tsx, Checkout.tsx). So their ceilings have
-// to cover a page-load per shopper, not a deliberate attempt per shopper.
-// Even at 120 per 10 minutes an enumerator gets about 17k tries a day against
-// spaces vastly larger than that, which is no threat.
+// mount, coupon or no coupon (it now previews auto-applied promotions too, so
+// the storefront total matches the amount charged). So their ceilings have to
+// cover a page-load per shopper, not a deliberate attempt per shopper.
+//
+// validate_coupon is therefore the loosest of the four: an ordinary shopper
+// with no coupon at all spends two of its allowance just walking from the
+// basket to the checkout form, so 240 per 10 minutes is roughly 120 unrelated
+// shoppers behind one carrier-NAT address. It costs nothing defensively: an
+// enumerator still gets only about 34k tries a day against a code space
+// vastly larger than that, and the response no longer tells them whether a
+// code they guessed actually exists (see validate-coupon/index.ts), which is
+// what made enumeration worth attempting in the first place.
 export const RATE_LIMITS = {
   codOrder: { endpoint: 'cod_order', windowSeconds: 6 * HOUR, ipLimit: 60, phoneLimit: 5 },
   onlineOrder: { endpoint: 'online_order', windowSeconds: HOUR, ipLimit: 120, phoneLimit: 15 },
   orderStatus: { endpoint: 'order_status', windowSeconds: 600, ipLimit: 120 },
-  validateCoupon: { endpoint: 'validate_coupon', windowSeconds: 600, ipLimit: 120 },
+  validateCoupon: { endpoint: 'validate_coupon', windowSeconds: 600, ipLimit: 240 },
 } satisfies Record<string, RateLimitRule>
 
 // Never store or log a raw IP. HMAC rather than a bare SHA-256 because the

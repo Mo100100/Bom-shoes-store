@@ -5,6 +5,25 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIU
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+// The edge functions reject an over-cap, rate-limited or otherwise refusable
+// request with a machine-readable `code` (and the ceiling that was hit) in the
+// response body, so the customer can be told what to actually change rather
+// than "please try again". functions.invoke surfaces any non-2xx as a
+// FunctionsHttpError whose `context` is the raw Response, which is the only
+// place that body is reachable from. Anything else (a network drop, a 5xx with
+// no body) yields nothing and the caller falls back to a generic message.
+export async function readServerError(err: unknown): Promise<{ code?: string; limit?: number }> {
+  const context = (err as { context?: unknown } | null)?.context
+  if (!(context instanceof Response)) return {}
+  // clone() itself throws synchronously if the body was already read, so the
+  // whole read is guarded, not just the json() promise.
+  try {
+    return await context.clone().json()
+  } catch {
+    return {}
+  }
+}
+
 export type Product = {
   id: string
   name: string
