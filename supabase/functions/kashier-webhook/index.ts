@@ -26,9 +26,10 @@ import {
 } from './verify.ts'
 
 type KashierWebhookPayload = {
-  // Documented for completeness only: `event` sits outside `data` and is
-  // therefore never covered by the signature, so nothing here reads it.
-  event: string
+  // `event` sits outside `data` and is therefore never covered by the
+  // signature: it is only ever used to reject a delivery, never to accept
+  // one (see deriveOutcome).
+  event?: string
   data: KashierWebhookData
 }
 
@@ -42,9 +43,12 @@ Deno.serve(async (req: Request) => {
 
   try {
     const rawBody = await req.text()
+    // Shape-checked, not just parsed: this endpoint is unauthenticated, so a
+    // body without `data` must be a cheap 400 rather than a thrown 500 that
+    // Kashier would then retry for 24h.
     const payload = parsePayload(rawBody)
-    if (!payload) {
-      console.error('kashier-webhook: rejected, body is not valid JSON')
+    if (!payload?.data || typeof payload.data !== 'object') {
+      console.error('kashier-webhook: rejected, body is not a valid webhook payload')
       return new Response('invalid body', { status: 400 })
     }
 
@@ -97,14 +101,18 @@ Deno.serve(async (req: Request) => {
       return new Response('ignored: unknown order', { status: 200 })
     }
 
-    // The outcome comes from the signed `status` field, never from the
-    // unsigned top-level `event` (see deriveOutcome). Anything that isn't a
-    // clear success or failure -- a pending/authorized notification, a refund
-    // or void, which land here with their own statuses -- changes nothing.
-    const outcome = deriveOutcome(payload.data)
+    // The outcome comes from the signed `status`; the unsigned `event` can
+    // only veto a delivery, never authorise one (see deriveOutcome). Anything
+    // that isn't a clear payment success or failure changes nothing.
+    const outcome = deriveOutcome(payload.data, payload.event)
     const plan = planOrderTransition(order, outcome)
     if (plan.action === 'ignore') {
-      console.log(`kashier-webhook: no state change for ${merchantOrderId}: ${plan.reason}`)
+      const message = `kashier-webhook: no state change for ${merchantOrderId}: ${plan.reason}`
+      // A successful payment we are declining to apply means the card was
+      // charged for an order that will not ship: that needs a human, so log
+      // it loudly rather than at info level.
+      if (outcome === 'paid') console.error(message)
+      else console.log(message)
       return new Response('ignored: no state change', { status: 200 })
     }
 

@@ -75,11 +75,27 @@ test('the paid amount must match the stored total in EGP', () => {
   assert.equal(checkPaidAmount(paidPayload(), null).ok, false)
 })
 
-test('the outcome comes from the signed status, not the unsigned event', () => {
-  assert.equal(deriveOutcome(paidPayload()), 'paid')
-  assert.equal(deriveOutcome(paidPayload({ status: 'FAILED' })), 'failed')
-  assert.equal(deriveOutcome(paidPayload({ status: 'PENDING' })), 'ignore')
-  assert.equal(deriveOutcome(paidPayload({ status: undefined })), 'ignore')
+test('the outcome comes from the signed status', () => {
+  assert.equal(deriveOutcome(paidPayload(), 'pay'), 'paid')
+  assert.equal(deriveOutcome(paidPayload({ status: 'FAILED' }), 'pay'), 'failed')
+  assert.equal(deriveOutcome(paidPayload({ status: 'PENDING' }), 'pay'), 'ignore')
+  assert.equal(deriveOutcome(paidPayload({ status: undefined }), 'pay'), 'ignore')
+  // A signed SUCCESS with no event at all still pays: `event` only vetoes.
+  assert.equal(deriveOutcome(paidPayload(), undefined), 'paid')
+})
+
+test('a refund or void carrying status SUCCESS never fulfils', () => {
+  // The refund of an order fulfill_order marked 'failed' arrives with the
+  // same order, amount, currency and a valid signature. Only the unsigned
+  // `event` distinguishes it, so it must veto.
+  const failedOrder = { status: 'pending', payment_status: 'failed' }
+  for (const event of ['refund', 'REFUND', 'void', 'authorize']) {
+    const outcome = deriveOutcome(paidPayload(), event)
+    assert.equal(outcome, 'ignore', `event '${event}' must not produce a paid outcome`)
+    assert.equal(planOrderTransition(failedOrder, outcome).action, 'ignore')
+  }
+  // A capture of an earlier authorisation is a real payment and still works.
+  assert.equal(deriveOutcome(paidPayload(), 'capture'), 'paid')
 })
 
 test('a paid order is never flipped to failed', () => {

@@ -36,6 +36,10 @@ export type PaymentOutcome = 'paid' | 'failed' | 'ignore'
 
 const FAILED_STATUSES = ['FAILED', 'DECLINED', 'CANCELLED', 'CANCELED', 'REJECTED', 'ERROR']
 
+// The only `event` values that may end in a fulfilled order. Everything else
+// Kashier can send (refund, void, authorize) is ignored: see deriveOutcome.
+const FULFILLABLE_EVENTS = ['pay', 'capture']
+
 // Verifies x-kashier-signature over the data.signatureKeys fields.
 // Construction: HMAC-SHA256 over "k=v" pairs in signatureKeys array order
 // joined with "&", which is the construction Kashier documents for webhooks.
@@ -71,20 +75,32 @@ export async function verifyKashierSignature(
   }
 
   // Never log the signed message itself: it can carry masked card and customer
-  // fields. Key names plus a one-way digest are enough to correlate a
-  // mismatch with a specific delivery.
-  console.error('kashier-webhook: signature did not match', JSON.stringify({
+  // fields. The order reference, the key names and a one-way digest are enough
+  // to find which orders are stuck if this ever starts firing.
+  console.error('kashier-webhook: signature did not match, tried the api key and the secret key', JSON.stringify({
+    merchantOrderId: data.merchantOrderId ?? null,
+    keysTried: keys.filter(Boolean).length,
     signatureKeys: sigKeys,
     messageDigest: (await sha256Hex(message)).slice(0, 16),
   }))
   return false
 }
 
-// payload.event (pay|refund|authorize|void|capture) is top-level and never
-// covered by the signature, so it can't be allowed to gate fulfillment. The
-// outcome is derived from the signed `status` field instead, which
+// The outcome comes from the signed `status` field, which
 // verifyKashierSignature guarantees is part of the signed key set.
-export function deriveOutcome(data: KashierWebhookData): PaymentOutcome {
+//
+// The top-level `event` (pay|refund|authorize|void|capture) sits outside
+// `data` and is never signed, so it is used as a DENY-only filter and nothing
+// more: it can drop a delivery but can never grant one. That asymmetry
+// matters, because a refund or void notification can carry status 'SUCCESS'
+// for the same order, amount and currency as the original payment. Without
+// this filter, refunding an order that fulfill_order had marked 'failed'
+// (out of stock) would come straight back in as a fresh, valid, signed
+// "payment" and decrement the stock for money that was just returned.
+export function deriveOutcome(data: KashierWebhookData, event?: unknown): PaymentOutcome {
+  if (typeof event === 'string' && event.trim() && !FULFILLABLE_EVENTS.includes(event.trim().toLowerCase())) {
+    return 'ignore'
+  }
   const status = String(data.status ?? '').toUpperCase()
   if (status === 'SUCCESS') return 'paid'
   if (FAILED_STATUSES.includes(status)) return 'failed'
@@ -107,11 +123,16 @@ export function checkPaidAmount(
   if (!Number.isFinite(paid)) {
     return { ok: false, reason: 'paid amount is missing or not a number' }
   }
-  if (typeof orderTotal !== 'number' || !Number.isFinite(orderTotal)) {
-    return { ok: false, reason: 'order has no stored total to compare against' }
+  // orders.total_amount is a Postgres numeric: PostgREST sends it as a JSON
+  // number, but every other reader in this codebase coerces defensively and
+  // so does this one. A strict typeof check here would 400 every payment in
+  // the store if that serialisation ever changed.
+  const total = orderTotal === null || orderTotal === undefined ? NaN : Number(orderTotal)
+  if (!Number.isFinite(total)) {
+    return { ok: false, reason: 'order has no usable stored total to compare against' }
   }
-  if (Math.abs(paid - orderTotal) > AMOUNT_TOLERANCE + 1e-9) {
-    return { ok: false, reason: `paid ${paid} does not match order total ${orderTotal}` }
+  if (Math.abs(paid - total) > AMOUNT_TOLERANCE + 1e-9) {
+    return { ok: false, reason: `paid ${paid} does not match order total ${total}` }
   }
   return { ok: true }
 }
