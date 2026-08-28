@@ -20,7 +20,6 @@ export type Product = {
   colors: string[]
   featured: boolean
   created_at: string
-  sale_price: number | null
   materials: string | null
   weight_grams: number | null
   tags: string[]
@@ -76,7 +75,15 @@ export type ProductCatalogEntry = Product & {
   total_stock: number
   available_sizes: string[]
   available_colors: string[]
+  // Bottom and top of the variant price range, both computed in SQL over the
+  // IN-STOCK variants (all variants only when nothing is in stock). Equal
+  // means one flat price; min < max means the grid shows a "from" price.
   min_price: number
+  max_price: number
+  // The single definition of "on sale": min_price is under the product's base
+  // price, i.e. some purchasable variant really is discounted. Computed in the
+  // view so the /sale filter and the SALE badge cannot disagree.
+  has_discount: boolean
   // null (not 0) when the product has no reviews yet -- render "no ratings
   // yet", not a misleading 0-star average.
   avg_rating: number | null

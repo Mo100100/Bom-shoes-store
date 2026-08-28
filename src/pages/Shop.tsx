@@ -69,7 +69,10 @@ export default function Shop() {
       let query = supabase.from('product_catalog').select('*')
       if (category !== 'All') query = query.eq('category', category)
       if (brand) query = query.eq('brand', brand)
-      if (saleOnly) query = query.not('sale_price', 'is', null)
+      // has_discount is the view's own "some in-stock variant is priced under
+      // the base price" flag -- the exact column ProductCard's SALE badge
+      // reads, so /sale and the badge can never mean different things.
+      if (saleOnly) query = query.eq('has_discount', true)
       if (search) query = query.textSearch('search_vector', search, { type: 'websearch' })
       const { data } = await query
       setProducts(data || [])

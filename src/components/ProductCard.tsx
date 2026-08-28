@@ -38,13 +38,17 @@ export default function ProductCard({
   const t = useT()
   const { formatPrice } = useCurrency()
   const isNew = Date.now() - new Date(p.created_at).getTime() < NEW_WINDOW_MS
-  // min_price is min(price_override, products.price) across the variants, which
-  // is the rule the server charges by (supabase/functions/_shared/pricing.ts).
-  // products.sale_price is NOT: no order path has ever read it, so advertising
-  // it here promised a discount the checkout then refused to give. A real,
-  // chargeable discount is a variant priced under the product's own base price.
+  // min_price/max_price/has_discount all come straight from product_catalog,
+  // which computes them from the rule the server actually charges by:
+  // coalesce(price_override, products.price) per variant
+  // (supabase/functions/_shared/pricing.ts). Reading has_discount rather than
+  // re-deriving it here is what keeps this badge and the /sale filter in
+  // Shop.tsx meaning the same thing.
   const displayPrice = Number(p.min_price)
-  const hasSale = displayPrice < Number(p.price)
+  const hasSale = p.has_discount
+  // Sizes are not all the same price, so the lowest one is a starting price,
+  // not the price. Showing it bare is how a 400 card charged 500 at checkout.
+  const isFromPrice = Number(p.max_price) > displayPrice
   const topLabel = p.brand || categoryLabel
 
   return (
@@ -96,7 +100,9 @@ export default function ProductCard({
           {p.name}
         </h3>
         <div className="mt-2 flex items-baseline gap-2">
-          <span className="text-base font-bold text-foreground">{formatPrice(displayPrice)}</span>
+          <span className="text-base font-bold text-foreground">
+            {isFromPrice ? t.shopPriceFrom(formatPrice(displayPrice)) : formatPrice(displayPrice)}
+          </span>
           {hasSale && (
             <span className="text-xs text-muted-foreground line-through">{formatPrice(Number(p.price))}</span>
           )}

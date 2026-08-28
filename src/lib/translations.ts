@@ -161,6 +161,9 @@ export const translations = {
     shopFeatured: 'Featured',
     shopNew: 'New',
     shopSale: 'Sale',
+    // Grid price when a product's sizes are not all the same price -- the
+    // number shown is the cheapest one, not the price of every size.
+    shopPriceFrom: (price: string) => `From ${price}`,
     shopOnlyLeft: (n: number) => `Only ${n} left`,
     shopSearchingFor: (q: string) => `Results for "${q}"`,
     shopClearSearch: 'Clear search',
@@ -626,7 +629,6 @@ export const translations = {
     adminBrandField: 'Brand',
     adminBrandNoneOption: '— None (BOM Store own) —',
     adminCostPrice: 'Cost Price',
-    adminSalePrice: 'Sale Price',
     adminMaterials: 'Materials',
     adminWeightGrams: 'Weight (grams)',
     adminTagsCsv: 'Tags (comma separated)',
@@ -923,6 +925,7 @@ export const translations = {
     shopFeatured: 'مختارة',
     shopNew: 'جديد',
     shopSale: 'تخفيض',
+    shopPriceFrom: (price: string) => `يبدأ من ${price}`,
     shopOnlyLeft: (n: number) => `بقي ${n} فقط`,
     shopSearchingFor: (q: string) => `نتائج "${q}"`,
     shopClearSearch: 'إلغاء البحث',
@@ -1385,7 +1388,6 @@ export const translations = {
     adminBrandField: 'الماركة',
     adminBrandNoneOption: '— بلا ماركة (منتج BOM Store) —',
     adminCostPrice: 'سعر التكلفة',
-    adminSalePrice: 'سعر التخفيض',
     adminMaterials: 'الخامات',
     adminWeightGrams: 'الوزن (جرام)',
     adminTagsCsv: 'الوسوم (مفصولة بفواصل)',

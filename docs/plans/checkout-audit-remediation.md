@@ -539,3 +539,72 @@ Do not restructure components. Keep every change minimal and local.
 
 **Verification:** `pnpm build`, `pnpm lint`. Confirm no em/en dashes remain in
 changed files. Paste output.
+
+---
+
+## Task 12: Remove the dead `sale_price` column and label "from" prices
+
+Added mid-plan after the store owner decided two open questions. Task 5
+discovered that `products.sale_price` is a DEAD column: the admin offers a
+"Sale price" field and the storefront displayed it, but no server code ever
+reads it (`grep -rn sale_price supabase/functions/` returns nothing). Every
+sale the owner entered showed customers a discount and then charged them full
+price. Owner's decisions, both binding:
+
+1. **Remove `sale_price` entirely.** Discounts continue through the per-variant
+   `price_override`, which already works end to end and IS charged correctly.
+2. **Show "from X" in the grid when a product's variants differ in price**, and
+   a plain price when they do not.
+
+**Files:** `src/components/ProductCard.tsx`, `src/pages/Shop.tsx`,
+`src/pages/admin/AdminProducts.tsx`, `src/lib/translations.ts`, `src/lib/supabase.ts`,
+plus one migration and the `product_catalog` view.
+
+**Migration timestamp: `20260805000000`.**
+
+### Item 1: remove `sale_price`
+
+- Drop the "Sale price" input from the admin product form and every write of it.
+- Remove it from the `product_catalog` view and from the TypeScript types.
+- Drop the column itself, but ONLY after confirming nothing reads it. Search
+  the WHOLE repo, not just edge functions - client code, views, types, seeds.
+- `src/pages/Shop.tsx:72` currently implements the `/sale` filter as
+  `.not('sale_price','is',null)`. Rebuild that filter so `/sale` means "has a
+  real, chargeable discount": at least one variant whose `price_override` is
+  below the product's base `price`. This needs the view to expose something
+  the filter can use (for example a `has_discount` boolean or a
+  `max_effective_price`), computed in SQL, not by fetching every product and
+  filtering client-side. Do not introduce an N+1 or a client-side scan.
+- The SALE badge in `ProductCard.tsx` must mean exactly the same thing as the
+  `/sale` filter. They currently disagree; after this task they must not.
+
+### Item 2: "from" pricing
+
+- `product_catalog` exposes `min_price`. The grid renders it as a flat price,
+  so a product with size 43 at 400 and everything else at 500 shows 400 and
+  charges 500 for size 42.
+- When a product's variants differ in effective price, render the grid price
+  as a "from" price using a translated string (`en` and `ar`). When every
+  variant is the same price, render it plain with no prefix.
+- This needs the view to expose enough to tell the two cases apart (for
+  example `max_price` alongside `min_price`). Add it in SQL.
+- Consider whether `min_price` should ignore out-of-stock variants: a price
+  backed only by a sold-out size is not a price anyone can pay. Decide, apply
+  it consistently to BOTH the displayed price and the SALE badge, and state
+  your decision and its reasoning in your report.
+
+### Constraints specific to this task
+
+- The migration must be additive and idempotent, must hardcode no uuids, and
+  must not break `product_catalog`'s existing consumers. `create or replace
+  view` resets `reloptions`, so if the view was created `with (security_invoker
+  = true)`, preserve that - check `20260704002000_product_images_and_variants.sql`
+  against `20260712000001_product_catalog_add_brand.sql`, because the latter
+  may already have dropped it.
+- Dropping a column is the one destructive act allowed here, and only because
+  the owner explicitly asked for it. Confirm zero readers first and say so in
+  your report. If you find ANY reader you did not expect, stop and report
+  instead of dropping.
+
+**Verification:** `pnpm build`, `pnpm lint` (0 errors). State every place
+`sale_price` appeared before and confirm each is gone. Paste output.

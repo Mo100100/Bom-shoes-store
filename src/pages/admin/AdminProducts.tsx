@@ -16,7 +16,7 @@ type SortDir = 'asc' | 'desc'
 
 const EMPTY: Partial<Product> = {
   name: '', slug: '', description: '', price: 0, category: 'Sneakers',
-  brand: null, featured: false, sale_price: null, materials: '', weight_grams: null, tags: [],
+  brand: null, featured: false, materials: '', weight_grams: null, tags: [],
 }
 
 // Local editable row for the variant list. `_key` is a stable React key that
@@ -326,7 +326,6 @@ export default function AdminProducts() {
         category: editing.category || 'Sneakers',
         brand: editing.brand?.trim() ? editing.brand.trim() : null,
         featured: !!editing.featured,
-        sale_price: editing.sale_price === null || editing.sale_price === undefined || (editing.sale_price as any) === '' ? null : Number(editing.sale_price),
         materials: editing.materials?.trim() ? editing.materials.trim() : null,
         weight_grams: editing.weight_grams === null || editing.weight_grams === undefined || (editing.weight_grams as any) === '' ? null : Number(editing.weight_grams),
         tags: editing.tags || [],
@@ -565,9 +564,6 @@ export default function AdminProducts() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <Field label={`${t.adminCostPrice} (${currency})`} type="number" value={costPrice != null ? String(costPrice) : ''} onChange={v => setCostPrice(v === '' ? null : Number(v))} />
-                <Field label={`${t.adminSalePrice} (${currency})`} type="number" value={editing.sale_price != null ? String(editing.sale_price) : ''} onChange={v => setEditing({ ...editing, sale_price: v === '' ? null : Number(v) })} />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
                 <Field label={t.adminMaterials} value={editing.materials || ''} onChange={v => setEditing({ ...editing, materials: v })} />
                 <Field label={t.adminWeightGrams} type="number" value={editing.weight_grams != null ? String(editing.weight_grams) : ''} onChange={v => setEditing({ ...editing, weight_grams: v === '' ? null : Number(v) })} />
               </div>
