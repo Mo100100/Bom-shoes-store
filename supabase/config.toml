@@ -71,6 +71,15 @@ verify_jwt = true
 enabled = true
 verify_jwt = false
 
+[functions.order-status]
+# The customer coming back from Kashier's hosted payment page may be a guest
+# with no Supabase session at all, so JWT verification must be off. The order
+# reference is the capability instead, which is why the response carries only
+# the order's state and never money, items or customer details (see
+# supabase/functions/order-status/index.ts).
+enabled = true
+verify_jwt = false
+
 [functions.sitemap]
 # Search-engine crawlers request this directly with no Supabase JWT (same as
 # robots.txt), so JWT verification must be off.

@@ -304,6 +304,12 @@ export const translations = {
     checkoutFailed: 'Something went quiet on our end. Please try again.',
 
     // Checkout success / failed
+    successChecking: 'Confirming your order',
+    successCheckingDesc: 'One moment while we check with the payment provider.',
+    pendingEyebrow: 'Almost there',
+    pendingTitle: 'Your payment is still being confirmed.',
+    pendingDesc: 'This can take a minute. Your basket stays exactly as it is until we hear back, and you will get an email the moment the payment clears.',
+    pendingCheckAgain: 'Check again',
     successEyebrow: 'Payment received',
     successTitle: 'Thank you for choosing quiet.',
     successDesc: 'Your order has been placed. A confirmation has been sent to your inbox.',
@@ -1042,6 +1048,12 @@ export const translations = {
     checkoutFailed: 'حدث شيء هادئ لدينا. يرجى المحاولة مرة أخرى.',
 
     // Checkout success / failed
+    successChecking: 'جارٍ تأكيد طلبك',
+    successCheckingDesc: 'لحظة واحدة بينما نتحقق من مزود الدفع.',
+    pendingEyebrow: 'اقتربنا',
+    pendingTitle: 'ما زال تأكيد الدفع جاريا.',
+    pendingDesc: 'قد يستغرق ذلك دقيقة. سلتك محفوظة كما هي حتى يصلنا الرد، وسيصلك بريد بمجرد اكتمال الدفع.',
+    pendingCheckAgain: 'تحقق مرة أخرى',
     successEyebrow: 'تم استلام الدفع',
     successTitle: 'شكرا لاختيارك الهدوء.',
     successDesc: 'تم وضع طلبك. أرسل تأكيد إلى بريدك.',
