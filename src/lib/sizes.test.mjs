@@ -54,14 +54,23 @@ test('firstInStockVariant picks the smallest in-stock size', () => {
   assert.equal(firstInStockVariant([]), undefined)
 })
 
+test('firstInStockVariant breaks a size tie on colour, whatever the input order', () => {
+  const white = variant('41', 'white', 1)
+  const black = variant('41', 'black', 1)
+  assert.equal(firstInStockVariant([white, black])?.color, 'black')
+  assert.equal(firstInStockVariant([black, white])?.color, 'black')
+})
+
 test('defaultSizeForColor prefers an in-stock size for that colour', () => {
+  // 41 is the smallest black size but is sold out, so anything that ignores
+  // stock returns '41' and fails here. That is the brief item 4 defect.
   const variants = [
-    variant('44', 'black', 0),
+    variant('41', 'black', 0),
     variant('42', 'black', 5),
-    variant('41', 'white', 5),
+    variant('40', 'white', 5),
   ]
   assert.equal(defaultSizeForColor(variants, 'black'), '42')
-  assert.equal(defaultSizeForColor(variants, 'white'), '41')
+  assert.equal(defaultSizeForColor(variants, 'white'), '40')
 })
 
 test('defaultSizeForColor falls back to the smallest size when the colour is sold out', () => {

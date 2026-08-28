@@ -73,7 +73,7 @@ export default function Home() {
     e.preventDefault()
     e.stopPropagation()
     setQuickAddingId(p.id)
-    const { data: variants } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size')
+    const { data: variants } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size').order('color')
     // Smallest in-stock size, not whatever row came back first, so the customer
     // gets a size they can predict and the toast tells them which one it is.
     const variant = firstInStockVariant(variants ?? [])

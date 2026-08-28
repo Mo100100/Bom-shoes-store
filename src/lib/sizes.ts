@@ -41,10 +41,14 @@ export function compareSizes(a: string, b: string): number {
   return a.localeCompare(b)
 }
 
-// The variant a quick-add should pick: smallest in-stock size, so the same
-// card always adds the same thing instead of whatever the fetch returned first.
+// The variant a quick-add should pick: smallest in-stock size, and colour name
+// as the explicit tie-break, since one size usually exists in several colours
+// and sorting on size alone would still let two clicks on the same card add
+// different colours.
 export function firstInStockVariant<T extends SizedVariant>(variants: T[]): T | undefined {
-  return variants.filter(v => v.stock > 0).sort((a, b) => compareSizes(a.size, b.size))[0]
+  return variants
+    .filter(v => v.stock > 0)
+    .sort((a, b) => compareSizes(a.size, b.size) || a.color.localeCompare(b.color))[0]
 }
 
 // Which size the picker should land on for a colour: its smallest in-stock

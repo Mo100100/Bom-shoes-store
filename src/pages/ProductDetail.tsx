@@ -89,7 +89,7 @@ export default function ProductDetail() {
         setActiveImage(0)
         const [{ data: imgs }, { data: vars }, { data: rel }] = await Promise.all([
           supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
-          supabase.from('product_variants').select('*').eq('product_id', data.id).order('size'),
+          supabase.from('product_variants').select('*').eq('product_id', data.id).order('size').order('color'),
           supabase.from('product_catalog').select('*').eq('category', data.category).neq('id', data.id).limit(4),
         ])
         setImages(imgs || [])
@@ -174,7 +174,7 @@ export default function ProductDetail() {
       .from('product_variants')
       .select('*')
       .in('product_id', bundle.items.map(i => i.product_id))
-      .order('size')
+      .order('size').order('color')
 
     const variantsByProduct = new Map<string, ProductVariant[]>()
     for (const v of allVariants || []) {

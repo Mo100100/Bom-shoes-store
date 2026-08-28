@@ -44,7 +44,7 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
         setProduct(data)
         const [{ data: imgs }, { data: vars }] = await Promise.all([
           supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
-          supabase.from('product_variants').select('*').eq('product_id', data.id).order('size'),
+          supabase.from('product_variants').select('*').eq('product_id', data.id).order('size').order('color'),
         ])
         if (cancelled) return
         setImages(imgs || [])

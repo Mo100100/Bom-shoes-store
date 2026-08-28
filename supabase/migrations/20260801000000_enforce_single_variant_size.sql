@@ -9,47 +9,134 @@
 --
 -- This migration closes it for good: clean whatever is bad right now by PATTERN
 -- (no hardcoded uuids, so it stays correct however the data has moved on), then
--- add a CHECK constraint so the database refuses a crammed or blank size from
--- any client. The admin form splits on '/' and ',' before saving; this is the
--- server-side backstop for anything that bypasses it.
+-- add a CHECK constraint so the database refuses a crammed, padded or blank
+-- size from any client. The admin form splits on '/' and ',' before saving;
+-- this is the server-side backstop for anything that bypasses it.
 --
--- Idempotent: the cleanup steps match nothing on a second run, and the
--- constraint is dropped-if-exists before it is added.
+-- IDS ARE PRESERVED WHEREVER POSSIBLE, and that is the point of the ordering
+-- below. A variant id is referenced by orders (items JSON -> fulfill_order()
+-- looks the row up by id and raises 'variant % not found' when it is gone, so
+-- deleting one can fail a PAID order's webhook) and by
+-- stock_notify_requests.variant_id, which is ON DELETE CASCADE, so deleting one
+-- silently drops every back-in-stock subscription for it. A crammed row sitting
+-- at stock 0 is exactly where customers click "notify me". So every crammed row
+-- is REWRITTEN IN PLACE to its first size, keeping its id; only the rows that
+-- genuinely collide with an existing row are deleted, and the count of
+-- subscriptions that go with them is raised as a NOTICE.
+--
+-- This mirrors what src/lib/variantDiff.ts pass 2 already does when an admin
+-- re-saves such a product: the row keeps its id and its size is corrected.
+--
+-- Idempotent: every step matches nothing on a second run, and the constraint is
+-- dropped-if-exists before it is added.
 
 begin;
 
--- 1. Expand every crammed variant into one row per size, keeping the colour,
---    price override and product it belonged to.
+-- ---------------------------------------------------------------------------
+-- 1. Trim padded sizes in place. ' 41 ' passes a btrim-only check but never
+--    matches a cart line, because the pricing resolver compares size exactly.
+--    Skipped (and left to step 5) only when the trimmed value would collide
+--    with a row that already holds it.
+-- ---------------------------------------------------------------------------
+update public.product_variants v
+set size = btrim(v.size)
+where v.size <> btrim(v.size)
+  and btrim(v.size) <> ''
+  and not exists (
+    select 1 from public.product_variants o
+    where o.product_id = v.product_id
+      and o.color = v.color
+      and o.size = btrim(v.size)
+      and o.id <> v.id
+  );
+
+-- ---------------------------------------------------------------------------
+-- 2. Capture every size a crammed row was carrying BEFORE it is rewritten.
+--    Step 3 destroys the crammed string, so the remaining sizes have to be
+--    held somewhere first.
+-- ---------------------------------------------------------------------------
+create temporary table crammed_variant_parts on commit drop as
+select v.id, v.product_id, v.color, v.stock, v.price_override,
+       btrim(s.part) as part, s.ord
+from public.product_variants v
+cross join lateral unnest(regexp_split_to_array(v.size, '[/,]')) with ordinality as s(part, ord)
+where v.size ~ '[/,]';
+
+delete from crammed_variant_parts where part = '';
+
+-- ---------------------------------------------------------------------------
+-- 3. Rewrite each crammed row IN PLACE to its first size, keeping its id and
+--    therefore its orders and its back-in-stock subscriptions. The NOT EXISTS
+--    guard stands in for the ON CONFLICT that UPDATE does not have.
 --
 --    Stock: least(stock, 1). The crammed rows stored the COUNT of sizes as the
---    stock, so copying it across would claim 5 pairs of every size and let the
---    store oversell. 1 marks the size as sellable without inventing quantity;
---    the owner tops up the real per-size counts in the admin. A crammed row
---    that was already at 0 stays at 0.
---
---    on conflict do nothing: the split size may already exist as its own row
---    for that product and colour, and the existing row is the trustworthy one.
+--    stock, so keeping it would claim five pairs of every size and let the
+--    store oversell. 1 marks the size sellable without inventing quantity; the
+--    owner tops up real per-size counts in the admin. A row already at 0 stays
+--    at 0.
+-- ---------------------------------------------------------------------------
+update public.product_variants v
+set size = k.part,
+    stock = least(v.stock, 1)
+from (
+  select distinct on (id) id, product_id, color, part
+  from crammed_variant_parts
+  order by id, ord
+) k
+where v.id = k.id
+  and not exists (
+    select 1 from public.product_variants o
+    where o.product_id = k.product_id
+      and o.color = k.color
+      and o.size = k.part
+      and o.id <> v.id
+  );
+
+-- ---------------------------------------------------------------------------
+-- 4. Add the sizes that had nowhere to go: every other size the crammed rows
+--    named, plus the first size of any row step 3 could not rewrite. These are
+--    genuinely new rows, so a new id is correct for them.
+-- ---------------------------------------------------------------------------
 insert into public.product_variants (product_id, size, color, stock, price_override)
-select v.product_id, s.part, v.color, least(v.stock, 1), v.price_override
-from public.product_variants v
-cross join lateral (
-  select btrim(part) as part
-  from regexp_split_to_table(v.size, '[/,]') as part
-) s
-where v.size ~ '[/,]'
-  and s.part <> ''
+select p.product_id, p.part, p.color, least(p.stock, 1), p.price_override
+from crammed_variant_parts p
 on conflict (product_id, size, color) do nothing;
 
--- 2. Drop the originals, plus any row whose size is blank or whitespace. Both
---    shapes are unsellable: the storefront renders them as a size button
---    nobody can meaningfully choose, and step 1 has already preserved whatever
---    real sizes a crammed row was carrying.
-delete from public.product_variants
-where size ~ '[/,]' or btrim(size) = '';
+-- ---------------------------------------------------------------------------
+-- 5. Whatever is left is unsalvageable: a crammed or padded row whose corrected
+--    size is already held by another row (so the correct data survives under a
+--    different id), or a row whose size is entirely blank. Say out loud how
+--    many back-in-stock subscriptions cascade away with them, since nothing
+--    else would ever tell the owner.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  doomed_variants int;
+  doomed_subscriptions int;
+begin
+  select count(*) into doomed_variants
+  from public.product_variants
+  where size ~ '[/,]' or size <> btrim(size) or size = '';
 
--- 3. The legacy products.sizes array feeds the storefront fallback for products
+  select count(*) into doomed_subscriptions
+  from public.stock_notify_requests r
+  join public.product_variants v on v.id = r.variant_id
+  where v.size ~ '[/,]' or v.size <> btrim(v.size) or v.size = '';
+
+  if doomed_variants > 0 then
+    raise notice 'Deleting % unsalvageable variant row(s) whose corrected size is already taken; % back-in-stock subscription(s) cascade away with them.',
+      doomed_variants, doomed_subscriptions;
+  end if;
+end $$;
+
+delete from public.product_variants
+where size ~ '[/,]' or size <> btrim(size) or size = '';
+
+-- ---------------------------------------------------------------------------
+-- 6. The legacy products.sizes array feeds the storefront fallback for products
 --    with no variants at all, so it has to be cleaned the same way or the bug
 --    survives down that path.
+-- ---------------------------------------------------------------------------
 update public.products p
 set sizes = coalesce((
   select array_agg(distinct s.part order by s.part)
@@ -62,16 +149,20 @@ set sizes = coalesce((
 ), array[]::text[])
 where exists (
   select 1 from unnest(p.sizes) as raw
-  where raw ~ '[/,]' or btrim(raw) = ''
+  where raw ~ '[/,]' or raw <> btrim(raw) or raw = ''
 );
 
--- 4. The actual defence: one size per row, always. This is what the previous
---    fixup was missing.
+-- ---------------------------------------------------------------------------
+-- 7. The actual defence: one trimmed, non-empty size per row, always. This is
+--    what the previous fixup was missing. It matches splitSizes() in
+--    src/lib/sizes.ts exactly, padding included: a size that is not already
+--    trimmed can never match a cart line, so it must not be storable.
+-- ---------------------------------------------------------------------------
 alter table public.product_variants
   drop constraint if exists product_variants_size_single;
 
 alter table public.product_variants
   add constraint product_variants_size_single
-  check (size !~ '[/,]' and btrim(size) <> '');
+  check (size !~ '[/,]' and size = btrim(size) and size <> '');
 
 commit;
