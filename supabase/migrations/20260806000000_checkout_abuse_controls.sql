@@ -55,9 +55,12 @@ create index if not exists rate_limit_attempts_phone_idx
 -- Records one attempt and reports whether it is within the caller's limits.
 -- Returns true = allowed, false = over the limit.
 --
--- The attempt is recorded whether or not it was allowed, on purpose: an
--- attacker who keeps hammering keeps their own window full instead of getting
--- a fresh allowance the instant the oldest entry ages out.
+-- A BLOCKED attempt is deliberately NOT recorded. Recording it would make a
+-- tripped window self-sustaining: on a carrier-grade NAT address, which is the
+-- norm on Egyptian mobile networks, every subsequent real customer's rejected
+-- attempt would push the window forward again and it would never drain. Only
+-- allowed attempts count towards the limit, so the window always empties on
+-- its own after windowSeconds of quiet.
 --
 -- The thresholds are NOT decided here. Every one of them lives beside the
 -- endpoint it protects, in RATE_LIMITS in
@@ -87,6 +90,23 @@ begin
     return true;
   end if;
 
+  -- Serialize every caller sharing this (endpoint, ip) key for the rest of the
+  -- transaction. Without it this is a check-then-insert race: under READ
+  -- COMMITTED, concurrent transactions cannot see each other's uncommitted
+  -- inserts, so N simultaneous requests all read the same count, all pass, and
+  -- an attacker who fires requests in parallel rather than in sequence walks
+  -- straight past the limit. Scripts parallelize by default, so this lock is
+  -- what makes the limit real.
+  --
+  -- ponytail: one lock per (endpoint, ip) key, so unrelated callers never
+  -- contend. Held only to the end of this transaction, which is two indexed
+  -- counts and one insert. Known ceiling: the PHONE count is serialized only
+  -- against callers sharing this IP, so a parallel attacker spread across many
+  -- IPs can still race the per-phone limit. That attacker has already defeated
+  -- the per-IP limit, which is the binding one, so the extra lock is not worth
+  -- the contention. Take a second lock on the phone key if that ever changes.
+  perform pg_advisory_xact_lock(hashtextextended(p_endpoint || p_ip_hash, 0));
+
   select count(*) < p_ip_limit into v_allowed
   from public.rate_limit_attempts
   where endpoint = p_endpoint and ip_hash = p_ip_hash and created_at >= v_since;
@@ -97,8 +117,10 @@ begin
     where endpoint = p_endpoint and phone = p_phone and created_at >= v_since;
   end if;
 
-  insert into public.rate_limit_attempts (endpoint, ip_hash, phone, order_ref)
-  values (p_endpoint, p_ip_hash, p_phone, p_order_ref);
+  if v_allowed then
+    insert into public.rate_limit_attempts (endpoint, ip_hash, phone, order_ref)
+    values (p_endpoint, p_ip_hash, p_phone, p_order_ref);
+  end if;
 
   return v_allowed;
 end;
@@ -129,11 +151,47 @@ comment on column public.orders.stock_reserved_at is
 comment on column public.orders.stock_released_at is
   'When the reserved stock was given back. Set by release_order_stock(); its presence is what makes a release idempotent.';
 
+-- The moment this migration landed, captured at execution time rather than
+-- written as a literal, so it is the real deploy instant however long after
+-- authoring the push happens.
+--
+-- The automatic expiry job below refuses to touch any order created at or
+-- before this instant. That is a hard safety boundary, NOT an optimisation:
+-- the owner's existing COD orders were placed under a system that had no
+-- expiry, advancing an order's status is an entirely optional admin dropdown
+-- (AdminOrders.tsx updateStatus), and a delivered order whose status was never
+-- advanced still reads 'confirmed'. Without this gate, every historical COD
+-- order the owner delivered without touching that dropdown would be mass
+-- cancelled on the job's first run, inventing phantom stock for goods already
+-- sold. Pre-existing orders are the owner's business and this job must never
+-- touch them.
+--
+-- Single row, enforced by the `check (id)` on a boolean primary key. The
+-- `on conflict do nothing` means re-running this migration keeps the ORIGINAL
+-- stamp rather than moving the boundary forward.
+create table if not exists public.cod_expiry_epoch (
+  id boolean primary key default true check (id),
+  effective_from timestamptz not null default now()
+);
+
+comment on table public.cod_expiry_epoch is
+  'Single row holding the instant the COD expiry job was introduced. release_expired_cod_orders() never considers an order created at or before it, so orders placed before this feature existed are never auto-cancelled.';
+
+alter table public.cod_expiry_epoch enable row level security;
+
+insert into public.cod_expiry_epoch (id) values (true) on conflict (id) do nothing;
+
 -- Backfill COD orders placed before this migration: place_cod_order sets
 -- status to 'confirmed' if and only if it committed the decrement, so a
 -- confirmed cash order provably reserved its stock. created_at is the closest
 -- available stamp (orders has no updated_at) and is within seconds of the
 -- reservation, since COD orders are placed and confirmed in one request.
+--
+-- This exists ONLY so an admin-initiated cancellation or refund (Task 8) can
+-- release a historical order on purpose. It does NOT make those orders
+-- eligible for the automatic job, which is gated on cod_expiry_epoch above and
+-- does not rely on this backfill for its bound.
+--
 -- Idempotent: the `is null` guard makes a re-run a no-op.
 update public.orders
 set stock_reserved_at = created_at
@@ -153,10 +211,27 @@ where payment_method = 'cash'
 -- (variants by id, then products by id) so the two can never deadlock against
 -- each other.
 --
+-- payment_status is driven to a TERMINAL value alongside the status, so a
+-- released order can never be marked paid afterwards. Leaving it at 'pending'
+-- would keep the admin order list's "mark cash collected" button live on an
+-- order whose goods have been put back on the shelf.
+--
+-- Every release writes an explicit activity_logs entry (action
+-- 'STOCK_RELEASE') recording the order reference, the units returned and
+-- whether it was automatic. Inventory must never move silently. That insert is
+-- deliberately NOT wrapped in its own exception block, unlike log_activity():
+-- if the audit entry cannot be written, the release should fail and be
+-- retried, not proceed unlogged.
+--
 -- Service-role only. Cancellation and refund flows should call THIS rather
 -- than writing their own decrement-reversal: pass the status the order should
--- end up in ('cancelled', 'refunded', ...).
-create or replace function public.release_order_stock(p_order_id uuid, p_status text default 'cancelled')
+-- end up in ('cancelled', 'refunded', ...) and the matching payment_status.
+create or replace function public.release_order_stock(
+  p_order_id uuid,
+  p_status text default 'cancelled',
+  p_payment_status text default 'failed',
+  p_automatic boolean default false
+)
 returns boolean
 language plpgsql
 security definer
@@ -166,14 +241,16 @@ declare
   v_items jsonb;
   v_reserved_at timestamptz;
   v_released_at timestamptz;
+  v_order_ref text;
+  v_units integer := 0;
   v_item jsonb;
   v_variant_id uuid;
   v_product_id uuid;
   v_qty integer;
   v_stock integer;
 begin
-  select items, stock_reserved_at, stock_released_at
-  into v_items, v_reserved_at, v_released_at
+  select items, stock_reserved_at, stock_released_at, kashier_order_id
+  into v_items, v_reserved_at, v_released_at, v_order_ref
   from public.orders
   where id = p_order_id
   for update;
@@ -207,6 +284,7 @@ begin
   for v_item in select * from jsonb_array_elements(coalesce(v_items, '[]'::jsonb))
   loop
     v_qty := (v_item->>'quantity')::integer;
+    v_units := v_units + v_qty;
     if v_item->>'variant_id' is not null then
       update public.product_variants set stock = stock + v_qty where id = (v_item->>'variant_id')::uuid;
     else
@@ -216,14 +294,33 @@ begin
 
   update public.orders
   set stock_released_at = now(),
-      status = coalesce(p_status, status)
+      status = coalesce(p_status, status),
+      payment_status = coalesce(p_payment_status, payment_status)
   where id = p_order_id;
+
+  -- Same shape as log_activity(): (action, entity_type, entity_id, actor_id,
+  -- details). actor_id is null because there is no client session behind a
+  -- service-role or cron write, which is exactly what `automatic` records.
+  insert into public.activity_logs (action, entity_type, entity_id, actor_id, details)
+  values (
+    'STOCK_RELEASE',
+    'orders',
+    p_order_id,
+    auth.uid(),
+    jsonb_build_object(
+      'order_ref', v_order_ref,
+      'units_returned', v_units,
+      'automatic', p_automatic,
+      'status', p_status,
+      'payment_status', p_payment_status
+    )
+  );
 
   return true;
 end;
 $function$;
 
-revoke execute on function public.release_order_stock(uuid, text) from anon, authenticated, public;
+revoke execute on function public.release_order_stock(uuid, text, text, boolean) from anon, authenticated, public;
 
 -- place_cod_order, unchanged except for the stock_reserved_at stamp on its
 -- commit UPDATE -- re-emitted in full because a function body cannot be
@@ -351,22 +448,31 @@ revoke execute on function public.place_cod_order(uuid) from anon, authenticated
 -- touches it, that stock is held forever -- which is exactly the state a
 -- scripted attacker leaves the catalog in.
 --
--- The signal for "abandoned" is status still being 'confirmed': the admin
--- order list moves a real order on to 'processing'/'shipped'/'delivered' as it
--- is handled, so an order still sitting at 'confirmed' has not been started.
--- An order already in transit is therefore never touched, however long the
--- courier takes to bring the cash back.
+-- The signal for "abandoned" is status still being 'confirmed'. That signal is
+-- WEAKER than it looks and the window is sized accordingly: advancing an order
+-- to 'processing'/'shipped'/'delivered' is an optional dropdown in the admin
+-- order list (AdminOrders.tsx updateStatus) with no prompt, no default advance
+-- and no reminder, so a real order that the owner shipped without touching the
+-- dashboard also sits at 'confirmed'.
 --
--- The default window is 72 hours: long enough to cover a Friday/Saturday
--- weekend plus a working day, so a genuine order is never cancelled just
--- because the store was closed, and short enough that a scripted attack frees
--- the catalog again within three days rather than never.
+-- The default window is therefore 14 days, not a few days. This job exists to
+-- defeat a bot flood, not to tidy up slow deliveries. A bot's reservations can
+-- sit for two weeks without meaningful harm, whereas a genuine COD order that
+-- is shipped, delayed over a weekend and paid the following week must never be
+-- cancelled underneath the courier. If that happened the store would put
+-- already-sold shoes back on the shelf and oversell them.
+--
+-- Two further guards on the same worry:
+--   - Nothing created at or before cod_expiry_epoch.effective_from is ever
+--     considered, so the owner's pre-existing orders are untouchable.
+--   - Every release writes an activity_logs entry, so no inventory moves
+--     silently.
 --
 -- Bounded at 500 orders per run so one very bad night cannot produce a single
 -- unbounded transaction holding locks across the whole catalog. The next run
--- (15 minutes later) picks up the remainder.
+-- picks up the remainder.
 -- ---------------------------------------------------------------------------
-create or replace function public.release_expired_cod_orders(p_older_than_hours integer default 72)
+create or replace function public.release_expired_cod_orders(p_older_than_hours integer default 336)
 returns integer
 language plpgsql
 security definer
@@ -375,29 +481,40 @@ as $function$
 declare
   v_order_id uuid;
   v_released integer := 0;
+  v_epoch timestamptz;
 begin
+  select effective_from into v_epoch from public.cod_expiry_epoch limit 1;
+  if v_epoch is null then
+    raise warning 'release_expired_cod_orders: cod_expiry_epoch is empty, refusing to run';
+    return 0;
+  end if;
+
   for v_order_id in
     select id
     from public.orders
     where payment_method = 'cash'
       and payment_status = 'pending'
       and status = 'confirmed'
+      and created_at > v_epoch
       and stock_reserved_at is not null
       and stock_released_at is null
-      and stock_reserved_at < now() - make_interval(hours => greatest(coalesce(p_older_than_hours, 72), 1))
+      and stock_reserved_at < now() - make_interval(hours => greatest(coalesce(p_older_than_hours, 336), 1))
     order by stock_reserved_at
     limit 500
   loop
-    if public.release_order_stock(v_order_id, 'cancelled') then
-      v_released := v_released + 1;
-    end if;
+    -- Per-order subtransaction. Without it, one order with a malformed items
+    -- entry raises on the quantity cast, rolls the whole run back, and gets
+    -- picked first again next time because the loop is ordered oldest-first --
+    -- so the job would fail forever and never release anything. Skip the bad
+    -- row, warn, carry on.
+    begin
+      if public.release_order_stock(v_order_id, 'cancelled', 'failed', true) then
+        v_released := v_released + 1;
+      end if;
+    exception when others then
+      raise warning 'release_expired_cod_orders: skipping order %: %', v_order_id, sqlerrm;
+    end;
   end loop;
-
-  -- Housekeeping, piggy-backed here so there is only one scheduled job to
-  -- reason about: nothing reads a rate-limit row older than the longest
-  -- window (6 hours), so keep a day of them for abuse investigation and drop
-  -- the rest. Without this the ledger grows forever.
-  delete from public.rate_limit_attempts where created_at < now() - interval '24 hours';
 
   return v_released;
 end;
@@ -412,19 +529,42 @@ revoke execute on function public.release_expired_cod_orders(integer) from anon,
 -- secret, so there is no manual post-deploy step -- it starts working the
 -- moment the migration lands.
 --
+-- TWO jobs, deliberately not one. The ledger cleanup used to be piggy-backed
+-- inside release_expired_cod_orders, which meant a single poison order would
+-- have taken the cleanup down with it and let rate_limit_attempts grow
+-- unbounded. Separate entries fail independently.
+--
 -- Unscheduled first so a re-run of this migration cannot end up with two
--- copies of the job. cron.unschedule raises if the job does not exist, hence
--- the guard on cron.job.
+-- copies of a job. cron.unschedule raises if the job does not exist, hence the
+-- guard on cron.job.
 do $cron$
+declare
+  v_job text;
 begin
-  if exists (select 1 from cron.job where jobname = 'release-expired-cod-orders') then
-    perform cron.unschedule('release-expired-cod-orders');
-  end if;
+  foreach v_job in array array['release-expired-cod-orders', 'purge-rate-limit-attempts']
+  loop
+    if exists (select 1 from cron.job where jobname = v_job) then
+      perform cron.unschedule(v_job);
+    end if;
+  end loop;
 end;
 $cron$;
 
+-- Hourly, not every 15 minutes: the window is 14 days, so the exact minute a
+-- reservation is released is irrelevant and there is no reason to scan for it
+-- four times an hour.
 select cron.schedule(
   'release-expired-cod-orders',
-  '*/15 * * * *',
+  '7 * * * *',
   $$select public.release_expired_cod_orders()$$
+);
+
+-- Nothing reads a rate-limit row older than the longest window (6 hours), so
+-- keep a day of them for abuse investigation and drop the rest. Without this
+-- the ledger grows forever. Inline SQL: a one-statement job does not need a
+-- function wrapped around it.
+select cron.schedule(
+  'purge-rate-limit-attempts',
+  '23 * * * *',
+  $$delete from public.rate_limit_attempts where created_at < now() - interval '24 hours'$$
 );

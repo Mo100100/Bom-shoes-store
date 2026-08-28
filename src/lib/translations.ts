@@ -319,7 +319,10 @@ export const translations = {
     checkoutBackToBasket: 'Back to your basket',
     checkoutTooManyOrders: 'Too many orders from here in a short time. Please wait a little and try again.',
     checkoutCodTooManyItems: (max: number) => `Cash on delivery is limited to ${max} items per order. Please reduce your basket, or pay online instead.`,
-    checkoutCodTooExpensive: (max: string) => `Cash on delivery is limited to ${max} per order. Please reduce your basket, or pay online instead.`,
+    // Always labelled EGP, never the store's display currency: the cap is a
+    // real EGP amount and CurrencyContext relabels without converting, so
+    // formatPrice would render "$50,000" under a USD display setting.
+    checkoutCodTooExpensive: (max: number) => `Cash on delivery is limited to ${max.toLocaleString('en-US')} EGP per order. Please reduce your basket, or pay online instead.`,
 
     // Checkout success / failed
     successChecking: 'Confirming your order',
@@ -1081,7 +1084,7 @@ export const translations = {
     checkoutBackToBasket: 'العودة إلى سلتك',
     checkoutTooManyOrders: 'طلبات كثيرة من هنا خلال وقت قصير. يرجى الانتظار قليلاً ثم المحاولة مرة أخرى.',
     checkoutCodTooManyItems: (max: number) => `الدفع عند الاستلام محدود بـ ${max} قطعة لكل طلب. يرجى تقليل سلتك، أو الدفع أونلاين بدلاً من ذلك.`,
-    checkoutCodTooExpensive: (max: string) => `الدفع عند الاستلام محدود بـ ${max} لكل طلب. يرجى تقليل سلتك، أو الدفع أونلاين بدلاً من ذلك.`,
+    checkoutCodTooExpensive: (max: number) => `الدفع عند الاستلام محدود بـ ${max.toLocaleString('en-US')} ج.م لكل طلب. يرجى تقليل سلتك، أو الدفع أونلاين بدلاً من ذلك.`,
 
     // Checkout success / failed
     successChecking: 'جارٍ تأكيد طلبك',

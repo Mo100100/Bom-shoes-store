@@ -35,28 +35,36 @@ const HOUR = 3600
 
 // Thresholds. Every number here is set so a real customer cannot reach it.
 //
+// Every IP ceiling assumes carrier-grade NAT, which is the norm on Egyptian
+// mobile networks: a single address can legitimately be dozens of unrelated
+// shoppers at once. The per-IP numbers are sized for that shared address, not
+// for one household, because the cost of getting them wrong is a real customer
+// who simply cannot buy.
+//
 // cod_order is the tight one: it is the only path that decrements real stock
 // with no payment. Five COD orders from one phone in six hours is already well
 // past anything a genuine shopper does (an honest reorder or a split delivery
-// is two or three), and twenty from one IP leaves room for a shared office or
-// carrier-NAT address, which is common on Egyptian mobile networks, while
-// capping a scripted attack at twenty reservations per six hours instead of
-// thousands a minute. The 72-hour expiry job then returns even those.
+// is two or three), and the phone limit is the one that actually bites an
+// honest-looking flood. 60 per IP per six hours allows a busy shared address
+// while still capping a script at 60 reservations per six hours instead of
+// thousands a minute. The expiry job then returns even those.
 //
 // online_order is deliberately looser: it reserves no stock, and every retry
 // of a declined card legitimately creates another order row. It exists only to
 // stop unbounded row insertion and unbounded Kashier session creation.
 //
-// order_status and validate_coupon are read-only existence oracles. The
-// success page calls order-status once on mount plus once per manual retry,
-// and a customer tries a handful of coupon codes, so these ceilings are far
-// above real use while cutting an enumerator from unlimited attempts to a few
-// thousand a day against a space that is far larger than that.
+// order_status and validate_coupon are read-only existence oracles, and both
+// are called AUTOMATICALLY rather than only on a user action: order-status on
+// every CheckoutSuccess mount, and validate-coupon on every Cart and Checkout
+// mount that carries a coupon (Cart.tsx, Checkout.tsx). So their ceilings have
+// to cover a page-load per shopper, not a deliberate attempt per shopper.
+// Even at 120 per 10 minutes an enumerator gets about 17k tries a day against
+// spaces vastly larger than that, which is no threat.
 export const RATE_LIMITS = {
-  codOrder: { endpoint: 'cod_order', windowSeconds: 6 * HOUR, ipLimit: 20, phoneLimit: 5 },
-  onlineOrder: { endpoint: 'online_order', windowSeconds: HOUR, ipLimit: 40, phoneLimit: 15 },
-  orderStatus: { endpoint: 'order_status', windowSeconds: 600, ipLimit: 60 },
-  validateCoupon: { endpoint: 'validate_coupon', windowSeconds: 600, ipLimit: 30 },
+  codOrder: { endpoint: 'cod_order', windowSeconds: 6 * HOUR, ipLimit: 60, phoneLimit: 5 },
+  onlineOrder: { endpoint: 'online_order', windowSeconds: HOUR, ipLimit: 120, phoneLimit: 15 },
+  orderStatus: { endpoint: 'order_status', windowSeconds: 600, ipLimit: 120 },
+  validateCoupon: { endpoint: 'validate_coupon', windowSeconds: 600, ipLimit: 120 },
 } satisfies Record<string, RateLimitRule>
 
 // Never store or log a raw IP. HMAC rather than a bare SHA-256 because the
@@ -69,6 +77,15 @@ export const RATE_LIMITS = {
 // configuration; rotating it just resets everyone's window once.
 async function hashIp(ip: string): Promise<string> {
   const salt = Deno.env.get('RATE_LIMIT_SALT') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
+  if (!salt) {
+    // An empty key makes this a plain unsalted digest, and the IPv4 space is
+    // small enough to reverse one of those by brute force in minutes -- so the
+    // ledger would then hold effectively-recoverable IP addresses. This should
+    // be impossible (SUPABASE_SERVICE_ROLE_KEY is injected into every function)
+    // and is loud rather than silent because it is a privacy regression, not a
+    // functional one: rate limiting still works either way.
+    console.error('rate-limit: neither RATE_LIMIT_SALT nor SUPABASE_SERVICE_ROLE_KEY is set, IP hashes are UNSALTED and reversible. Set RATE_LIMIT_SALT.')
+  }
   return await hmacSha256Hex(ip, salt)
 }
 
@@ -77,6 +94,14 @@ async function hashIp(ip: string): Promise<string> {
 // controlled and the LAST is the peer our own gateway actually saw. Taking the
 // last is the only entry a caller cannot forge, and when nothing was forwarded
 // the header holds a single value, where first and last are the same thing.
+//
+// UNVERIFIED against a real deployment, and this is the assumption to check
+// first if anything here misbehaves: if Supabase's edge appends its own relay
+// address, or a CDN sits in front, the last hop is IDENTICAL for every
+// customer and the whole store shares one counter, at which point the COD
+// limit stops the 61st customer of the day from buying at all. Log a real
+// x-forwarded-for from the deployed project and confirm the shape before
+// trusting this keying.
 export function clientIp(req: Request): string | null {
   const forwarded = req.headers.get('x-forwarded-for') ?? ''
   const hops = forwarded.split(',').map(h => h.trim()).filter(Boolean)

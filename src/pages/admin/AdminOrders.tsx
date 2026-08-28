@@ -212,7 +212,12 @@ export default function AdminOrders() {
                         }`}>
                           {o.payment_method === 'cash' ? `${statusLabel(o.payment_status)} · ${t.adminCod}` : statusLabel(o.payment_status)}
                         </span>
-                        {isAdmin && o.payment_method === 'cash' && o.payment_status !== 'paid' && (
+                        {/* Only a still-pending cash order can be marked collected.
+                            A 'failed' payment_status is terminal: it means either
+                            place_cod_order could not reserve the stock, or
+                            release_order_stock gave the stock back, and in both
+                            cases those goods are on the shelf again. */}
+                        {isAdmin && o.payment_method === 'cash' && o.payment_status === 'pending' && (
                           <button
                             onClick={e => { e.stopPropagation(); markPaid(o) }}
                             className="text-[10px] tracking-wider uppercase border border-emerald-700/50 text-emerald-700 px-2 py-0.5 hover:bg-emerald-700 hover:text-white transition-colors cursor-pointer"

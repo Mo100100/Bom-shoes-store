@@ -185,10 +185,15 @@ export default function Checkout() {
     } catch (err: any) {
       console.error(err)
       const { code, limit } = await readServerError(err)
+      // The cap messages quote the ceiling, so they are only used when the
+      // server actually sent one -- a body that could not be read falls back
+      // to the generic message rather than telling the customer they are
+      // "limited to 0 items".
+      const hasLimit = typeof limit === 'number'
       toast.error(
         code === 'rate_limited' ? t.checkoutTooManyOrders
-          : code === 'cod_item_cap' ? t.checkoutCodTooManyItems(limit ?? 0)
-            : code === 'cod_value_cap' ? t.checkoutCodTooExpensive(formatPrice(limit ?? 0))
+          : code === 'cod_item_cap' && hasLimit ? t.checkoutCodTooManyItems(limit)
+            : code === 'cod_value_cap' && hasLimit ? t.checkoutCodTooExpensive(limit)
               : t.checkoutFailed,
       )
       setSubmitting(false)
