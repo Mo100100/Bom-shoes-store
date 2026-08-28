@@ -242,7 +242,10 @@ export type StoreSettings = {
   id: string
   logo_url: string | null
   favicon_url: string | null
-  // Display currency only -- Kashier always settles in EGP (see create-order).
+  // The column still exists and is kept in sync with the DB row, but nothing
+  // reads or writes it anymore -- the admin display-currency selector this
+  // once backed was removed (CurrencyContext.tsx always renders EGP, the only
+  // currency Kashier ever settles).
   currency: string
   updated_at: string
 }

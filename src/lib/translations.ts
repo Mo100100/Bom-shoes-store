@@ -322,9 +322,10 @@ export const translations = {
     checkoutBackToBasket: 'Back to your basket',
     checkoutTooManyOrders: 'Too many orders from here in a short time. Please wait a little and try again.',
     checkoutCodTooManyItems: (max: number) => `Cash on delivery is limited to ${max} items per order. Please reduce your basket, or pay online instead.`,
-    // Always labelled EGP, never the store's display currency: the cap is a
-    // real EGP amount and CurrencyContext relabels without converting, so
-    // formatPrice would render "$50,000" under a USD display setting.
+    // Hardcoded "EGP" and Western digits: this string is built outside any
+    // component (translations.ts has no access to formatPrice), the cap is
+    // always a real EGP amount, and Western digits match the money
+    // convention CurrencyContext.tsx documents, even in the Arabic string below.
     checkoutCodTooExpensive: (max: number) => `Cash on delivery is limited to ${max.toLocaleString('en-US')} EGP per order. Please reduce your basket, or pay online instead.`,
 
     // Checkout success / failed
