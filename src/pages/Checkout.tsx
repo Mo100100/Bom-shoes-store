@@ -275,8 +275,12 @@ export default function Checkout() {
               <h1 className="font-display text-3xl md:text-4xl mb-8">{t.checkoutShipping}</h1>
               <div className="grid sm:grid-cols-2 gap-4">
                 <Field label={fieldFullName} value={form.fullName} onChange={v => setField('fullName', v)} required dir={lang === 'ar' ? 'rtl' : 'ltr'} />
-                <Field label={fieldPhone} type="tel" value={form.phone} onChange={v => setField('phone', v)} required dir={lang === 'ar' ? 'rtl' : 'ltr'} />
-                <Field label={fieldEmail} type="email" value={form.email} onChange={v => setField('email', v)} dir={lang === 'ar' ? 'rtl' : 'ltr'} />
+                {/* Phone numbers and email addresses are always read
+                    left-to-right, even on an Arabic page: forcing them RTL put
+                    the leading + and the domain on the wrong end. They stay
+                    aligned to the page's start edge (see rtl:text-right below). */}
+                <Field label={fieldPhone} type="tel" value={form.phone} onChange={v => setField('phone', v)} required dir="ltr" />
+                <Field label={fieldEmail} type="email" value={form.email} onChange={v => setField('email', v)} dir="ltr" />
                 <div className="block">
                   {/* A <label> must wrap (or point via htmlFor at) an actual form
                       control -- in the error state there isn't one, so this uses
@@ -430,7 +434,7 @@ export default function Checkout() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{item.product.name}</p>
-                      <p className="text-xs text-muted-foreground">{item.color}, {item.size}</p>
+                      <p className="text-xs text-muted-foreground">{t.cartVariant(item.color, item.size)}</p>
                     </div>
                     <p className="text-sm">{formatPrice(item.unitPrice * item.quantity)}</p>
                   </div>
@@ -444,7 +448,7 @@ export default function Checkout() {
                 {discountAmount > 0 && (
                   <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartDiscount}</dt><dd>−{formatPrice(discountAmount)}</dd></div>
                 )}
-                <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartShipping}</dt><dd>{!selectedRegion && !freeShipping ? '—' : shipping === 0 ? t.cartFree : formatPrice(shipping)}</dd></div>
+                <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartShipping}</dt><dd>{!selectedRegion && !freeShipping ? '-' : shipping === 0 ? t.cartFree : formatPrice(shipping)}</dd></div>
                 <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartTax}</dt><dd>{formatPrice(tax)}</dd></div>
                 <div className="pt-3 border-t border-border flex justify-between items-baseline">
                   <dt>{t.cartTotal}</dt>
@@ -480,7 +484,9 @@ function Field({
         onChange={e => onChange(e.target.value)}
         required={required}
         dir={dir}
-        className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors"
+        // rtl:text-right follows the PAGE direction, not the input's own, so a
+        // dir="ltr" field still sits on the start edge of an Arabic form.
+        className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors rtl:text-right"
       />
     </label>
   )

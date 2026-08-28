@@ -21,6 +21,7 @@ import { toast } from 'sonner'
 // it's reachable and operable by keyboard, and each carries its own label so
 // screen readers announce something more useful than an unnamed control.
 function StarRow({ rating, size = 'w-4 h-4', onRate }: { rating: number; size?: string; onRate?: (n: number) => void }) {
+  const t = useT()
   return (
     <div className="flex gap-0.5">
       {[1, 2, 3, 4, 5].map(i => {
@@ -31,7 +32,7 @@ function StarRow({ rating, size = 'w-4 h-4', onRate }: { rating: number; size?: 
             key={i}
             type="button"
             onClick={() => onRate(i)}
-            aria-label={`Rate ${i} star${i > 1 ? 's' : ''}`}
+            aria-label={t.reviewsRateStars(i)}
             className="cursor-pointer"
           >
             {star}
@@ -526,12 +527,14 @@ export default function ProductDetail() {
               />
             </div>
             {galleryImages.length > 1 && (
-              <div className="flex gap-2 mt-3">
+              /* Wraps rather than overflowing: a product with six or more
+                 photos ran off the edge of a 375px screen. */
+              <div className="flex flex-wrap gap-2 mt-3">
                 {galleryImages.map((url, i) => (
                   <button
                     key={i}
                     onClick={() => setActiveImage(i)}
-                    aria-label={`View photo ${i + 1} of ${product.name}`}
+                    aria-label={t.productPhotoLabel(i + 1, product.name)}
                     aria-pressed={activeImage === i}
                     className={`w-16 h-16 overflow-hidden bg-muted border transition-colors cursor-pointer ${
                       activeImage === i ? 'border-foreground' : 'border-border hover:border-foreground/50'
@@ -573,11 +576,12 @@ export default function ProductDetail() {
                 <span className="text-xs tracking-widest uppercase text-muted-foreground">{t.productColor}</span>
                 <span className="text-xs text-foreground/70">{color}</span>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {colorOptions.map(c => (
                   <button
                     key={c}
                     onClick={() => setColor(c)}
+                    aria-pressed={color === c}
                     className={`px-3.5 py-1.5 text-sm border transition-colors cursor-pointer ${
                       color === c
                         ? 'border-foreground bg-foreground text-background'
@@ -592,12 +596,7 @@ export default function ProductDetail() {
 
             {/* Size */}
             <div className="mb-10">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs tracking-widest uppercase text-muted-foreground">{t.productSize}</span>
-                <button className="text-xs text-muted-foreground underline-offset-2 hover:underline">
-                  {t.productSizeGuide}
-                </button>
-              </div>
+              <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-3">{t.productSize}</span>
               <div className="grid grid-cols-5 sm:grid-cols-8 gap-1.5">
                 {sizeOptions.map(s => {
                   const available = sizeAvailable(s)
@@ -606,7 +605,8 @@ export default function ProductDetail() {
                       key={s}
                       onClick={() => available && setSize(s)}
                       disabled={!available}
-                      className={`py-2.5 text-sm border transition-colors ${
+                      aria-pressed={size === s}
+                      className={`min-h-[44px] text-sm border transition-colors ${
                         !available
                           ? 'border-border/50 text-muted-foreground/40 cursor-not-allowed'
                           : size === s
@@ -720,7 +720,9 @@ export default function ProductDetail() {
                         value={notifyEmail}
                         onChange={e => setNotifyEmail(e.target.value)}
                         placeholder={t.notifyEmailPlaceholder}
-                        className="flex-1 min-w-0 border border-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:border-foreground"
+                        aria-label={t.notifyEmailPlaceholder}
+                        dir="ltr"
+                        className="flex-1 min-w-0 border border-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:border-foreground rtl:text-right"
                       />
                       <button
                         type="submit"

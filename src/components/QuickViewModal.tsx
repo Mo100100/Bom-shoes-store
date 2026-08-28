@@ -145,18 +145,19 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
           aria-describedby={undefined}
         >
           <Dialog.Close
-            className="absolute top-4 end-4 p-2 cursor-pointer hover:text-foreground/60 transition-colors z-10"
-            aria-label="Close"
+            className="absolute top-4 end-4 w-11 h-11 flex items-center justify-center cursor-pointer hover:text-foreground/60 transition-colors z-10"
+            aria-label={t.close}
           >
             <X className="w-5 h-5" />
           </Dialog.Close>
 
           {/* Always mounted (even mid-load) so Radix never warns about a missing Title. */}
-          <Dialog.Title className="sr-only">{product?.name || 'Quick view'}</Dialog.Title>
+          <Dialog.Title className="sr-only">{product?.name || t.quickViewTitle}</Dialog.Title>
 
           {loading ? (
-            <div className="min-h-[360px] flex items-center justify-center">
+            <div className="min-h-[360px] flex items-center justify-center" role="status" aria-busy="true">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+              <span className="sr-only">{t.loading}</span>
             </div>
           ) : notFound ? (
             <div className="min-h-[360px] flex flex-col items-center justify-center text-center px-6">
@@ -200,6 +201,7 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
                         <button
                           key={c}
                           onClick={() => setColor(c)}
+                          aria-pressed={color === c}
                           className={`px-3.5 py-1.5 text-sm border transition-colors cursor-pointer ${
                             color === c
                               ? 'border-foreground bg-foreground text-background'
@@ -224,7 +226,8 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
                             key={s}
                             onClick={() => available && setSize(s)}
                             disabled={!available}
-                            className={`py-2.5 text-sm border transition-colors ${
+                            aria-pressed={size === s}
+                            className={`min-h-[44px] text-sm border transition-colors ${
                               !available
                                 ? 'border-border/50 text-muted-foreground/40 cursor-not-allowed'
                                 : size === s

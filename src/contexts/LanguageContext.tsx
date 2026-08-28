@@ -10,6 +10,8 @@ type LanguageContextType = {
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined)
 
+// Also read by the inline script in index.html, which applies lang/dir before
+// first paint so an English visitor never sees a flash of RTL.
 const LANG_KEY = 'bom-store-lang'
 
 export function LanguageProvider({ children }: { children: ReactNode }) {

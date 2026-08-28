@@ -16,18 +16,18 @@ function timeLeft(target: Date): TimeLeft {
   }
 }
 
-const DEFAULT_LABELS = { days: 'Days', hours: 'Hrs', minutes: 'Mins', seconds: 'Secs' }
-
 type CountdownTimerProps = {
   target: Date
-  labels?: { days: string; hours: string; minutes: string; seconds: string }
+  // Required, not defaulted: an English fallback baked in here would slip past
+  // the translation object and render untranslated on the Arabic homepage.
+  labels: { days: string; hours: string; minutes: string; seconds: string }
   className?: string
 }
 
 // DAYS / HRS / MINS / SECS countdown -- large number over a small tracked
 // label. Ticks every second off a single interval; once `target` has passed
 // it clamps to all zeros instead of going negative.
-export default function CountdownTimer({ target, labels = DEFAULT_LABELS, className = '' }: CountdownTimerProps) {
+export default function CountdownTimer({ target, labels, className = '' }: CountdownTimerProps) {
   const [left, setLeft] = useState(() => timeLeft(target))
 
   useEffect(() => {

@@ -243,11 +243,14 @@ export default function Shop() {
         {/* Filter bar */}
         <div className="flex flex-col gap-6 bg-background/60 border border-border px-6 py-5 mb-12">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
-            <div className="flex items-center gap-1 overflow-x-auto scrollbar-none -mx-1 px-1">
+            {/* No scrollbar-none here: on a narrow screen the scrollbar is the
+                only sign that more categories exist past the edge. */}
+            <div className="flex items-center gap-1 overflow-x-auto -mx-1 px-1">
               {CATEGORY_VALUES.map(c => (
                 <button
                   key={c}
                   onClick={() => selectCategory(c)}
+                  aria-pressed={category === c}
                   className={`px-4 py-1.5 text-sm whitespace-nowrap transition-colors cursor-pointer ${
                     category === c
                       ? 'bg-foreground text-background'
@@ -283,6 +286,7 @@ export default function Shop() {
                     <button
                       key={c}
                       onClick={() => toggleColor(c)}
+                      aria-pressed={selectedColors.includes(c)}
                       className={`px-3 py-1 text-xs border transition-colors cursor-pointer ${
                         selectedColors.includes(c)
                           ? 'border-foreground bg-foreground text-background'
@@ -301,6 +305,7 @@ export default function Shop() {
                     <button
                       key={s}
                       onClick={() => toggleSize(s)}
+                      aria-pressed={selectedSizes.includes(s)}
                       className={`px-3 py-1 text-xs border transition-colors cursor-pointer ${
                         selectedSizes.includes(s)
                           ? 'border-foreground bg-foreground text-background'
@@ -320,15 +325,17 @@ export default function Shop() {
                   value={minPrice}
                   onChange={(e) => setMinPrice(e.target.value)}
                   placeholder={t.shopPriceMin}
+                  aria-label={`${t.shopFilterPrice}: ${t.shopPriceMin}`}
                   className="w-16 bg-transparent text-xs border-b border-foreground/30 focus:outline-none focus:border-foreground py-1"
                 />
-                <span className="text-muted-foreground">–</span>
+                <span className="text-muted-foreground">-</span>
                 <input
                   type="number"
                   min={0}
                   value={maxPrice}
                   onChange={(e) => setMaxPrice(e.target.value)}
                   placeholder={t.shopPriceMax}
+                  aria-label={`${t.shopFilterPrice}: ${t.shopPriceMax}`}
                   className="w-16 bg-transparent text-xs border-b border-foreground/30 focus:outline-none focus:border-foreground py-1"
                 />
               </div>

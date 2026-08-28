@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { ArrowRight } from 'lucide-react'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { supabase, ProductCatalogEntry } from '@/lib/supabase'
@@ -88,7 +89,7 @@ export default function ShoeShowcase3D() {
   }, [])
 
   // Section top offset + scrollable height, read from the DOM once (mount + resize)
-  // instead of on every scroll tick — keeps the scroll handler free of layout reads.
+  // instead of on every scroll tick: keeps the scroll handler free of layout reads.
   const metricsRef = useRef({ sectionTop: 0, sectionHeight: 1 })
   const tickingRef = useRef(false)
   const resizeTickingRef = useRef(false)
@@ -272,7 +273,7 @@ export default function ShoeShowcase3D() {
               style={{ animation: 'fadeUp 600ms 500ms ease-out both' }}
             >
               {t.showcaseCta}
-              <span className="inline-block transition-transform duration-300 group-hover:translate-x-1">→</span>
+              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform flip-rtl" />
             </a>
           </div>
         </div>
@@ -291,7 +292,7 @@ export default function ShoeShowcase3D() {
                 const target = sectionTop + (i / itemCount) * sectionHeight + 50
                 window.scrollTo({ top: target, behavior: 'smooth' })
               }}
-              aria-label={`Go to slide ${i + 1}`}
+              aria-label={t.showcaseSlideLabel(i + 1)}
               className="showcase-dot w-2 h-2 rounded-full cursor-pointer"
               style={{
                 backgroundColor: i === active ? '#fff' : 'rgba(255,255,255,0.3)',

@@ -6,7 +6,7 @@ import { useLanguage, useT } from '@/contexts/LanguageContext'
 import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { useCategories } from '@/contexts/CategoriesContext'
 import { useWishlist } from '@/contexts/WishlistContext'
-import { ShoppingBag, User, Menu, X, LogOut, LayoutDashboard, Globe, ChevronDown, Search, Instagram, Facebook, Share2, Heart, Loader2 } from 'lucide-react'
+import { ShoppingBag, User, Menu, X, LogOut, LayoutDashboard, Globe, ChevronDown, Search, Instagram, Facebook, Share2, Heart, Loader2, Pause, Play } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { supabase, ProductCatalogEntry } from '@/lib/supabase'
 import { toast } from 'sonner'
@@ -59,6 +59,8 @@ export default function Layout() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [suggestions, setSuggestions] = useState<SearchHit[]>([])
+  const [activeSuggestion, setActiveSuggestion] = useState(-1)
+  const [marqueePaused, setMarqueePaused] = useState(false)
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState(false)
   const [history, setHistory] = useState<string[]>(() => loadSearchHistory())
@@ -76,6 +78,7 @@ export default function Layout() {
   const searchPanelRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchIdRef = useRef(0)
+  const mobileMenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -107,6 +110,61 @@ export default function Layout() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [searchOpen])
+
+  // Same for the two header dropdowns, which otherwise only closed on an
+  // outside mousedown -- a keyboard user had no way to dismiss them.
+  useEffect(() => {
+    if (!langOpen && !userOpen) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return
+      setLangOpen(false)
+      setUserOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [langOpen, userOpen])
+
+  // The mobile menu is a full-screen overlay, not a native <dialog>, so it
+  // gets none of the modal behaviour for free: Escape to close, a locked
+  // background, Tab kept inside the panel, and focus handed back to the
+  // trigger on close. Declared above the search-focus effect below so that
+  // opening search from inside the menu ends with the search input focused,
+  // not the hamburger.
+  useEffect(() => {
+    if (!mobileOpen) return
+    const panel = mobileMenuRef.current
+    const trigger = document.activeElement as HTMLElement | null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    function focusable(): HTMLElement[] {
+      return Array.from(panel?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [])
+    }
+    focusable()[0]?.focus()
+
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') { setMobileOpen(false); return }
+      if (e.key !== 'Tab') return
+      const items = focusable()
+      if (items.length === 0) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      const inside = panel?.contains(document.activeElement)
+      if (e.shiftKey && (!inside || document.activeElement === first)) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && (!inside || document.activeElement === last)) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previousOverflow
+      trigger?.focus()
+    }
+  }, [mobileOpen])
 
   // Footer newsletter heading/subtitle, contact/social info, announcement
   // ticker lines, and footer "Craft" links -- all admin-editable via
@@ -179,6 +237,7 @@ export default function Layout() {
   // screen (or the reverse). Same shape of guard QuickViewModal uses.
   useEffect(() => {
     const q = query.trim()
+    setActiveSuggestion(-1)
     if (!q) {
       setSuggestions([])
       setSearching(false)
@@ -231,6 +290,29 @@ export default function Layout() {
     closeSearch()
   }
 
+  // Arrow keys walk the suggestion list (announced through
+  // aria-activedescendant); Enter takes the highlighted product, or runs the
+  // typed query when nothing is highlighted.
+  function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (suggestions.length === 0) return
+      e.preventDefault()
+      const step = e.key === 'ArrowDown' ? 1 : -1
+      setActiveSuggestion(i => {
+        const next = i + step
+        if (next < 0) return suggestions.length - 1
+        if (next >= suggestions.length) return 0
+        return next
+      })
+      return
+    }
+    if (e.key === 'Enter') {
+      const hit = suggestions[activeSuggestion]
+      if (hit) goToProduct(hit.slug)
+      else commitSearch(query)
+    }
+  }
+
   useEffect(() => {
     function onScroll() {
       setScrolled(window.scrollY > 20)
@@ -268,8 +350,10 @@ export default function Layout() {
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       {/* Announcement bar */}
       {announcementEnabled && (
-      <div className="bg-foreground text-background text-[11px] tracking-[0.25em] uppercase py-2.5 px-4 text-center font-light overflow-hidden">
-        <div className="marquee-track gap-12">
+      <div className="relative bg-foreground text-background text-[11px] tracking-[0.25em] uppercase py-2.5 px-4 text-center font-light overflow-hidden">
+        {/* No gap on the track itself: the keyframe travels exactly 50% of the
+            track's width, which is one copy only when the two copies sit flush. */}
+        <div className="marquee-track" style={{ animationPlayState: marqueePaused ? 'paused' : 'running' }}>
           {[0, 1].map((dup) => (
             <div key={dup} className="flex gap-12 px-6 shrink-0">
               {marqueeLines.map((line, i) => (
@@ -278,6 +362,15 @@ export default function Layout() {
             </div>
           ))}
         </div>
+        {/* WCAG 2.2.2: any motion that starts on its own and runs longer than
+            five seconds needs a way to stop it. */}
+        <button
+          onClick={() => setMarqueePaused(p => !p)}
+          aria-label={marqueePaused ? t.navPlayAnnouncements : t.navPauseAnnouncements}
+          className="absolute end-0 top-0 bottom-0 px-3 flex items-center bg-foreground hover:opacity-70 transition-opacity cursor-pointer"
+        >
+          {marqueePaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+        </button>
       </div>
       )}
 
@@ -294,8 +387,9 @@ export default function Layout() {
           {/* Mobile menu */}
           <button
             onClick={() => setMobileOpen(true)}
-            className="lg:hidden p-2 -ms-2 cursor-pointer hover:text-foreground/70 transition-colors"
-            aria-label="Open menu"
+            className="lg:hidden -ms-2 w-11 h-11 flex items-center justify-center cursor-pointer hover:text-foreground/70 transition-colors"
+            aria-label={t.navOpenMenu}
+            aria-expanded={mobileOpen}
           >
             <Menu className="w-5 h-5" />
           </button>
@@ -304,15 +398,18 @@ export default function Layout() {
           <Link
             to="/"
             className="flex-shrink-0 transition-transform duration-500 hover:scale-105"
-            aria-label="BOM Store home"
+            aria-label={t.navHome}
           >
             <Logo size={56} showText={false} />
           </Link>
 
           {/* Centered nav (desktop) -- absolutely positioned at the bar's exact
               midpoint so it stays centered regardless of how wide the logo vs.
-              icon group are, instead of splitting remaining space in half. */}
-          <nav className="hidden lg:flex items-center gap-10 absolute start-1/2 -translate-x-1/2">
+              icon group are, instead of splitting remaining space in half.
+              In RTL `start-1/2` resolves to `right: 50%`, so the bar grows
+              leftwards from the midpoint and has to be pulled back by +50% of
+              its own width, not -50%. */}
+          <nav className="hidden lg:flex items-center gap-10 absolute start-1/2 -translate-x-1/2 rtl:translate-x-1/2">
             {nav.map(n => (
               <NavLink
                 key={n.to}
@@ -325,7 +422,7 @@ export default function Layout() {
               >
                 {n.label}
                 <span className={cn(
-                  "absolute -bottom-1 start-0 end-0 h-px scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-left",
+                  "absolute -bottom-1 start-0 end-0 h-px scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-left rtl:origin-right",
                   n.sale ? "bg-terracotta" : "bg-foreground"
                 )} />
               </NavLink>
@@ -338,8 +435,9 @@ export default function Layout() {
             <button
               ref={searchBtnRef}
               onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
-              className="hidden md:flex p-2 hover:text-foreground/60 transition-colors cursor-pointer"
-              aria-label={searchOpen ? 'Close search' : 'Search'}
+              className="hidden md:flex w-11 h-11 items-center justify-center hover:text-foreground/60 transition-colors cursor-pointer"
+              aria-label={searchOpen ? t.searchClose : t.searchLabel}
+              aria-expanded={searchOpen}
             >
               {searchOpen ? <X className="w-5 h-5" /> : <Search className="w-5 h-5" />}
             </button>
@@ -348,8 +446,10 @@ export default function Layout() {
             <div className="relative" ref={langRef}>
               <button
                 onClick={() => setLangOpen(!langOpen)}
-                className="flex items-center gap-1.5 p-2 cursor-pointer hover:text-foreground/60 transition-colors text-[11px] tracking-[0.18em] uppercase font-medium"
-                aria-label="Switch language"
+                className="flex items-center gap-1.5 px-2 h-11 cursor-pointer hover:text-foreground/60 transition-colors text-[11px] tracking-[0.18em] uppercase font-medium"
+                aria-label={t.navSwitchLanguage}
+                aria-haspopup="menu"
+                aria-expanded={langOpen}
               >
                 <Globe className="w-4 h-4" />
                 <span className="hidden sm:inline">{lang === 'ar' ? 'AR' : 'EN'}</span>
@@ -382,8 +482,10 @@ export default function Layout() {
             <div className="relative" ref={userRef}>
               <button
                 onClick={() => setUserOpen(!userOpen)}
-                className="p-2 cursor-pointer hover:text-foreground/60 transition-colors"
-                aria-label="Account"
+                className="w-11 h-11 flex items-center justify-center cursor-pointer hover:text-foreground/60 transition-colors"
+                aria-label={t.account}
+                aria-haspopup="menu"
+                aria-expanded={userOpen}
               >
                 <User className="w-5 h-5" />
               </button>
@@ -392,7 +494,7 @@ export default function Layout() {
                   {user ? (
                     <div className="py-2">
                       <div className="px-4 py-3 border-b border-border/60">
-                        <p className="text-sm font-medium">{profile?.full_name || (lang === 'ar' ? 'زائر' : 'Guest')}</p>
+                        <p className="text-sm font-medium">{profile?.full_name || t.guest}</p>
                         <p className="text-xs text-muted-foreground truncate mt-0.5">{user.email}</p>
                       </div>
                       <Link
@@ -441,29 +543,36 @@ export default function Layout() {
                 </div>
               )}
             </div>
+            {/* The count badge hangs off an inner wrapper, not the link itself,
+                so widening the link to a 44px tap target doesn't drag the badge
+                away from the icon. */}
             <Link
               to={user ? '/account#wishlist' : '/login'}
-              className="hidden md:flex p-2 hover:text-foreground/60 transition-colors relative"
+              className="hidden md:flex w-11 h-11 items-center justify-center hover:text-foreground/60 transition-colors"
               aria-label={t.wishlistNavLabel}
             >
-              <Heart className="w-5 h-5" />
-              {wishlistedIds.size > 0 && (
-                <span className="absolute -top-0.5 -end-0.5 bg-foreground text-background text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-medium">
-                  {wishlistedIds.size}
-                </span>
-              )}
+              <span className="relative">
+                <Heart className="w-5 h-5" />
+                {wishlistedIds.size > 0 && (
+                  <span className="absolute -top-0.5 -end-0.5 bg-foreground text-background text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-medium">
+                    {wishlistedIds.size}
+                  </span>
+                )}
+              </span>
             </Link>
             <Link
               to="/cart"
-              className="p-2 hover:text-foreground/60 transition-colors relative"
+              className="w-11 h-11 flex items-center justify-center hover:text-foreground/60 transition-colors"
               aria-label={t.cart}
             >
-              <ShoppingBag className="w-5 h-5" />
-              {totalItems > 0 && (
-                <span className="absolute -top-0.5 -end-0.5 bg-foreground text-background text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-medium">
-                  {totalItems}
-                </span>
-              )}
+              <span className="relative">
+                <ShoppingBag className="w-5 h-5" />
+                {totalItems > 0 && (
+                  <span className="absolute -top-0.5 -end-0.5 bg-foreground text-background text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-medium">
+                    {totalItems}
+                  </span>
+                )}
+              </span>
             </Link>
           </div>
         </div>
@@ -482,9 +591,15 @@ export default function Layout() {
                   ref={searchInputRef}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') commitSearch(query) }}
+                  onKeyDown={handleSearchKeyDown}
                   placeholder={t.searchPlaceholder}
                   dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                  aria-label={t.searchLabel}
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-controls="search-suggestions"
+                  aria-expanded={suggestions.length > 0}
+                  aria-activedescendant={activeSuggestion >= 0 ? `search-suggestion-${activeSuggestion}` : undefined}
                   className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-3 ps-9 text-lg font-display placeholder:text-muted-foreground placeholder:font-sans"
                 />
               </div>
@@ -499,12 +614,18 @@ export default function Layout() {
                     ) : searchError ? (
                       <p className="text-sm text-terracotta py-2">{t.searchError}</p>
                     ) : suggestions.length > 0 ? (
-                      <div className="space-y-1">
-                        {suggestions.map(p => (
+                      <div className="space-y-1" id="search-suggestions" role="listbox" aria-label={t.searchLabel}>
+                        {suggestions.map((p, i) => (
                           <button
                             key={p.id}
+                            id={`search-suggestion-${i}`}
+                            role="option"
+                            aria-selected={activeSuggestion === i}
                             onClick={() => goToProduct(p.slug)}
-                            className="w-full flex items-center gap-4 p-2 hover:bg-muted transition-colors text-start cursor-pointer"
+                            className={cn(
+                              "w-full flex items-center gap-4 p-2 hover:bg-muted transition-colors text-start cursor-pointer",
+                              activeSuggestion === i && "bg-muted"
+                            )}
                           >
                             <div className="w-12 h-12 bg-muted overflow-hidden shrink-0">
                               <img src={p.image_url || ''} alt={p.name} className="w-full h-full object-cover" />
@@ -548,16 +669,35 @@ export default function Layout() {
 
       {/* Mobile menu */}
       {mobileOpen && (
-        <div className="fixed inset-0 z-50 bg-background lg:hidden overflow-y-auto slide-in-right">
+        <div
+          ref={mobileMenuRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t.navMenu}
+          className="fixed inset-0 z-50 bg-background lg:hidden overflow-y-auto slide-in-right"
+        >
           <div className="flex items-center justify-between h-20 px-6 border-b border-border/60">
-            <Link to="/" onClick={() => setMobileOpen(false)} aria-label="BOM Store home">
+            <Link to="/" onClick={() => setMobileOpen(false)} aria-label={t.navHome}>
               <Logo size={48} showText={false} />
             </Link>
-            <button onClick={() => setMobileOpen(false)} className="p-2 cursor-pointer" aria-label="Close menu">
+            <button
+              onClick={() => setMobileOpen(false)}
+              className="-me-2 w-11 h-11 flex items-center justify-center cursor-pointer"
+              aria-label={t.navCloseMenu}
+            >
               <X className="w-5 h-5" />
             </button>
           </div>
           <nav className="flex flex-col p-6">
+            {/* The header's search button is desktop-only, so without this row
+                search is unreachable on a phone. */}
+            <button
+              onClick={() => { setMobileOpen(false); setSearchOpen(true) }}
+              className="py-4 text-2xl font-display border-b border-border/40 flex items-center justify-between text-start cursor-pointer hover:text-foreground/60 transition-colors"
+            >
+              <span>{t.searchLabel}</span>
+              <Search className="w-5 h-5" />
+            </button>
             {nav.map(n => (
               <Link
                 key={n.to}
@@ -684,8 +824,11 @@ export default function Layout() {
                   value={subscribeEmail}
                   onChange={(e) => setSubscribeEmail(e.target.value)}
                   placeholder={t.homeNewsletterPlaceholder}
-                  dir={lang === 'ar' ? 'rtl' : 'ltr'}
-                  className="flex-1 bg-transparent border-b border-background/30 focus:border-background outline-none py-2 text-sm placeholder:text-background/40 text-background"
+                  aria-label={t.homeNewsletterPlaceholder}
+                  // Email addresses read left-to-right in either language;
+                  // rtl:text-right keeps the field on the Arabic start edge.
+                  dir="ltr"
+                  className="flex-1 bg-transparent border-b border-background/30 focus:border-background outline-none py-2 text-sm placeholder:text-background/40 text-background rtl:text-right"
                 />
                 <button
                   type="submit"
@@ -731,6 +874,7 @@ function FooterContact({
   lang: string
   label: string
 }) {
+  const t = useT()
   if (!contact) return null
   const address = lang === 'ar' ? contact.address_ar : contact.address_en
   const socials = [
@@ -755,7 +899,7 @@ function FooterContact({
       {address && <p>{address}</p>}
       {contact.map_url && (
         <a href={contact.map_url} target="_blank" rel="noopener noreferrer" className="block underline hover:text-background transition-colors">
-          {lang === 'ar' ? 'عرض على الخريطة' : 'View on map'}
+          {t.footerViewOnMap}
         </a>
       )}
       {socials.length > 0 && (

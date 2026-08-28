@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useCart, CartItem } from '@/contexts/CartContext'
 import { couponRejectionMessage, TAX_RATE } from '@/lib/cart'
-import { useT, useLanguage } from '@/contexts/LanguageContext'
+import { useT } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { supabase, readServerError } from '@/lib/supabase'
 import { Minus, Plus, X, ArrowRight, ShoppingBag, Loader2 } from 'lucide-react'
@@ -20,7 +20,6 @@ export default function Cart() {
   const { items, updateQuantity, removeItem, totalItems, totalPrice, clearCart, revalidateCart, couponCode, setCouponCode } = useCart()
   const navigate = useNavigate()
   const t = useT()
-  const { lang } = useLanguage()
   const { formatPrice } = useCurrency()
 
   useSeo({ title: `${t.cart} · ${t.brandName}`, description: t.cartEmptyDesc })
@@ -183,12 +182,12 @@ export default function Cart() {
                         {item.product.category}
                       </p>
                       <p className="text-sm text-muted-foreground mt-2">
-                        {item.color}, Size {item.size}
+                        {t.cartVariant(item.color, item.size)}
                       </p>
                     </div>
                     <button
                       onClick={() => removeItem(item.product.id, item.size, item.color)}
-                      className="p-1 -m-1 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                      className="-m-3.5 w-11 h-11 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                       aria-label={t.cartRemove}
                     >
                       <X className="w-4 h-4" />
@@ -210,16 +209,18 @@ export default function Cart() {
                         <div className="flex items-center border border-border">
                           <button
                             onClick={() => updateQuantity(item.product.id, item.size, item.color, item.quantity - 1)}
-                            className="p-2 hover:bg-muted transition-colors cursor-pointer"
+                            className="w-11 h-11 flex items-center justify-center hover:bg-muted transition-colors cursor-pointer"
                             aria-label={t.cartDecrease}
                           >
                             <Minus className="w-3 h-3" />
                           </button>
-                          <span className="w-10 text-center text-sm">{item.quantity}</span>
+                          {/* Announced on change: the buttons themselves say
+                              nothing about the number they just moved. */}
+                          <span className="w-10 text-center text-sm" aria-live="polite">{item.quantity}</span>
                           <button
                             onClick={() => updateQuantity(item.product.id, item.size, item.color, item.quantity + 1)}
                             disabled={atMax}
-                            className="p-2 hover:bg-muted transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="w-11 h-11 flex items-center justify-center hover:bg-muted transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                             aria-label={t.cartIncrease}
                           >
                             <Plus className="w-3 h-3" />
@@ -290,6 +291,7 @@ export default function Cart() {
                       onChange={e => setCouponInput(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleApplyClick() } }}
                       placeholder={t.cartCouponPlaceholder}
+                      aria-label={t.cartCouponPlaceholder}
                       className="flex-1 min-w-0 bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors"
                     />
                     <button

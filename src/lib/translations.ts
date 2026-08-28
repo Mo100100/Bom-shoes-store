@@ -25,6 +25,13 @@ export const translations = {
     navBrands: 'Brands',
     navSale: 'Sale',
     navPolicies: 'Policies & Cancellations',
+    navMenu: 'Menu',
+    navOpenMenu: 'Open menu',
+    navCloseMenu: 'Close menu',
+    navHome: 'BOM Store home',
+    navSwitchLanguage: 'Switch language',
+    navPauseAnnouncements: 'Pause announcements',
+    navPlayAnnouncements: 'Resume announcements',
 
     // Account menu
     myAccount: 'My account',
@@ -44,6 +51,7 @@ export const translations = {
     footerSecure: 'Secure checkout by Kashier',
     footerReturns: '30-day returns',
     footerQuote: 'Quietness is a luxury.',
+    footerViewOnMap: 'View on map',
 
     // Home
     homeEyebrow: 'Mindful Footwear',
@@ -90,6 +98,7 @@ export const translations = {
     showcaseDesc: 'Cut from a single hide. Goodyear welted. A shoe that grows with you, season after season.',
     showcaseCta: 'Discover the piece',
     showcaseScroll: 'Scroll to explore',
+    showcaseSlideLabel: (n: number) => `Go to slide ${n}`,
 
     // New: marquee strip
     marqueeLine1: 'Handcrafted in Cairo',
@@ -183,6 +192,8 @@ export const translations = {
       percent >= 100 ? `Buy ${buy} Get ${get} Free` : `Buy ${buy} Get ${get} ${percent}% Off`,
 
     // Header search
+    searchLabel: 'Search',
+    searchClose: 'Close search',
     searchPlaceholder: 'Search for a pair…',
     searchRecent: 'Recent searches',
     searchSeeAll: (q: string) => `See all results for "${q}"`,
@@ -193,13 +204,13 @@ export const translations = {
     productBack: 'Back to shop',
     productColor: 'Color',
     productSize: 'Size',
-    productSizeGuide: 'Size guide',
     productAddToBag: 'Add to basket',
     productOutOfStock: 'Out of stock',
     productAdded: 'Added to your basket',
     // Toast detail line: always names the size that went in, so a quick-add
     // never leaves the customer guessing which one they got.
-    productAddedSize: (name: string, size: string) => `${name}, size ${size}`,
+    productAddedSize: (name: string, size: string) => `${name}, Size ${size}`,
+    productPhotoLabel: (n: number, name: string) => `View photo ${n} of ${name}`,
     productStockMaxed: 'Your basket already holds every one we have left',
     productChooseSize: 'Please choose a size',
     productShip1: 'Free shipping on orders over $200',
@@ -233,6 +244,8 @@ export const translations = {
     reviewsLoadError: 'Could not load reviews. Please try again.',
     reviewsVerifiedBadge: 'Verified Purchase',
     reviewsAnonymous: 'Customer',
+    reviewsRateStars: (n: number) => `Rate ${n} star${n > 1 ? 's' : ''}`,
+    reviewsStarsLabel: (rating: string, count: number) => `${rating} out of 5 stars, ${count} reviews`,
     reviewsWriteTitle: 'Write a review',
     reviewsEditTitle: 'Edit your review',
     reviewsTitlePlaceholder: 'Sum it up in a few words (optional)',
@@ -263,6 +276,7 @@ export const translations = {
     wishlistNavLabel: 'Wishlist',
 
     // Quick view
+    quickViewTitle: 'Quick view',
     quickViewDetails: 'View full details',
     quickViewNotFound: 'This piece is no longer available.',
     quickViewError: 'Could not load this piece. Please try again.',
@@ -286,6 +300,9 @@ export const translations = {
     cartRemove: 'Remove',
     cartDecrease: 'Decrease',
     cartIncrease: 'Increase',
+    // One format for a chosen colour + size, shared by the basket and the
+    // checkout summary so the same line never reads two different ways.
+    cartVariant: (color: string, size: string) => `${color}, Size ${size}`,
     cartCouponPlaceholder: 'Coupon code',
     cartCouponApply: 'Apply',
     cartCouponInvalid: 'This code could not be applied',
@@ -475,7 +492,7 @@ export const translations = {
     adminNewOrderToast: (ref: string, name: string, total: string) => `New order ${ref} from ${name} · ${total}`,
     adminGuest: 'Guest',
 
-    // Admin — shared across banners/coupons/bundles
+    // Admin - shared across banners/coupons/bundles
     adminActiveLabel: 'Active',
     adminMoveUp: 'Move up',
     adminMoveDown: 'Move down',
@@ -496,7 +513,7 @@ export const translations = {
     adminDeleteFailed: 'Delete failed',
     adminUploadFailed: 'Upload failed',
 
-    // Admin — banners
+    // Admin - banners
     adminAddBanner: 'Add banner',
     adminBannerCount: (n: number) => `${n} ${n === 1 ? 'banner' : 'banners'}`,
     adminBannerOrderCol: 'Order',
@@ -517,7 +534,7 @@ export const translations = {
     adminBannerCreated: 'Banner created',
     adminBannerDeleted: 'Banner deleted',
 
-    // Admin — coupons
+    // Admin - coupons
     adminAddCoupon: 'Add coupon',
     adminCouponCount: (n: number) => `${n} ${n === 1 ? 'coupon' : 'coupons'}`,
     adminCouponCode: 'Code',
@@ -560,7 +577,7 @@ export const translations = {
     adminNoDateLimit: 'No date limit',
     adminAny: 'Any',
 
-    // Admin — bundles
+    // Admin - bundles
     adminAddBundle: 'Add bundle',
     adminBundleCount: (n: number) => `${n} ${n === 1 ? 'bundle' : 'bundles'}`,
     adminNoBundles: 'No bundles yet',
@@ -576,7 +593,7 @@ export const translations = {
     adminBundleCreated: 'Bundle created',
     adminBundleDeleted: 'Bundle deleted',
 
-    // Admin — activity log
+    // Admin - activity log
     adminCoupon: 'Coupon',
     adminNoActivity: 'No activity yet.',
     adminTime: 'Time',
@@ -589,7 +606,7 @@ export const translations = {
     adminExpandDetails: 'Expand details',
     adminLoadMore: 'Load more',
 
-    // Admin — settings
+    // Admin - settings
     adminLogo: 'Logo',
     adminFavicon: 'Favicon',
     adminNone: 'None',
@@ -640,7 +657,7 @@ export const translations = {
     adminRemoveLogo: 'Remove logo',
     adminNoLogo: 'No logo',
 
-    // Admin — users
+    // Admin - users
     adminRole: 'Role',
     adminRoleUpdated: 'Role updated',
     adminYouSuffix: ' (you)',
@@ -648,14 +665,14 @@ export const translations = {
     adminRoleAdmin: 'admin',
     adminCantChangeOwnRole: "You can't change your own role here",
 
-    // Admin — count nouns
+    // Admin - count nouns
     adminUsersCount: (n: number) => `${n} ${n === 1 ? 'user' : 'users'}`,
     adminOrdersCount: (n: number) => `${n} ${n === 1 ? 'order' : 'orders'}`,
     adminNoProducts: 'No products yet',
 
-    // Admin — product form (extra fields)
+    // Admin - product form (extra fields)
     adminBrandField: 'Brand',
-    adminBrandNoneOption: '— None (BOM Store own) —',
+    adminBrandNoneOption: '- None (BOM Store own) -',
     adminCostPrice: 'Cost Price',
     adminMaterials: 'Materials',
     adminWeightGrams: 'Weight (grams)',
@@ -681,7 +698,7 @@ export const translations = {
     adminSetFeatured: 'Set featured',
     adminDeleteImage: 'Delete image',
 
-    // Admin — homepage tabs
+    // Admin - homepage tabs
     adminHeroTab: 'Hero',
     adminShowcaseTab: 'Showcase',
     adminCuratedTab: 'Curated',
@@ -699,7 +716,7 @@ export const translations = {
     adminPoliciesEdit: 'Edit',
     adminTestimonialsTab: 'Testimonials',
 
-    // Admin — homepage fields
+    // Admin - homepage fields
     adminFieldEyebrow: 'Eyebrow',
     adminFieldTitleLine1: 'Title, line 1',
     adminFieldTitleLine2: 'Title, line 2',
@@ -746,7 +763,7 @@ export const translations = {
     adminSubscriberLoading: 'Loading subscriber count…',
     adminSubscriberCount: (n: number) => `${n} ${n === 1 ? 'person has' : 'people have'} subscribed`,
 
-    // Admin — testimonials
+    // Admin - testimonials
     adminTestimonialsCount: (n: number) => `${n} ${n === 1 ? 'testimonial' : 'testimonials'}`,
     adminAddTestimonial: 'Add testimonial',
     adminEditTestimonial: 'Edit testimonial',
@@ -791,6 +808,9 @@ export const translations = {
     // Misc
     cart: 'Cart',
     account: 'Account',
+    close: 'Close',
+    loading: 'Loading',
+    guest: 'Guest',
     piece: 'piece',
     pieces: 'pieces',
     yes: 'Yes',
@@ -820,6 +840,13 @@ export const translations = {
     navBrands: 'الماركات',
     navSale: 'تخفيضات',
     navPolicies: 'السياسات والإلغاء',
+    navMenu: 'القائمة',
+    navOpenMenu: 'فتح القائمة',
+    navCloseMenu: 'إغلاق القائمة',
+    navHome: 'الصفحة الرئيسية لمتجر BOM',
+    navSwitchLanguage: 'تغيير اللغة',
+    navPauseAnnouncements: 'إيقاف الإعلانات',
+    navPlayAnnouncements: 'استئناف الإعلانات',
 
     // Account menu
     myAccount: 'حسابي',
@@ -839,6 +866,7 @@ export const translations = {
     footerSecure: 'دفع آمن عبر كاشير',
     footerReturns: 'إرجاع خلال 30 يوما',
     footerQuote: 'الهدوء ترف.',
+    footerViewOnMap: 'عرض على الخريطة',
 
     // Home
     homeEyebrow: 'أحذية بوعي',
@@ -885,6 +913,7 @@ export const translations = {
     showcaseDesc: 'مقصوص من جلدة واحدة. مخيط بطريقة Goodyear. حذاء ينمو معك، موسما بعد موسم.',
     showcaseCta: 'اكتشف القطعة',
     showcaseScroll: 'انزل للاستكشاف',
+    showcaseSlideLabel: (n: number) => `الانتقال إلى الشريحة ${n}`,
 
     // New: marquee strip
     marqueeLine1: 'يصنع باليد في القاهرة',
@@ -975,6 +1004,8 @@ export const translations = {
       percent >= 100 ? `اشتر ${buy} واحصل على ${get} مجانا` : `اشتر ${buy} واحصل على ${get} بخصم ${percent}٪`,
 
     // Header search
+    searchLabel: 'بحث',
+    searchClose: 'إغلاق البحث',
     searchPlaceholder: 'ابحث عن زوج…',
     searchRecent: 'عمليات بحث سابقة',
     searchSeeAll: (q: string) => `عرض جميع نتائج "${q}"`,
@@ -985,11 +1016,11 @@ export const translations = {
     productBack: 'العودة إلى المتجر',
     productColor: 'اللون',
     productSize: 'المقاس',
-    productSizeGuide: 'دليل المقاسات',
     productAddToBag: 'أضف إلى السلة',
     productOutOfStock: 'نفد المخزون',
     productAdded: 'أضيف إلى سلتك',
     productAddedSize: (name: string, size: string) => `${name}، مقاس ${size}`,
+    productPhotoLabel: (n: number, name: string) => `عرض الصورة ${n} من ${name}`,
     productStockMaxed: 'سلتك تحتوي بالفعل على كل ما تبقى لدينا',
     productChooseSize: 'يرجى اختيار مقاس',
     productShip1: 'شحن مجاني للطلبات فوق 200 دولار',
@@ -1023,6 +1054,8 @@ export const translations = {
     reviewsLoadError: 'تعذر تحميل التقييمات. يرجى المحاولة مرة أخرى.',
     reviewsVerifiedBadge: 'عملية شراء موثقة',
     reviewsAnonymous: 'عميل',
+    reviewsRateStars: (n: number) => `قيّم بـ ${n} من 5 نجوم`,
+    reviewsStarsLabel: (rating: string, count: number) => `${rating} من 5 نجوم، ${count} تقييمات`,
     reviewsWriteTitle: 'اكتب تقييما',
     reviewsEditTitle: 'عدل تقييمك',
     reviewsTitlePlaceholder: 'لخص رأيك في كلمات قليلة (اختياري)',
@@ -1053,6 +1086,7 @@ export const translations = {
     wishlistNavLabel: 'المفضلة',
 
     // Quick view
+    quickViewTitle: 'عرض سريع',
     quickViewDetails: 'عرض التفاصيل الكاملة',
     quickViewNotFound: 'هذه القطعة لم تعد متوفرة.',
     quickViewError: 'تعذر تحميل هذه القطعة. يرجى المحاولة مرة أخرى.',
@@ -1076,6 +1110,7 @@ export const translations = {
     cartRemove: 'إزالة',
     cartDecrease: 'إنقاص',
     cartIncrease: 'زيادة',
+    cartVariant: (color: string, size: string) => `${color}، مقاس ${size}`,
     cartCouponPlaceholder: 'كود الخصم',
     cartCouponApply: 'تطبيق',
     cartCouponInvalid: 'تعذر تطبيق هذا الكود',
@@ -1261,7 +1296,7 @@ export const translations = {
     adminNewOrderToast: (ref: string, name: string, total: string) => `طلب جديد ${ref} من ${name} · ${total}`,
     adminGuest: 'زائر',
 
-    // Admin — shared across banners/coupons/bundles
+    // Admin - shared across banners/coupons/bundles
     adminActiveLabel: 'نشط',
     adminMoveUp: 'نقل لأعلى',
     adminMoveDown: 'نقل لأسفل',
@@ -1282,7 +1317,7 @@ export const translations = {
     adminDeleteFailed: 'فشل الحذف',
     adminUploadFailed: 'فشل الرفع',
 
-    // Admin — banners
+    // Admin - banners
     adminAddBanner: 'إضافة لافتة',
     adminBannerCount: (n: number) => `${n} ${n === 1 ? 'لافتة' : 'لافتات'}`,
     adminBannerOrderCol: 'الترتيب',
@@ -1303,7 +1338,7 @@ export const translations = {
     adminBannerCreated: 'تم إنشاء اللافتة',
     adminBannerDeleted: 'تم حذف اللافتة',
 
-    // Admin — coupons
+    // Admin - coupons
     adminAddCoupon: 'إضافة كوبون',
     adminCouponCount: (n: number) => `${n} ${n === 1 ? 'كوبون' : 'كوبونات'}`,
     adminCouponCode: 'الكود',
@@ -1346,7 +1381,7 @@ export const translations = {
     adminNoDateLimit: 'بلا حد زمني',
     adminAny: 'أي وقت',
 
-    // Admin — bundles
+    // Admin - bundles
     adminAddBundle: 'إضافة حزمة',
     adminBundleCount: (n: number) => `${n} ${n === 1 ? 'حزمة' : 'حزم'}`,
     adminNoBundles: 'لا حزم بعد',
@@ -1362,7 +1397,7 @@ export const translations = {
     adminBundleCreated: 'تم إنشاء الحزمة',
     adminBundleDeleted: 'تم حذف الحزمة',
 
-    // Admin — activity log
+    // Admin - activity log
     adminCoupon: 'كوبون',
     adminNoActivity: 'لا يوجد نشاط بعد.',
     adminTime: 'الوقت',
@@ -1375,7 +1410,7 @@ export const translations = {
     adminExpandDetails: 'عرض التفاصيل',
     adminLoadMore: 'تحميل المزيد',
 
-    // Admin — settings
+    // Admin - settings
     adminLogo: 'الشعار',
     adminFavicon: 'أيقونة الموقع',
     adminNone: 'لا شيء',
@@ -1426,7 +1461,7 @@ export const translations = {
     adminRemoveLogo: 'إزالة الشعار',
     adminNoLogo: 'لا يوجد شعار',
 
-    // Admin — users
+    // Admin - users
     adminRole: 'الدور',
     adminRoleUpdated: 'تم تحديث الدور',
     adminYouSuffix: ' (أنت)',
@@ -1434,14 +1469,14 @@ export const translations = {
     adminRoleAdmin: 'مسؤول',
     adminCantChangeOwnRole: 'لا يمكنك تغيير دورك من هنا',
 
-    // Admin — count nouns
+    // Admin - count nouns
     adminUsersCount: (n: number) => `${n} ${n === 1 ? 'مستخدم واحد' : 'مستخدم'}`,
     adminOrdersCount: (n: number) => `${n} ${n === 1 ? 'طلب واحد' : 'طلب'}`,
     adminNoProducts: 'لا منتجات بعد',
 
-    // Admin — product form (extra fields)
+    // Admin - product form (extra fields)
     adminBrandField: 'الماركة',
-    adminBrandNoneOption: '— بلا ماركة (منتج BOM Store) —',
+    adminBrandNoneOption: '- بلا ماركة (منتج BOM Store) -',
     adminCostPrice: 'سعر التكلفة',
     adminMaterials: 'الخامات',
     adminWeightGrams: 'الوزن (جرام)',
@@ -1467,7 +1502,7 @@ export const translations = {
     adminSetFeatured: 'تعيين كصورة رئيسية',
     adminDeleteImage: 'حذف الصورة',
 
-    // Admin — homepage tabs
+    // Admin - homepage tabs
     adminHeroTab: 'الواجهة',
     adminShowcaseTab: 'العرض',
     adminCuratedTab: 'المختارة',
@@ -1485,7 +1520,7 @@ export const translations = {
     adminPoliciesEdit: 'تعديل',
     adminTestimonialsTab: 'آراء العملاء',
 
-    // Admin — homepage fields
+    // Admin - homepage fields
     adminFieldEyebrow: 'العنوان التمهيدي',
     adminFieldTitleLine1: 'العنوان، السطر 1',
     adminFieldTitleLine2: 'العنوان، السطر 2',
@@ -1528,11 +1563,11 @@ export const translations = {
     adminLinkN: (n: number) => `الرابط ${n}`,
     adminRemoveLink: 'إزالة الرابط',
     adminNoLinks: 'لا روابط بعد',
-    adminBrandBarNote: 'يعرض شريط الماركات ماركاتك (بالأسماء، أو بالشعارات بعد رفعها) أسفل الواجهة. محتواه يأتي من قائمة الماركات لديك — استخدم المفتاح أدناه لإظهار الشريط كله أو إخفائه في الصفحة الرئيسية.',
+    adminBrandBarNote: 'يعرض شريط الماركات ماركاتك (بالأسماء، أو بالشعارات بعد رفعها) أسفل الواجهة. محتواه يأتي من قائمة الماركات لديك - استخدم المفتاح أدناه لإظهار الشريط كله أو إخفائه في الصفحة الرئيسية.',
     adminSubscriberLoading: 'جار تحميل عدد المشتركين…',
     adminSubscriberCount: (n: number) => `اشترك ${n} ${n === 1 ? 'شخص' : 'أشخاص'}`,
 
-    // Admin — testimonials
+    // Admin - testimonials
     adminTestimonialsCount: (n: number) => `${n} ${n === 1 ? 'رأي واحد' : 'آراء'}`,
     adminAddTestimonial: 'إضافة رأي',
     adminEditTestimonial: 'تعديل الرأي',
@@ -1577,6 +1612,9 @@ export const translations = {
     // Misc
     cart: 'السلة',
     account: 'الحساب',
+    close: 'إغلاق',
+    loading: 'جار التحميل',
+    guest: 'زائر',
     piece: 'قطعة',
     pieces: 'قطع',
     yes: 'نعم',
