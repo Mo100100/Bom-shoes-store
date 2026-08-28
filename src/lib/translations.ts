@@ -317,6 +317,9 @@ export const translations = {
     checkoutFailed: 'Something went quiet on our end. Please try again.',
     checkoutUnavailable: 'Some pieces sold out while you were here. Go back to your basket to remove them.',
     checkoutBackToBasket: 'Back to your basket',
+    checkoutTooManyOrders: 'Too many orders from here in a short time. Please wait a little and try again.',
+    checkoutCodTooManyItems: (max: number) => `Cash on delivery is limited to ${max} items per order. Please reduce your basket, or pay online instead.`,
+    checkoutCodTooExpensive: (max: string) => `Cash on delivery is limited to ${max} per order. Please reduce your basket, or pay online instead.`,
 
     // Checkout success / failed
     successChecking: 'Confirming your order',
@@ -1076,6 +1079,9 @@ export const translations = {
     checkoutFailed: 'حدث شيء هادئ لدينا. يرجى المحاولة مرة أخرى.',
     checkoutUnavailable: 'نفدت بعض القطع أثناء وجودك هنا. عد إلى سلتك لإزالتها.',
     checkoutBackToBasket: 'العودة إلى سلتك',
+    checkoutTooManyOrders: 'طلبات كثيرة من هنا خلال وقت قصير. يرجى الانتظار قليلاً ثم المحاولة مرة أخرى.',
+    checkoutCodTooManyItems: (max: number) => `الدفع عند الاستلام محدود بـ ${max} قطعة لكل طلب. يرجى تقليل سلتك، أو الدفع أونلاين بدلاً من ذلك.`,
+    checkoutCodTooExpensive: (max: string) => `الدفع عند الاستلام محدود بـ ${max} لكل طلب. يرجى تقليل سلتك، أو الدفع أونلاين بدلاً من ذلك.`,
 
     // Checkout success / failed
     successChecking: 'جارٍ تأكيد طلبك',

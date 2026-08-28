@@ -15,6 +15,25 @@ import { toast } from 'sonner'
 import { Link } from 'react-router-dom'
 import { useSeo } from '@/hooks/useSeo'
 
+// create-order rejects an over-cap or rate-limited request with a machine-
+// readable `code` (and the ceiling that was hit) in the response body, so the
+// customer can be told what to actually change rather than "please try again".
+// functions.invoke surfaces any non-2xx as a FunctionsHttpError whose
+// `context` is the raw Response, which is the only place that body is
+// reachable from. Anything else (a network drop, a 5xx with no body) yields
+// nothing and falls through to the generic message.
+async function readServerError(err: unknown): Promise<{ code?: string; limit?: number }> {
+  const context = (err as { context?: unknown } | null)?.context
+  if (!(context instanceof Response)) return {}
+  // clone() itself throws synchronously if the body was already read, so the
+  // whole read is guarded, not just the json() promise.
+  try {
+    return await context.clone().json()
+  } catch {
+    return {}
+  }
+}
+
 export default function Checkout() {
   const { items, totalPrice, clearCart, couponCode } = useCart()
   const { user, profile } = useAuth()
@@ -165,7 +184,13 @@ export default function Checkout() {
       window.location.href = data.checkoutUrl
     } catch (err: any) {
       console.error(err)
-      toast.error(t.checkoutFailed)
+      const { code, limit } = await readServerError(err)
+      toast.error(
+        code === 'rate_limited' ? t.checkoutTooManyOrders
+          : code === 'cod_item_cap' ? t.checkoutCodTooManyItems(limit ?? 0)
+            : code === 'cod_value_cap' ? t.checkoutCodTooExpensive(formatPrice(limit ?? 0))
+              : t.checkoutFailed,
+      )
       setSubmitting(false)
     }
   }

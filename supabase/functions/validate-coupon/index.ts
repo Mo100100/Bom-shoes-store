@@ -45,6 +45,7 @@ import {
   type CartItemInput,
   type Coupon,
 } from '../_shared/pricing.ts'
+import { checkRateLimit, RATE_LIMITS } from '../_shared/rate-limit.ts'
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -80,6 +81,14 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const admin = createClient(supabaseUrl, serviceRoleKey)
+
+    // This cleanly separates a code that exists from one that does not, which
+    // makes it an enumeration oracle over the whole coupon code space. Capping
+    // the guesses is the fix; a real customer tries a handful of codes and
+    // never comes near the ceiling. See ../_shared/rate-limit.ts.
+    if (!(await checkRateLimit(admin, req, RATE_LIMITS.validateCoupon))) {
+      return jsonResponse({ valid: false, reason: 'Too many attempts. Please wait a moment and try again.' }, 429)
+    }
 
     const pricing = await resolveCartPricing(admin, items)
     if (!pricing.ok) {

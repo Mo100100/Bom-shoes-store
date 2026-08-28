@@ -19,12 +19,15 @@
 //
 // verify_jwt is left at its default (true) in supabase/config.toml: the
 // anon-key frontend client calls this, and the anon key itself is a valid
-// JWT, so guest checkout still works.
+// JWT, so guest checkout still works. That also means the JWT gate keeps
+// nobody out, since the anon key ships in the JS bundle -- the real limits on
+// abuse are the rate limiter and the COD ceilings below, not the JWT.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { corsHeaders } from '../_shared/cors.ts'
 import { hmacSha256Hex } from '../_shared/kashier-crypto.ts'
 import { resolveCartPricing, evaluateCouponByCode, resolveBestDiscount, type CartItemInput } from '../_shared/pricing.ts'
+import { checkRateLimit, RATE_LIMITS } from '../_shared/rate-limit.ts'
 
 type OrderItemInput = CartItemInput
 
@@ -46,6 +49,22 @@ const TAX_RATE = 0.08
 // EGP amounts. Kept a fixed server-side constant (never trust a client-supplied
 // currency) so the signed hash and the charged currency can't be tampered with.
 const CURRENCY = 'EGP'
+
+// Ceiling on a single cash-on-delivery order. COD is the only path that
+// decrements real stock against no payment at all, so one request must not be
+// able to swallow a whole product line.
+//
+// 20 units: this is a shoe store, where a real basket is one to five pairs.
+// Twenty is far past any consumer order and a genuine bulk buyer should be
+// talking to the store, not the checkout form.
+//
+// 50,000 EGP: nobody hands a courier that much cash, and at typical prices
+// here it sits above what the 20-unit cap allows for all but the most
+// expensive lines, so the two ceilings cover each other. Online card orders
+// are deliberately NOT capped: they are paid before anything ships and they
+// reserve no stock.
+const COD_MAX_ITEMS = 20
+const COD_MAX_TOTAL = 50000
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -93,6 +112,29 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const admin = createClient(supabaseUrl, serviceRoleKey)
+
+    // Rate limit before any real work. This endpoint reserves stock (COD),
+    // writes an order row and creates a Kashier session, and it is reachable
+    // by anyone holding the anon key out of the JS bundle. The attempt is
+    // recorded whether or not it is allowed, so hammering never wins back an
+    // allowance. Thresholds and their reasoning live in ../_shared/rate-limit.ts.
+    const rule = isCod ? RATE_LIMITS.codOrder : RATE_LIMITS.onlineOrder
+    if (!(await checkRateLimit(admin, req, rule, { phone: customer.phone }))) {
+      return jsonResponse({ error: 'Too many orders from here just now. Please wait and try again.', code: 'rate_limited' }, 429)
+    }
+
+    // Cap the size of a COD order. Quantity is checkable now, before any
+    // pricing work; the value cap needs the server-computed total and is
+    // applied further down.
+    if (isCod) {
+      const totalQuantity = items.reduce((sum, i) => sum + i.quantity, 0)
+      if (totalQuantity > COD_MAX_ITEMS) {
+        return jsonResponse(
+          { error: `Cash on delivery is limited to ${COD_MAX_ITEMS} items per order.`, code: 'cod_item_cap', limit: COD_MAX_ITEMS },
+          400,
+        )
+      }
+    }
 
     // Enforce the admin's enabled payment methods server-side -- a disabled
     // method must be rejected even if the client somehow sends it.
@@ -155,6 +197,15 @@ Deno.serve(async (req: Request) => {
     // string used in the Kashier hash/redirect below (both derive from the
     // same rounded value, avoiding float-precision drift between the two).
     const total = Math.round((subtotal + shipping + tax - discountAmount) * 100) / 100
+
+    // The value half of the COD ceiling, checked against the server's own
+    // total rather than anything the client said it would be.
+    if (isCod && total > COD_MAX_TOTAL) {
+      return jsonResponse(
+        { error: `Cash on delivery is limited to ${COD_MAX_TOTAL} ${CURRENCY} per order.`, code: 'cod_value_cap', limit: COD_MAX_TOTAL },
+        400,
+      )
+    }
 
     const orderRef = `BOM-${Date.now()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
     const userId = getUserIdFromAuthHeader(req)

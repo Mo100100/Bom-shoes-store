@@ -18,10 +18,12 @@
 // customer details or the items. Holding a reference reveals nothing beyond
 // the state of that one order. It runs with the service-role key because
 // `orders` has no public SELECT policy (a guest order has no user_id to match
-// on).
+// on). Guessing at that capability is rate limited per IP, see
+// ../_shared/rate-limit.ts.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { corsHeaders } from '../_shared/cors.ts'
+import { checkRateLimit, RATE_LIMITS } from '../_shared/rate-limit.ts'
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -45,6 +47,16 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const admin = createClient(supabaseUrl, serviceRoleKey)
+
+    // This endpoint answers "does this order reference exist" with a 200 or a
+    // 404, which makes it an existence oracle, and the reference is a public
+    // millisecond timestamp plus 32 bits of entropy. That is unguessable in
+    // one shot but not against unlimited guessing, so the guessing is what
+    // gets capped. The success page calls this once on mount plus once per
+    // manual retry, nowhere near the ceiling. See ../_shared/rate-limit.ts.
+    if (!(await checkRateLimit(admin, req, RATE_LIMITS.orderStatus, { orderRef: orderId }))) {
+      return jsonResponse({ error: 'Too many requests. Please wait a moment and try again.' }, 429)
+    }
 
     const { data: order, error } = await admin
       .from('orders')
