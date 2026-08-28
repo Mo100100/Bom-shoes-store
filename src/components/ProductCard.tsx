@@ -38,8 +38,13 @@ export default function ProductCard({
   const t = useT()
   const { formatPrice } = useCurrency()
   const isNew = Date.now() - new Date(p.created_at).getTime() < NEW_WINDOW_MS
-  const hasSale = p.sale_price != null && Number(p.sale_price) < Number(p.min_price)
-  const displayPrice = hasSale ? Number(p.sale_price) : Number(p.min_price)
+  // min_price is min(price_override, products.price) across the variants, which
+  // is the rule the server charges by (supabase/functions/_shared/pricing.ts).
+  // products.sale_price is NOT: no order path has ever read it, so advertising
+  // it here promised a discount the checkout then refused to give. A real,
+  // chargeable discount is a variant priced under the product's own base price.
+  const displayPrice = Number(p.min_price)
+  const hasSale = displayPrice < Number(p.price)
   const topLabel = p.brand || categoryLabel
 
   return (
@@ -93,7 +98,7 @@ export default function ProductCard({
         <div className="mt-2 flex items-baseline gap-2">
           <span className="text-base font-bold text-foreground">{formatPrice(displayPrice)}</span>
           {hasSale && (
-            <span className="text-xs text-muted-foreground line-through">{formatPrice(Number(p.min_price))}</span>
+            <span className="text-xs text-muted-foreground line-through">{formatPrice(Number(p.price))}</span>
           )}
         </div>
         <div className="mt-3.5 flex items-center justify-between gap-2">
