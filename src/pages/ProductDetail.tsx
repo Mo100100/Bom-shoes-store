@@ -1,4 +1,4 @@
-import { useEffect, useState, FormEvent } from 'react'
+import { useEffect, useState, useRef, FormEvent } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { supabase, Product, ProductImage, ProductVariant, ProductCatalogEntry, Review, Bundle, BundleItem } from '@/lib/supabase'
 import { useCart } from '@/contexts/CartContext'
@@ -62,6 +62,7 @@ export default function ProductDetail() {
   const [reviews, setReviews] = useState<Review[]>([])
   const [reviewerNames, setReviewerNames] = useState<Map<string, string | null>>(new Map())
   const [reviewsLoadError, setReviewsLoadError] = useState(false)
+  const [reviewsLoading, setReviewsLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   // A failed fetch and "this slug genuinely doesn't exist" are different
   // situations and need different messages: loadError means a retry might
@@ -79,56 +80,69 @@ export default function ProductDetail() {
   const { lang } = useLanguage()
   const { formatPrice } = useCurrency()
 
+  // Guards against two overlapping loads (fast slug-to-slug navigation, or a
+  // retry click while the previous attempt is still in flight): only the
+  // response matching the most recently started call is allowed to touch
+  // state, so a slow failure can't land after a fast success and paint an
+  // error over data that's already on screen (or vice versa). Also catches a
+  // thrown rejection (a flaky connection, or `data.colors[0]` if colors is
+  // ever null) so it becomes the error state instead of an infinite spinner.
+  const loadIdRef = useRef(0)
+
   async function load() {
+    const id = ++loadIdRef.current
     setLoading(true)
     setLoadError(false)
-    // product_catalog (not the bare products table) so avg_rating/review_count
-    // come back in the same round trip -- it's a strict superset of Product.
-    const { data, error } = await supabase
-      .from('product_catalog')
-      .select('*')
-      .eq('slug', slug)
-      .maybeSingle()
+    try {
+      // product_catalog (not the bare products table) so avg_rating/review_count
+      // come back in the same round trip -- it's a strict superset of Product.
+      const { data, error } = await supabase
+        .from('product_catalog')
+        .select('*')
+        .eq('slug', slug)
+        .maybeSingle()
+      if (error) throw error
+      if (id !== loadIdRef.current) return
 
-    if (error) {
+      if (data) {
+        setProduct(data)
+        setActiveImage(0)
+        const [{ data: imgs }, { data: vars }, { data: rel }] = await Promise.all([
+          supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
+          supabase.from('product_variants').select('*').eq('product_id', data.id).order('size').order('color'),
+          supabase.from('product_catalog').select('*').eq('category', data.category).neq('id', data.id).limit(4),
+        ])
+        if (id !== loadIdRef.current) return
+        setImages(imgs || [])
+        setVariants(vars || [])
+        setRelated(rel || [])
+        loadReviews(data.id)
+        loadBundles(data.id)
+
+        // Default to a combo the customer can actually buy rather than whatever
+        // row the fetch happened to return first: the colour of the first
+        // in-stock variant, then that colour's smallest in-stock size. A fully
+        // sold-out product still lands on its first colour and smallest size so
+        // the picker is never blank. Legacy products with no variants fall back
+        // to the flat sizes/colors arrays, sorted the same way.
+        if (vars && vars.length > 0) {
+          const defaultColor = (firstInStockVariant(vars) ?? vars[0]).color
+          setColor(defaultColor)
+          setSize(defaultSizeForColor(vars, defaultColor))
+        } else {
+          setColor(data.colors[0] ?? '')
+          setSize([...data.sizes].sort(compareSizes)[0] ?? '')
+        }
+      } else {
+        setProduct(null)
+      }
+    } catch {
+      if (id !== loadIdRef.current) return
       setProduct(null)
       setLoadError(true)
-      setLoading(false)
-      return
+    } finally {
+      if (id === loadIdRef.current) setLoading(false)
     }
-
-    if (data) {
-      setProduct(data)
-      setActiveImage(0)
-      const [{ data: imgs }, { data: vars }, { data: rel }] = await Promise.all([
-        supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
-        supabase.from('product_variants').select('*').eq('product_id', data.id).order('size').order('color'),
-        supabase.from('product_catalog').select('*').eq('category', data.category).neq('id', data.id).limit(4),
-      ])
-      setImages(imgs || [])
-      setVariants(vars || [])
-      setRelated(rel || [])
-      loadReviews(data.id)
-      loadBundles(data.id)
-
-      // Default to a combo the customer can actually buy rather than whatever
-      // row the fetch happened to return first: the colour of the first
-      // in-stock variant, then that colour's smallest in-stock size. A fully
-      // sold-out product still lands on its first colour and smallest size so
-      // the picker is never blank. Legacy products with no variants fall back
-      // to the flat sizes/colors arrays, sorted the same way.
-      if (vars && vars.length > 0) {
-        const defaultColor = (firstInStockVariant(vars) ?? vars[0]).color
-        setColor(defaultColor)
-        setSize(defaultSizeForColor(vars, defaultColor))
-      } else {
-        setColor(data.colors[0] ?? '')
-        setSize([...data.sizes].sort(compareSizes)[0] ?? '')
-      }
-    } else {
-      setProduct(null)
-    }
-    setLoading(false)
   }
 
   useEffect(() => {
@@ -138,7 +152,10 @@ export default function ProductDetail() {
 
   // Reviews + the reviewing users' display names, refetched after any
   // insert/update so the list and "already reviewed" detection stay current.
+  // reviewsLoading only feeds the retry button below -- the initial call is
+  // fire-and-forget from load() and never blocks the page's own spinner.
   async function loadReviews(productId: string) {
+    setReviewsLoading(true)
     const { data: revs, error } = await supabase
       .from('reviews')
       .select('*')
@@ -149,17 +166,19 @@ export default function ProductDetail() {
     if (error) {
       setReviews([])
       setReviewsLoadError(true)
+      setReviewsLoading(false)
       return
     }
     setReviewsLoadError(false)
     setReviews(revs || [])
 
     const userIds = Array.from(new Set((revs || []).map(r => r.user_id)))
-    if (userIds.length === 0) { setReviewerNames(new Map()); return }
+    if (userIds.length === 0) { setReviewerNames(new Map()); setReviewsLoading(false); return }
     // Best-effort: if profiles RLS doesn't allow reading other users' rows,
     // this just comes back empty and everyone falls back to reviewsAnonymous.
     const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', userIds)
     setReviewerNames(new Map((profs || []).map(p => [p.id, p.full_name])))
+    setReviewsLoading(false)
   }
 
   // Fire-and-forget like loadReviews -- doesn't block the page's loading
@@ -470,7 +489,7 @@ export default function ProductDetail() {
   if (loadError) {
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-6 bg-cream gap-4">
-        <p className="text-muted-foreground">{t.productLoadError}</p>
+        <p className="text-terracotta">{t.productLoadError}</p>
         <button onClick={() => load()} className="text-sm border-b border-foreground pb-0.5 cursor-pointer">{t.failedTryAgain}</button>
       </div>
     )
@@ -774,8 +793,10 @@ export default function ProductDetail() {
               <p className="text-sm text-terracotta mb-3">{t.reviewsLoadError}</p>
               <button
                 onClick={() => product && loadReviews(product.id)}
-                className="text-xs tracking-widest uppercase border-b border-foreground pb-0.5 cursor-pointer"
+                disabled={reviewsLoading}
+                className="text-xs tracking-widest uppercase border-b border-foreground pb-0.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
               >
+                {reviewsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 {t.failedTryAgain}
               </button>
             </div>

@@ -75,6 +75,7 @@ export default function Layout() {
   const searchBtnRef = useRef<HTMLButtonElement>(null)
   const searchPanelRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchIdRef = useRef(0)
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -170,9 +171,12 @@ export default function Layout() {
     return () => { trigger?.focus() }
   }, [searchOpen])
 
-  // Debounced (250ms) live suggestions as the user types. No cancellation
-  // token for the in-flight fetch -- same call QuickViewModal made, and at
-  // 250ms/5-rows this race is not worth the plumbing.
+  // Debounced (250ms) live suggestions as the user types. searchIdRef guards
+  // a stale response: if an earlier keystroke's request is still in flight
+  // when a later one starts, only the response matching the latest request
+  // is allowed to touch state -- otherwise a slow failure landing after a
+  // fast success would paint "Could not search" over results already on
+  // screen (or the reverse). Same shape of guard QuickViewModal uses.
   useEffect(() => {
     const q = query.trim()
     if (!q) {
@@ -184,19 +188,23 @@ export default function Layout() {
     setSearching(true)
     setSearchError(false)
     const timer = setTimeout(async () => {
-      const { data, error } = await supabase
-        .from('product_catalog')
-        .select('id, slug, name, min_price, max_price, image_url')
-        .textSearch('search_vector', q, { type: 'websearch' })
-        .limit(5)
-      if (error) {
+      const id = ++searchIdRef.current
+      try {
+        const { data, error } = await supabase
+          .from('product_catalog')
+          .select('id, slug, name, min_price, max_price, image_url')
+          .textSearch('search_vector', q, { type: 'websearch' })
+          .limit(5)
+        if (error) throw error
+        if (id !== searchIdRef.current) return
+        setSuggestions(data || [])
+        setSearching(false)
+      } catch {
+        if (id !== searchIdRef.current) return
         setSuggestions([])
         setSearchError(true)
         setSearching(false)
-        return
       }
-      setSuggestions(data || [])
-      setSearching(false)
     }, 250)
     return () => clearTimeout(timer)
   }, [query])

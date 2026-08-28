@@ -59,12 +59,28 @@ export default function Checkout() {
   // is required, so a failed fetch here would otherwise leave the customer
   // with an empty, silently unusable dropdown -- loading/error state and a
   // retry are how they find out and recover.
+  //
+  // loadIdRef guards a retry click that overlaps the original call: if the
+  // first attempt fails AFTER a second (retry) attempt already succeeded,
+  // its stale rejection must not stomp the regions the retry just loaded and
+  // re-lock the select behind an error banner.
+  const shippingLoadIdRef = useRef(0)
+
   function loadShipping() {
+    const id = ++shippingLoadIdRef.current
     setRegionsLoading(true)
     setRegionsError(false)
     fetchShippingConfig().then(
-      cfg => { setRegions(cfg.regions); setRegionsLoading(false) },
-      () => { setRegionsError(true); setRegionsLoading(false) }
+      cfg => {
+        if (id !== shippingLoadIdRef.current) return
+        setRegions(cfg.regions)
+        setRegionsLoading(false)
+      },
+      () => {
+        if (id !== shippingLoadIdRef.current) return
+        setRegionsError(true)
+        setRegionsLoading(false)
+      }
     )
   }
 
@@ -261,8 +277,14 @@ export default function Checkout() {
                 <Field label={fieldFullName} value={form.fullName} onChange={v => setField('fullName', v)} required dir={lang === 'ar' ? 'rtl' : 'ltr'} />
                 <Field label={fieldPhone} type="tel" value={form.phone} onChange={v => setField('phone', v)} required dir={lang === 'ar' ? 'rtl' : 'ltr'} />
                 <Field label={fieldEmail} type="email" value={form.email} onChange={v => setField('email', v)} dir={lang === 'ar' ? 'rtl' : 'ltr'} />
-                <label className="block">
-                  <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{fieldRegion}</span>
+                <div className="block">
+                  {/* A <label> must wrap (or point via htmlFor at) an actual form
+                      control -- in the error state there isn't one, so this uses
+                      htmlFor/id association instead of wrapping. A dangling
+                      htmlFor with no matching id (the error branch) just reads as
+                      plain text to assistive tech, unlike wrapping a <button> in
+                      a <label>, which would misrepresent it as the field's control. */}
+                  <label htmlFor="checkout-region" className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{fieldRegion}</label>
                   {regionsError ? (
                     <div className="flex items-center gap-3 py-2">
                       <p className="text-sm text-terracotta">{t.checkoutRegionsError}</p>
@@ -276,6 +298,7 @@ export default function Checkout() {
                     </div>
                   ) : (
                     <select
+                      id="checkout-region"
                       value={form.regionCode}
                       onChange={e => setField('regionCode', e.target.value)}
                       required
@@ -289,7 +312,7 @@ export default function Checkout() {
                       ))}
                     </select>
                   )}
-                </label>
+                </div>
                 <div className="sm:col-span-2">
                   <Field label={fieldAddress} value={form.address} onChange={v => setField('address', v)} required dir={lang === 'ar' ? 'rtl' : 'ltr'} />
                 </div>
@@ -366,7 +389,13 @@ export default function Checkout() {
 
             <button
               type="submit"
-              disabled={submitting || hasUnavailable}
+              // regionsError/regionsLoading: the select is removed from the DOM (or
+              // disabled) in those states, so native `required` never gets a chance
+              // to fire and the customer would otherwise see "please complete all
+              // required fields" while every visible field IS complete -- disabling
+              // the button keeps the on-screen region error/loading message as the
+              // only explanation, instead of a contradicting toast.
+              disabled={submitting || hasUnavailable || regionsLoading || regionsError}
               className="w-full bg-foreground text-background py-4 text-sm tracking-widest uppercase hover:bg-foreground/85 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
             >
               {submitting ? t.checkoutPreparing : paymentMethod === 'cash' ? (

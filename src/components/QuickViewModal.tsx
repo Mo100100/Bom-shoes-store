@@ -36,53 +36,59 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
     if (!productId) return
     let cancelled = false
 
+    // Reset synchronously here, not inside the async load() body below: this
+    // runs immediately when productId changes, before the network round trip
+    // starts, so opening product B right after product A's error never
+    // paints A's stale notFound/loadError over B while B is still loading.
+    setLoading(true)
+    setNotFound(false)
+    setLoadError(false)
+
     async function load() {
-      setLoading(true)
-      setNotFound(false)
-      setLoadError(false)
-      const { data, error } = await supabase
-        .from('product_catalog')
-        .select('*')
-        .eq('id', productId)
-        .maybeSingle()
+      try {
+        const { data, error } = await supabase
+          .from('product_catalog')
+          .select('*')
+          .eq('id', productId)
+          .maybeSingle()
 
-      if (cancelled) return
+        if (cancelled) return
+        if (error) throw error
 
-      if (error) {
+        if (data) {
+          setProduct(data)
+          const [{ data: imgs }, { data: vars }] = await Promise.all([
+            supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
+            supabase.from('product_variants').select('*').eq('product_id', data.id).order('size').order('color'),
+          ])
+          if (cancelled) return
+          setImages(imgs || [])
+          setVariants(vars || [])
+
+          // Same preference as ProductDetail: the first in-stock combo, then the
+          // legacy flat arrays for products with no variants yet. Those arrays
+          // are products.sizes/colors, NOT the catalog view's available_sizes /
+          // available_colors, which are aggregated FROM the variants and so are
+          // always empty on exactly the products this branch is meant to serve.
+          if (vars && vars.length > 0) {
+            const defaultColor = (firstInStockVariant(vars) ?? vars[0]).color
+            setColor(defaultColor)
+            setSize(defaultSizeForColor(vars, defaultColor))
+          } else {
+            setColor(data.colors[0] ?? '')
+            setSize([...data.sizes].sort(compareSizes)[0] ?? '')
+          }
+        } else {
+          setProduct(null)
+          setNotFound(true)
+        }
+      } catch {
+        if (cancelled) return
         setProduct(null)
         setLoadError(true)
-        setLoading(false)
-        return
+      } finally {
+        if (!cancelled) setLoading(false)
       }
-
-      if (data) {
-        setProduct(data)
-        const [{ data: imgs }, { data: vars }] = await Promise.all([
-          supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
-          supabase.from('product_variants').select('*').eq('product_id', data.id).order('size').order('color'),
-        ])
-        if (cancelled) return
-        setImages(imgs || [])
-        setVariants(vars || [])
-
-        // Same preference as ProductDetail: the first in-stock combo, then the
-        // legacy flat arrays for products with no variants yet. Those arrays
-        // are products.sizes/colors, NOT the catalog view's available_sizes /
-        // available_colors, which are aggregated FROM the variants and so are
-        // always empty on exactly the products this branch is meant to serve.
-        if (vars && vars.length > 0) {
-          const defaultColor = (firstInStockVariant(vars) ?? vars[0]).color
-          setColor(defaultColor)
-          setSize(defaultSizeForColor(vars, defaultColor))
-        } else {
-          setColor(data.colors[0] ?? '')
-          setSize([...data.sizes].sort(compareSizes)[0] ?? '')
-        }
-      } else {
-        setProduct(null)
-        setNotFound(true)
-      }
-      setLoading(false)
     }
     load()
     return () => { cancelled = true }
@@ -158,7 +164,7 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
             </div>
           ) : loadError ? (
             <div className="min-h-[360px] flex flex-col items-center justify-center text-center px-6 gap-4">
-              <p className="text-muted-foreground">{t.quickViewError}</p>
+              <p className="text-terracotta">{t.quickViewError}</p>
               <button
                 onClick={() => setRetryTick(n => n + 1)}
                 className="text-xs tracking-widest uppercase border-b border-foreground pb-0.5 cursor-pointer"

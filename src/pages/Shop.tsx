@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { supabase, ProductCatalogEntry, Coupon } from '@/lib/supabase'
@@ -62,28 +62,39 @@ export default function Shop() {
     description: t.shopSubtitle,
   })
 
+  // Guards against two overlapping loads (fast category/search switching, or
+  // a retry click while the previous attempt is still in flight): only the
+  // response matching the most recently started call is allowed to touch
+  // state, so a slow failure can't land after a fast success and paint an
+  // error banner over data that's already on screen (or vice versa).
+  const loadIdRef = useRef(0)
+
   async function loadProducts() {
+    const id = ++loadIdRef.current
     setLoading(true)
     setLoadError(false)
-    // Category / brand / search / sale are independent server-side filters --
-    // ANDed together by chaining on the same query.
-    let query = supabase.from('product_catalog').select('*')
-    if (category !== 'All') query = query.eq('category', category)
-    if (brand) query = query.eq('brand', brand)
-    // has_discount is the view's own "some in-stock variant is priced under
-    // the base price" flag -- the exact column ProductCard's SALE badge
-    // reads, so /sale and the badge can never mean different things.
-    if (saleOnly) query = query.eq('has_discount', true)
-    if (search) query = query.textSearch('search_vector', search, { type: 'websearch' })
-    const { data, error } = await query
-    if (error) {
+    try {
+      // Category / brand / search / sale are independent server-side filters --
+      // ANDed together by chaining on the same query.
+      let query = supabase.from('product_catalog').select('*')
+      if (category !== 'All') query = query.eq('category', category)
+      if (brand) query = query.eq('brand', brand)
+      // has_discount is the view's own "some in-stock variant is priced under
+      // the base price" flag -- the exact column ProductCard's SALE badge
+      // reads, so /sale and the badge can never mean different things.
+      if (saleOnly) query = query.eq('has_discount', true)
+      if (search) query = query.textSearch('search_vector', search, { type: 'websearch' })
+      const { data, error } = await query
+      if (error) throw error
+      if (id !== loadIdRef.current) return
+      setProducts(data || [])
+    } catch {
+      if (id !== loadIdRef.current) return
       setProducts([])
       setLoadError(true)
-      setLoading(false)
-      return
+    } finally {
+      if (id === loadIdRef.current) setLoading(false)
     }
-    setProducts(data || [])
-    setLoading(false)
   }
 
   useEffect(() => {
@@ -332,7 +343,7 @@ export default function Shop() {
           </div>
         ) : loadError ? (
           <div className="py-24 text-center">
-            <p className="text-muted-foreground">{t.shopLoadError}</p>
+            <p className="text-terracotta">{t.shopLoadError}</p>
             <button
               onClick={() => loadProducts()}
               className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
