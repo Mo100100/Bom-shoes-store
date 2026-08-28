@@ -61,7 +61,12 @@ export default function ProductDetail() {
   const [recentlyViewed, setRecentlyViewed] = useState<ProductCatalogEntry[]>([])
   const [reviews, setReviews] = useState<Review[]>([])
   const [reviewerNames, setReviewerNames] = useState<Map<string, string | null>>(new Map())
+  const [reviewsLoadError, setReviewsLoadError] = useState(false)
   const [loading, setLoading] = useState(true)
+  // A failed fetch and "this slug genuinely doesn't exist" are different
+  // situations and need different messages: loadError means a retry might
+  // work, product === null with no error means it really is not found.
+  const [loadError, setLoadError] = useState(false)
   const [activeImage, setActiveImage] = useState(0)
   const [size, setSize] = useState('')
   const [color, setColor] = useState('')
@@ -74,59 +79,79 @@ export default function ProductDetail() {
   const { lang } = useLanguage()
   const { formatPrice } = useCurrency()
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
-      // product_catalog (not the bare products table) so avg_rating/review_count
-      // come back in the same round trip -- it's a strict superset of Product.
-      const { data } = await supabase
-        .from('product_catalog')
-        .select('*')
-        .eq('slug', slug)
-        .maybeSingle()
+  async function load() {
+    setLoading(true)
+    setLoadError(false)
+    // product_catalog (not the bare products table) so avg_rating/review_count
+    // come back in the same round trip -- it's a strict superset of Product.
+    const { data, error } = await supabase
+      .from('product_catalog')
+      .select('*')
+      .eq('slug', slug)
+      .maybeSingle()
 
-      if (data) {
-        setProduct(data)
-        setActiveImage(0)
-        const [{ data: imgs }, { data: vars }, { data: rel }] = await Promise.all([
-          supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
-          supabase.from('product_variants').select('*').eq('product_id', data.id).order('size').order('color'),
-          supabase.from('product_catalog').select('*').eq('category', data.category).neq('id', data.id).limit(4),
-        ])
-        setImages(imgs || [])
-        setVariants(vars || [])
-        setRelated(rel || [])
-        loadReviews(data.id)
-        loadBundles(data.id)
-
-        // Default to a combo the customer can actually buy rather than whatever
-        // row the fetch happened to return first: the colour of the first
-        // in-stock variant, then that colour's smallest in-stock size. A fully
-        // sold-out product still lands on its first colour and smallest size so
-        // the picker is never blank. Legacy products with no variants fall back
-        // to the flat sizes/colors arrays, sorted the same way.
-        if (vars && vars.length > 0) {
-          const defaultColor = (firstInStockVariant(vars) ?? vars[0]).color
-          setColor(defaultColor)
-          setSize(defaultSizeForColor(vars, defaultColor))
-        } else {
-          setColor(data.colors[0] ?? '')
-          setSize([...data.sizes].sort(compareSizes)[0] ?? '')
-        }
-      }
+    if (error) {
+      setProduct(null)
+      setLoadError(true)
       setLoading(false)
+      return
     }
+
+    if (data) {
+      setProduct(data)
+      setActiveImage(0)
+      const [{ data: imgs }, { data: vars }, { data: rel }] = await Promise.all([
+        supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
+        supabase.from('product_variants').select('*').eq('product_id', data.id).order('size').order('color'),
+        supabase.from('product_catalog').select('*').eq('category', data.category).neq('id', data.id).limit(4),
+      ])
+      setImages(imgs || [])
+      setVariants(vars || [])
+      setRelated(rel || [])
+      loadReviews(data.id)
+      loadBundles(data.id)
+
+      // Default to a combo the customer can actually buy rather than whatever
+      // row the fetch happened to return first: the colour of the first
+      // in-stock variant, then that colour's smallest in-stock size. A fully
+      // sold-out product still lands on its first colour and smallest size so
+      // the picker is never blank. Legacy products with no variants fall back
+      // to the flat sizes/colors arrays, sorted the same way.
+      if (vars && vars.length > 0) {
+        const defaultColor = (firstInStockVariant(vars) ?? vars[0]).color
+        setColor(defaultColor)
+        setSize(defaultSizeForColor(vars, defaultColor))
+      } else {
+        setColor(data.colors[0] ?? '')
+        setSize([...data.sizes].sort(compareSizes)[0] ?? '')
+      }
+    } else {
+      setProduct(null)
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => {
     load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug])
 
   // Reviews + the reviewing users' display names, refetched after any
   // insert/update so the list and "already reviewed" detection stay current.
   async function loadReviews(productId: string) {
-    const { data: revs } = await supabase
+    const { data: revs, error } = await supabase
       .from('reviews')
       .select('*')
       .eq('product_id', productId)
       .order('created_at', { ascending: false })
+    // A failed reviews fetch must not render as "no reviews yet" -- that
+    // tells the customer something false about the product's history.
+    if (error) {
+      setReviews([])
+      setReviewsLoadError(true)
+      return
+    }
+    setReviewsLoadError(false)
     setReviews(revs || [])
 
     const userIds = Array.from(new Set((revs || []).map(r => r.user_id)))
@@ -171,11 +196,20 @@ export default function ProductDetail() {
   // item at its required quantity in one addItem call apiece.
   async function addBundleToBag(bundle: BundleWithItems) {
     setAddingBundleId(bundle.id)
-    const { data: allVariants } = await supabase
+    const { data: allVariants, error } = await supabase
       .from('product_variants')
       .select('*')
       .in('product_id', bundle.items.map(i => i.product_id))
       .order('size').order('color')
+
+    // A failed variant fetch must not fall through to the legacy no-variant
+    // path below: that path skips the stock check entirely, which would add
+    // an unsellable line and still show a success toast.
+    if (error) {
+      setAddingBundleId(null)
+      toast.error(t.bundleAddError)
+      return
+    }
 
     const variantsByProduct = new Map<string, ProductVariant[]>()
     for (const v of allVariants || []) {
@@ -429,6 +463,15 @@ export default function ProductDetail() {
     return (
       <div className="min-h-[60vh] flex items-center justify-center bg-cream">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-6 bg-cream gap-4">
+        <p className="text-muted-foreground">{t.productLoadError}</p>
+        <button onClick={() => load()} className="text-sm border-b border-foreground pb-0.5 cursor-pointer">{t.failedTryAgain}</button>
       </div>
     )
   }
@@ -726,7 +769,17 @@ export default function ProductDetail() {
         <div className="mt-32">
           <SectionHeading eyebrow={t.reviewsEyebrow} title={t.reviewsTitle} align="between" className="mb-10" />
 
-          {reviews.length === 0 ? (
+          {reviewsLoadError ? (
+            <div className="mb-12">
+              <p className="text-sm text-terracotta mb-3">{t.reviewsLoadError}</p>
+              <button
+                onClick={() => product && loadReviews(product.id)}
+                className="text-xs tracking-widest uppercase border-b border-foreground pb-0.5 cursor-pointer"
+              >
+                {t.failedTryAgain}
+              </button>
+            </div>
+          ) : reviews.length === 0 ? (
             <p className="text-sm text-foreground/70 mb-12">{t.reviewsEmpty}</p>
           ) : (
             <div className="space-y-8 mb-12 max-w-2xl">

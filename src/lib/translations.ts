@@ -7,6 +7,10 @@ export const translations = {
     brandName: 'BOM Store',
     brandTagline: 'Built to last. Made to move.',
 
+    // Error boundary (app-wide crash screen)
+    errorBoundaryMessage: 'Something went wrong on our end. Please reload the page.',
+    errorBoundaryReload: 'Reload page',
+
     // Announcement bar
     announcement: 'Free shipping on orders over $200. Crafted slowly, shipped with care.',
 
@@ -157,6 +161,7 @@ export const translations = {
     shopSortNewest: 'Newest',
     shopPieces: (n: number) => `${n} ${n === 1 ? 'piece' : 'pieces'}`,
     shopNoMatch: 'No pieces match this moment.',
+    shopLoadError: 'Could not load the collection. Please try again.',
     shopViewAll: 'View all',
     shopFeatured: 'Featured',
     shopNew: 'New',
@@ -172,6 +177,7 @@ export const translations = {
     shopPriceMax: 'Max',
     shopQuickView: 'Quick view',
     shopQuickAdd: 'Quick add',
+    quickAddError: 'Could not check stock. Please try again.',
     // Informational only -- the real discount is computed server-side at checkout.
     shopBxgyBadge: (buy: number, get: number, percent: number) =>
       percent >= 100 ? `Buy ${buy} Get ${get} Free` : `Buy ${buy} Get ${get} ${percent}% Off`,
@@ -181,6 +187,7 @@ export const translations = {
     searchRecent: 'Recent searches',
     searchSeeAll: (q: string) => `See all results for "${q}"`,
     searchNoResults: 'No results found',
+    searchError: 'Could not search. Please try again.',
 
     // Product Detail
     productBack: 'Back to shop',
@@ -205,6 +212,7 @@ export const translations = {
     productAccordion3: 'Care',
     productAccordion3Text: 'Brush gently with a soft-bristle brush after wear. Apply a neutral cream conditioner every six weeks. Store with cedar shoe trees in a cool, dry place.',
     productNotFound: 'This piece has wandered off.',
+    productLoadError: 'Could not load this piece. Please try again.',
     productReturnShop: 'Return to shop',
     productAlsoTitle: 'You may also consider',
     productAlsoSubtitle: 'In the same spirit',
@@ -216,11 +224,13 @@ export const translations = {
     bundleSectionTitle: 'Bundle & Save',
     bundleAddButton: 'Add Bundle to Bag',
     bundleAdded: 'Bundle added to your basket',
+    bundleAddError: 'Could not add the bundle. Please try again.',
 
     // Reviews
     reviewsEyebrow: 'Customer feedback',
     reviewsTitle: 'Reviews',
     reviewsEmpty: 'No reviews yet. Be the first to write one.',
+    reviewsLoadError: 'Could not load reviews. Please try again.',
     reviewsVerifiedBadge: 'Verified Purchase',
     reviewsAnonymous: 'Customer',
     reviewsWriteTitle: 'Write a review',
@@ -254,6 +264,8 @@ export const translations = {
 
     // Quick view
     quickViewDetails: 'View full details',
+    quickViewNotFound: 'This piece is no longer available.',
+    quickViewError: 'Could not load this piece. Please try again.',
 
     // Cart
     cartEyebrow: 'Your basket',
@@ -316,6 +328,8 @@ export const translations = {
     fieldRequired: ' *',
     fieldOptional: ' (optional)',
     checkoutSelectRegion: 'Select your governorate',
+    checkoutRegionsLoading: 'Loading governorates…',
+    checkoutRegionsError: 'Could not load governorates.',
     checkoutRequired: 'Please complete all required fields',
     checkoutFailed: 'Something went quiet on our end. Please try again.',
     checkoutUnavailable: 'Some pieces sold out while you were here. Go back to your basket to remove them.',
@@ -788,6 +802,10 @@ export const translations = {
     brandName: 'BOM Store',
     brandTagline: 'صنعت لتدوم، وصممت لتتحرك.',
 
+    // Error boundary (app-wide crash screen)
+    errorBoundaryMessage: 'حدث خطأ ما من جانبنا. يرجى إعادة تحميل الصفحة.',
+    errorBoundaryReload: 'إعادة تحميل الصفحة',
+
     // Announcement bar
     announcement: 'شحن مجاني للطلبات فوق 200 دولار. تصنع ببطء، تشحن بعناية.',
 
@@ -938,6 +956,7 @@ export const translations = {
     shopSortNewest: 'الأحدث',
     shopPieces: (n: number) => `${n} ${n === 1 ? 'قطعة' : 'قطع'}`,
     shopNoMatch: 'لا تلائم هذه اللحظة أي قطعة.',
+    shopLoadError: 'تعذر تحميل المجموعة. يرجى المحاولة مرة أخرى.',
     shopViewAll: 'عرض الكل',
     shopFeatured: 'مختارة',
     shopNew: 'جديد',
@@ -951,6 +970,7 @@ export const translations = {
     shopPriceMax: 'الأعلى',
     shopQuickView: 'عرض سريع',
     shopQuickAdd: 'إضافة سريعة',
+    quickAddError: 'تعذر التحقق من المخزون. يرجى المحاولة مرة أخرى.',
     shopBxgyBadge: (buy: number, get: number, percent: number) =>
       percent >= 100 ? `اشتر ${buy} واحصل على ${get} مجانا` : `اشتر ${buy} واحصل على ${get} بخصم ${percent}٪`,
 
@@ -959,6 +979,7 @@ export const translations = {
     searchRecent: 'عمليات بحث سابقة',
     searchSeeAll: (q: string) => `عرض جميع نتائج "${q}"`,
     searchNoResults: 'لا توجد نتائج',
+    searchError: 'تعذر البحث. يرجى المحاولة مرة أخرى.',
 
     // Product Detail
     productBack: 'العودة إلى المتجر',
@@ -981,6 +1002,7 @@ export const translations = {
     productAccordion3: 'العناية',
     productAccordion3Text: 'امسح بفرشاة ناعمة بعد كل لبسة. استخدم ملطف جلد محايدا كل ستة أسابيع. احفظه بقوالب خشب الأرز في مكان بارد جاف.',
     productNotFound: 'هذه القطعة ضاعت.',
+    productLoadError: 'تعذر تحميل هذه القطعة. يرجى المحاولة مرة أخرى.',
     productReturnShop: 'العودة إلى المتجر',
     productAlsoTitle: 'قد تعجبك أيضا',
     productAlsoSubtitle: 'في نفس الروح',
@@ -992,11 +1014,13 @@ export const translations = {
     bundleSectionTitle: 'اشتر سويا ووفر',
     bundleAddButton: 'أضف الحزمة إلى السلة',
     bundleAdded: 'أضيفت الحزمة إلى سلتك',
+    bundleAddError: 'تعذرت إضافة الحزمة. يرجى المحاولة مرة أخرى.',
 
     // Reviews
     reviewsEyebrow: 'آراء العملاء',
     reviewsTitle: 'التقييمات',
     reviewsEmpty: 'لا توجد تقييمات بعد. كن أول من يكتب تقييما.',
+    reviewsLoadError: 'تعذر تحميل التقييمات. يرجى المحاولة مرة أخرى.',
     reviewsVerifiedBadge: 'عملية شراء موثقة',
     reviewsAnonymous: 'عميل',
     reviewsWriteTitle: 'اكتب تقييما',
@@ -1030,6 +1054,8 @@ export const translations = {
 
     // Quick view
     quickViewDetails: 'عرض التفاصيل الكاملة',
+    quickViewNotFound: 'هذه القطعة لم تعد متوفرة.',
+    quickViewError: 'تعذر تحميل هذه القطعة. يرجى المحاولة مرة أخرى.',
 
     // Cart
     cartEyebrow: 'سلتك',
@@ -1092,6 +1118,8 @@ export const translations = {
     fieldRequired: ' *',
     fieldOptional: ' (اختياري)',
     checkoutSelectRegion: 'اختر محافظتك',
+    checkoutRegionsLoading: 'جار تحميل المحافظات…',
+    checkoutRegionsError: 'تعذر تحميل المحافظات.',
     checkoutRequired: 'يرجى إكمال كافة الحقول المطلوبة',
     checkoutFailed: 'حدث شيء هادئ لدينا. يرجى المحاولة مرة أخرى.',
     checkoutUnavailable: 'نفدت بعض القطع أثناء وجودك هنا. عد إلى سلتك لإزالتها.',

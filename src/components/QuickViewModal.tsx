@@ -20,6 +20,12 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
   const [images, setImages] = useState<ProductImage[]>([])
   const [variants, setVariants] = useState<ProductVariant[]>([])
   const [loading, setLoading] = useState(false)
+  // Deleted product vs. a fetch that simply failed are different situations
+  // and need different messages: notFound means the product really is gone,
+  // loadError means we don't actually know and a retry might work.
+  const [notFound, setNotFound] = useState(false)
+  const [loadError, setLoadError] = useState(false)
+  const [retryTick, setRetryTick] = useState(0)
   const [size, setSize] = useState('')
   const [color, setColor] = useState('')
   const { addItem } = useCart()
@@ -32,13 +38,22 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
 
     async function load() {
       setLoading(true)
-      const { data } = await supabase
+      setNotFound(false)
+      setLoadError(false)
+      const { data, error } = await supabase
         .from('product_catalog')
         .select('*')
         .eq('id', productId)
         .maybeSingle()
 
       if (cancelled) return
+
+      if (error) {
+        setProduct(null)
+        setLoadError(true)
+        setLoading(false)
+        return
+      }
 
       if (data) {
         setProduct(data)
@@ -65,15 +80,16 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
         }
       } else {
         setProduct(null)
+        setNotFound(true)
       }
       setLoading(false)
     }
     load()
     return () => { cancelled = true }
-  }, [productId])
+  }, [productId, retryTick])
 
   // Guards against showing the previous product's data while the next one loads.
-  const ready = !loading && product?.id === productId
+  const ready = !loading && !notFound && !loadError && product?.id === productId
 
   const hasVariants = variants.length > 0
   const colorOptions = hasVariants ? Array.from(new Set(variants.map(v => v.color))) : (product?.colors ?? [])
@@ -132,11 +148,25 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
           {/* Always mounted (even mid-load) so Radix never warns about a missing Title. */}
           <Dialog.Title className="sr-only">{product?.name || 'Quick view'}</Dialog.Title>
 
-          {!ready ? (
+          {loading ? (
             <div className="min-h-[360px] flex items-center justify-center">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
             </div>
-          ) : product && (
+          ) : notFound ? (
+            <div className="min-h-[360px] flex flex-col items-center justify-center text-center px-6">
+              <p className="text-muted-foreground">{t.quickViewNotFound}</p>
+            </div>
+          ) : loadError ? (
+            <div className="min-h-[360px] flex flex-col items-center justify-center text-center px-6 gap-4">
+              <p className="text-muted-foreground">{t.quickViewError}</p>
+              <button
+                onClick={() => setRetryTick(n => n + 1)}
+                className="text-xs tracking-widest uppercase border-b border-foreground pb-0.5 cursor-pointer"
+              >
+                {t.failedTryAgain}
+              </button>
+            </div>
+          ) : ready && product && (
             <div className="grid sm:grid-cols-2 gap-8 p-6 sm:p-8">
               <div className="aspect-square bg-muted overflow-hidden">
                 <img src={mainImage} alt={product.name} className="w-full h-full object-cover" />

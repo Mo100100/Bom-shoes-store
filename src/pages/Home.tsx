@@ -73,11 +73,14 @@ export default function Home() {
     e.preventDefault()
     e.stopPropagation()
     setQuickAddingId(p.id)
-    const { data: variants } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size').order('color')
+    const { data: variants, error } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size').order('color')
+    setQuickAddingId(null)
+    // A failed stock check must not be reported as "out of stock" -- that's a
+    // lie about inventory we never actually looked at.
+    if (error) { toast.error(t.quickAddError); return }
     // Smallest in-stock size, not whatever row came back first, so the customer
     // gets a size they can predict and the toast tells them which one it is.
     const variant = firstInStockVariant(variants ?? [])
-    setQuickAddingId(null)
     if (!variant) { toast.error(t.productOutOfStock); return }
     if (!addItem(p, variant.size, variant.color, 1, variant)) { toast.error(t.productStockMaxed); return }
     toast.success(t.productAdded, { description: t.productAddedSize(p.name, variant.size) })

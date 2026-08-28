@@ -42,6 +42,8 @@ export default function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState<'online' | 'cash'>('online')
   const [checkoutConfig, setCheckoutConfig] = useState<CheckoutConfig>(DEFAULT_CHECKOUT_CONFIG)
   const [regions, setRegions] = useState<ShippingRegion[]>([])
+  const [regionsLoading, setRegionsLoading] = useState(true)
+  const [regionsError, setRegionsError] = useState(false)
 
   // Idempotency key for this checkout attempt. A Cash on Delivery order is
   // placed and its stock reserved before the response is sent, so a submit
@@ -53,6 +55,19 @@ export default function Checkout() {
   // order rather than a retry.
   const requestIdRef = useRef(crypto.randomUUID())
 
+  // Which governorates can be shipped to (site_content.shipping). The select
+  // is required, so a failed fetch here would otherwise leave the customer
+  // with an empty, silently unusable dropdown -- loading/error state and a
+  // retry are how they find out and recover.
+  function loadShipping() {
+    setRegionsLoading(true)
+    setRegionsError(false)
+    fetchShippingConfig().then(
+      cfg => { setRegions(cfg.regions); setRegionsLoading(false) },
+      () => { setRegionsError(true); setRegionsLoading(false) }
+    )
+  }
+
   // Which payment methods the admin has enabled (site_content.checkout_config).
   useEffect(() => {
     fetchCheckoutConfig().then(cfg => {
@@ -62,7 +77,7 @@ export default function Checkout() {
       if (!cfg.online_enabled && cfg.cash_enabled) setPaymentMethod('cash')
       else if (cfg.online_enabled && !cfg.cash_enabled) setPaymentMethod('online')
     })
-    fetchShippingConfig().then(cfg => setRegions(cfg.regions))
+    loadShipping()
   }, [])
 
   const selectedRegion = regions.find(r => r.code === form.regionCode) || null
@@ -248,18 +263,32 @@ export default function Checkout() {
                 <Field label={fieldEmail} type="email" value={form.email} onChange={v => setField('email', v)} dir={lang === 'ar' ? 'rtl' : 'ltr'} />
                 <label className="block">
                   <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{fieldRegion}</span>
-                  <select
-                    value={form.regionCode}
-                    onChange={e => setField('regionCode', e.target.value)}
-                    required
-                    dir={lang === 'ar' ? 'rtl' : 'ltr'}
-                    className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors cursor-pointer"
-                  >
-                    <option value="" disabled>{t.checkoutSelectRegion}</option>
-                    {regions.map(r => (
-                      <option key={r.code} value={r.code}>{regionLabel(r, lang)}</option>
-                    ))}
-                  </select>
+                  {regionsError ? (
+                    <div className="flex items-center gap-3 py-2">
+                      <p className="text-sm text-terracotta">{t.checkoutRegionsError}</p>
+                      <button
+                        type="button"
+                        onClick={loadShipping}
+                        className="text-xs tracking-widest uppercase border-b border-foreground pb-0.5 cursor-pointer shrink-0"
+                      >
+                        {t.failedTryAgain}
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      value={form.regionCode}
+                      onChange={e => setField('regionCode', e.target.value)}
+                      required
+                      disabled={regionsLoading}
+                      dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                      className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <option value="" disabled>{regionsLoading ? t.checkoutRegionsLoading : t.checkoutSelectRegion}</option>
+                      {regions.map(r => (
+                        <option key={r.code} value={r.code}>{regionLabel(r, lang)}</option>
+                      ))}
+                    </select>
+                  )}
                 </label>
                 <div className="sm:col-span-2">
                   <Field label={fieldAddress} value={form.address} onChange={v => setField('address', v)} required dir={lang === 'ar' ? 'rtl' : 'ltr'} />

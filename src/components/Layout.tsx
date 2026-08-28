@@ -6,7 +6,7 @@ import { useLanguage, useT } from '@/contexts/LanguageContext'
 import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { useCategories } from '@/contexts/CategoriesContext'
 import { useWishlist } from '@/contexts/WishlistContext'
-import { ShoppingBag, User, Menu, X, LogOut, LayoutDashboard, Globe, ChevronDown, Search, Instagram, Facebook, Share2, Heart } from 'lucide-react'
+import { ShoppingBag, User, Menu, X, LogOut, LayoutDashboard, Globe, ChevronDown, Search, Instagram, Facebook, Share2, Heart, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { supabase, ProductCatalogEntry } from '@/lib/supabase'
 import { toast } from 'sonner'
@@ -60,6 +60,7 @@ export default function Layout() {
   const [query, setQuery] = useState('')
   const [suggestions, setSuggestions] = useState<SearchHit[]>([])
   const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState(false)
   const [history, setHistory] = useState<string[]>(() => loadSearchHistory())
   const [newsletterContent, setNewsletterContent] = useState<NewsletterContent | null>(null)
   const [contactContent, setContactContent] = useState<ContactContent | null>(null)
@@ -177,15 +178,23 @@ export default function Layout() {
     if (!q) {
       setSuggestions([])
       setSearching(false)
+      setSearchError(false)
       return
     }
     setSearching(true)
+    setSearchError(false)
     const timer = setTimeout(async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('product_catalog')
         .select('id, slug, name, min_price, max_price, image_url')
         .textSearch('search_vector', q, { type: 'websearch' })
         .limit(5)
+      if (error) {
+        setSuggestions([])
+        setSearchError(true)
+        setSearching(false)
+        return
+      }
       setSuggestions(data || [])
       setSearching(false)
     }, 250)
@@ -475,7 +484,13 @@ export default function Layout() {
               <div className="mt-6 min-h-[3rem]">
                 {query.trim() ? (
                   <>
-                    {suggestions.length > 0 ? (
+                    {searching ? (
+                      <div className="py-4 flex justify-center">
+                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : searchError ? (
+                      <p className="text-sm text-terracotta py-2">{t.searchError}</p>
+                    ) : suggestions.length > 0 ? (
                       <div className="space-y-1">
                         {suggestions.map(p => (
                           <button
@@ -491,7 +506,7 @@ export default function Layout() {
                           </button>
                         ))}
                       </div>
-                    ) : !searching && (
+                    ) : (
                       <p className="text-sm text-muted-foreground py-2">{t.searchNoResults}</p>
                     )}
                     <button

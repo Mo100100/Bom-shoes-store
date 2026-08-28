@@ -5,7 +5,7 @@ import { couponRejectionMessage, TAX_RATE } from '@/lib/cart'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { supabase, readServerError } from '@/lib/supabase'
-import { Minus, Plus, X, ArrowRight, ShoppingBag } from 'lucide-react'
+import { Minus, Plus, X, ArrowRight, ShoppingBag, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useSeo } from '@/hooks/useSeo'
 
@@ -296,9 +296,9 @@ export default function Cart() {
                       type="button"
                       onClick={handleApplyClick}
                       disabled={applying || !couponInput.trim()}
-                      className="px-4 text-xs tracking-widest uppercase border border-border hover:bg-muted transition-colors disabled:opacity-50 cursor-pointer"
+                      className="px-4 text-xs tracking-widest uppercase border border-border hover:bg-muted transition-colors disabled:opacity-50 cursor-pointer flex items-center justify-center"
                     >
-                      {t.cartCouponApply}
+                      {applying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : t.cartCouponApply}
                     </button>
                   </div>
                 ) : (

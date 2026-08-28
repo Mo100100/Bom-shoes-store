@@ -23,6 +23,7 @@ export default function Shop() {
   const [sort, setSort] = useState('featured')
   const [products, setProducts] = useState<ProductCatalogEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [selectedColors, setSelectedColors] = useState<string[]>([])
   const [selectedSizes, setSelectedSizes] = useState<string[]>([])
   const [minPrice, setMinPrice] = useState('')
@@ -61,24 +62,33 @@ export default function Shop() {
     description: t.shopSubtitle,
   })
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
-      // Category / brand / search / sale are independent server-side filters --
-      // ANDed together by chaining on the same query.
-      let query = supabase.from('product_catalog').select('*')
-      if (category !== 'All') query = query.eq('category', category)
-      if (brand) query = query.eq('brand', brand)
-      // has_discount is the view's own "some in-stock variant is priced under
-      // the base price" flag -- the exact column ProductCard's SALE badge
-      // reads, so /sale and the badge can never mean different things.
-      if (saleOnly) query = query.eq('has_discount', true)
-      if (search) query = query.textSearch('search_vector', search, { type: 'websearch' })
-      const { data } = await query
-      setProducts(data || [])
+  async function loadProducts() {
+    setLoading(true)
+    setLoadError(false)
+    // Category / brand / search / sale are independent server-side filters --
+    // ANDed together by chaining on the same query.
+    let query = supabase.from('product_catalog').select('*')
+    if (category !== 'All') query = query.eq('category', category)
+    if (brand) query = query.eq('brand', brand)
+    // has_discount is the view's own "some in-stock variant is priced under
+    // the base price" flag -- the exact column ProductCard's SALE badge
+    // reads, so /sale and the badge can never mean different things.
+    if (saleOnly) query = query.eq('has_discount', true)
+    if (search) query = query.textSearch('search_vector', search, { type: 'websearch' })
+    const { data, error } = await query
+    if (error) {
+      setProducts([])
+      setLoadError(true)
       setLoading(false)
+      return
     }
-    load()
+    setProducts(data || [])
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    loadProducts()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category, search, brand, saleOnly])
 
   // Active, auto-apply (no code needed) buy-x-get-y promotions -- the only
@@ -163,11 +173,17 @@ export default function Shop() {
     e.preventDefault()
     e.stopPropagation()
     setQuickAddingId(p.id)
-    const { data: variants } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size').order('color')
+    const { data: variants, error } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size').order('color')
+    setQuickAddingId(null)
+    // A failed stock check must not be reported as "out of stock" -- that's a
+    // lie about inventory we never actually looked at.
+    if (error) {
+      toast.error(t.quickAddError)
+      return
+    }
     // Smallest in-stock size, not whatever row came back first, so the customer
     // gets a size they can predict and the toast tells them which one it is.
     const variant = firstInStockVariant(variants ?? [])
-    setQuickAddingId(null)
     if (!variant) {
       toast.error(t.productOutOfStock)
       return
@@ -313,6 +329,16 @@ export default function Shop() {
         {loading ? (
           <div className="py-24 flex justify-center">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : loadError ? (
+          <div className="py-24 text-center">
+            <p className="text-muted-foreground">{t.shopLoadError}</p>
+            <button
+              onClick={() => loadProducts()}
+              className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+            >
+              {t.failedTryAgain}
+            </button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="py-24 text-center">
