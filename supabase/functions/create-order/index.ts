@@ -90,6 +90,7 @@ Deno.serve(async (req: Request) => {
       lang?: string
       paymentMethod?: string
       regionCode?: string
+      clientRequestId?: string
     } | null
 
     const items = body?.items
@@ -101,6 +102,13 @@ Deno.serve(async (req: Request) => {
     // 'cash' = Cash on Delivery (no Kashier redirect, stock reserved now);
     // anything else = pay online via Kashier (the default).
     const isCod = body?.paymentMethod === 'cash'
+    // Idempotency key for a retry after a LOST RESPONSE: the checkout page
+    // keeps the same value when it never heard back, so the second request
+    // returns the first request's order instead of reserving the stock twice.
+    // Only kept for COD, the only path that reserves anything. Length-capped
+    // and character-restricted because it is client-supplied and goes into a
+    // uniquely-indexed column.
+    const clientRequestId = isCod ? sanitizeRequestId(body?.clientRequestId) : null
 
     if (!Array.isArray(items) || items.length === 0) {
       return jsonResponse({ error: 'Cart is empty' }, 400)
@@ -119,6 +127,15 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const admin = createClient(supabaseUrl, serviceRoleKey)
+
+    // Replay of a request whose response never reached the customer: hand back
+    // the order the first attempt created rather than creating a second one.
+    // Checked before the rate limiter so a retry never costs the customer an
+    // allowance for an order that is already placed.
+    if (clientRequestId) {
+      const existing = await findOrderByRequestId(admin, clientRequestId)
+      if (existing) return existing
+    }
 
     // Rate limit before any real work. This endpoint reserves stock (COD),
     // writes an order row and creates a Kashier session, and it is reachable
@@ -237,10 +254,18 @@ Deno.serve(async (req: Request) => {
         items: orderItems,
         coupon_id: winningCouponId,
         discount_amount: discountAmount,
+        client_request_id: clientRequestId,
       })
       .select('id')
       .single()
 
+    // 23505 = unique violation on orders_client_request_id_key: two requests
+    // carrying the same key raced past the lookup above and this one lost.
+    // The winner's order is the answer.
+    if (insertError?.code === '23505' && clientRequestId) {
+      const existing = await findOrderByRequestId(admin, clientRequestId)
+      if (existing) return existing
+    }
     if (insertError || !inserted) throw insertError ?? new Error('order insert returned no row')
 
     // Cash on Delivery: no Kashier redirect. Reserve stock atomically now
@@ -260,7 +285,21 @@ Deno.serve(async (req: Request) => {
 
     const origin = resolveAllowedOrigin(req.headers.get('origin'))
 
-    const checkoutUrl = await buildKashierCheckout({ orderRef, amount: total, origin, customerEmail: customer.email, lang })
+    // If the payment session cannot be created the customer never sees a
+    // payment page, so this order can never be paid. Close it now instead of
+    // leaving a row stuck at 'pending' forever: it holds no stock (nothing has
+    // decremented anything yet), so this is bookkeeping only. The hourly
+    // cancel-abandoned-pending-orders job is the backstop for the other way an
+    // order is orphaned, the customer simply walking away from Kashier.
+    let checkoutUrl: string
+    try {
+      checkoutUrl = await buildKashierCheckout({ orderRef, amount: total, origin, customerEmail: customer.email, lang })
+    } catch (err) {
+      await admin.from('orders')
+        .update({ status: 'cancelled', payment_status: 'failed' })
+        .eq('id', inserted.id)
+      throw err
+    }
 
     // ponytail: the frontend checkout summary needs this to show what was
     // actually applied (couponCode re-validation can differ from the Cart
@@ -295,6 +334,42 @@ function resolveAllowedOrigin(requestOrigin: string | null): string {
   }
 
   return allowed[0]
+}
+
+// Client-supplied, so it is bounded and restricted before it reaches a
+// uniquely-indexed column. The checkout page sends a uuid; anything that is
+// not plausibly one is dropped rather than rejected, which just means that
+// request gets no replay protection.
+function sanitizeRequestId(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const value = raw.trim()
+  return /^[A-Za-z0-9-]{16,64}$/.test(value) ? value : null
+}
+
+// The response the first attempt would have returned, rebuilt from the stored
+// order. Only COD orders carry a client_request_id, so `cod: true` is always
+// right here. A cancelled row means place_cod_order could not reserve the
+// stock, so the retry replays that same refusal instead of reporting success.
+async function findOrderByRequestId(
+  admin: ReturnType<typeof createClient>,
+  clientRequestId: string,
+): Promise<Response | null> {
+  const { data: existing } = await admin
+    .from('orders')
+    .select('kashier_order_id, status, discount_amount')
+    .eq('client_request_id', clientRequestId)
+    .maybeSingle()
+
+  if (!existing) return null
+  if (existing.status === 'cancelled') {
+    return jsonResponse({ error: 'Sorry, one of your items just went out of stock. Please review your cart.' }, 409)
+  }
+  return jsonResponse({
+    orderId: existing.kashier_order_id,
+    cod: true,
+    checkoutUrl: null,
+    discountAmount: Number(existing.discount_amount ?? 0),
+  })
 }
 
 function jsonResponse(body: unknown, status = 200) {

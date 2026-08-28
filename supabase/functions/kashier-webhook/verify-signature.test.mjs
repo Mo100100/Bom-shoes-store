@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { hmacSha256Hex } from '../_shared/kashier-crypto.ts'
-import { checkPaidAmount, deriveOutcome, planOrderTransition, verifyKashierSignature } from './verify.ts'
+import { checkPaidAmount, deriveOutcome, planOrderTransition, planStockRelease, verifyKashierSignature } from './verify.ts'
 
 const API_KEY = 'test-payment-api-key'
 const SECRET_KEY = 'test-secret-key'
@@ -107,6 +107,25 @@ test('a paid order is never flipped to failed', () => {
 test('cancelled and refunded orders are never fulfilled', () => {
   assert.equal(planOrderTransition({ status: 'cancelled', payment_status: 'pending' }, 'paid').action, 'ignore')
   assert.equal(planOrderTransition({ status: 'processing', payment_status: 'refunded' }, 'paid').action, 'ignore')
+})
+
+test('a full refund of a paid order releases its stock', () => {
+  const paidOrder = { payment_status: 'paid', total_amount: 499 }
+  assert.equal(planStockRelease(paidOrder, paidPayload(), 'refund').action, 'release')
+  assert.equal(planStockRelease(paidOrder, paidPayload(), 'VOID').action, 'release')
+})
+
+test('nothing else releases stock', () => {
+  const paidOrder = { payment_status: 'paid', total_amount: 499 }
+  // A payment is not a refund.
+  assert.equal(planStockRelease(paidOrder, paidPayload(), 'pay').action, 'ignore')
+  // A refund that did not go through returns nothing to anybody.
+  assert.equal(planStockRelease(paidOrder, paidPayload({ status: 'FAILED' }), 'refund').action, 'ignore')
+  // A partial refund does not put a whole order's goods back.
+  assert.equal(planStockRelease(paidOrder, paidPayload({ amount: '100.00' }), 'refund').action, 'ignore')
+  // An order this store never charged cannot be refunded.
+  assert.equal(planStockRelease({ payment_status: 'pending', total_amount: 499 }, paidPayload(), 'refund').action, 'ignore')
+  assert.equal(planStockRelease({ payment_status: 'failed', total_amount: 499 }, paidPayload(), 'refund').action, 'ignore')
 })
 
 test('a pending order still fulfills on success and fails on decline', () => {

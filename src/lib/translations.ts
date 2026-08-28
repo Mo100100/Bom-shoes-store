@@ -448,6 +448,9 @@ export const translations = {
     adminStatus: 'Status',
     adminNoOrdersFilter: 'No orders in this state',
     adminUpdated: 'Order updated',
+    adminOrderCancelledFinal: 'This order is cancelled. Its stock went back on the shelf, so it cannot be reopened.',
+    adminOrderNeverReserved: 'This order was never paid for and holds no stock, so it can only be cancelled.',
+    adminPaymentNotMarkable: 'Only a cash order still awaiting payment can be marked paid.',
     adminCod: 'COD',
     adminMarkPaid: 'Mark paid',
     adminMarkedPaid: 'Marked as paid',
@@ -656,6 +659,7 @@ export const translations = {
     adminVariantSizeRequired: 'Enter at least one size for this row',
     adminVariantColorRequired: 'Enter a color for this row',
     adminVariantRowsInvalid: 'Fix the highlighted variant rows first',
+    adminVariantInLiveOrder: 'One of the sizes you removed is on an order that is still being paid for. Nothing was saved. Try again once that order is paid or cancelled.',
     adminDragReorder: 'Drag to reorder',
     adminSetFeatured: 'Set featured',
     adminDeleteImage: 'Delete image',
@@ -759,6 +763,7 @@ export const translations = {
     statusCancelled: 'cancelled',
     statusPaid: 'paid',
     statusFailed: 'failed',
+    statusRefunded: 'refunded',
 
     // 404
     notFoundEyebrow: 'A quiet moment',
@@ -1213,6 +1218,9 @@ export const translations = {
     adminStatus: 'الحالة',
     adminNoOrdersFilter: 'لا طلبات في هذه الحالة',
     adminUpdated: 'تم تحديث الطلب',
+    adminOrderCancelledFinal: 'هذا الطلب ملغي وتم إرجاع مخزونه إلى الرف، لذا لا يمكن إعادة فتحه.',
+    adminOrderNeverReserved: 'هذا الطلب لم يدفع ولا يحجز أي مخزون، لذا يمكن إلغاؤه فقط.',
+    adminPaymentNotMarkable: 'يمكن تحديد الدفع فقط لطلب نقدي ما زال بانتظار التحصيل.',
     adminCod: 'عند الاستلام',
     adminMarkPaid: 'تحديد كمدفوع',
     adminMarkedPaid: 'تم تحديده كمدفوع',
@@ -1421,6 +1429,7 @@ export const translations = {
     adminVariantSizeRequired: 'أدخل مقاسا واحدا على الأقل لهذا الصف',
     adminVariantColorRequired: 'أدخل لونا لهذا الصف',
     adminVariantRowsInvalid: 'صحح صفوف المتغيرات المميزة أولا',
+    adminVariantInLiveOrder: 'أحد المقاسات التي حذفتها موجود في طلب ما زال قيد الدفع. لم يتم حفظ أي شيء. حاول مرة أخرى بعد دفع الطلب أو إلغائه.',
     adminDragReorder: 'اسحب لإعادة الترتيب',
     adminSetFeatured: 'تعيين كصورة رئيسية',
     adminDeleteImage: 'حذف الصورة',
@@ -1524,6 +1533,7 @@ export const translations = {
     statusCancelled: 'ملغي',
     statusPaid: 'مدفوع',
     statusFailed: 'فاشل',
+    statusRefunded: 'مسترجع',
 
     // 404
     notFoundEyebrow: 'لحظة هادئة',

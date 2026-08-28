@@ -226,6 +226,12 @@ export default function AdminProducts() {
 
     if (deletes.length) {
       const { error } = await supabase.from('product_variants').delete().in('id', deletes)
+      // The database refuses to remove a variant an order is still waiting to
+      // be paid for: fulfill_order() looks the row up by id when the payment
+      // lands, and a missing row kills that paid order with its stock never
+      // decremented. Nothing is saved, so the grid still holds the row and the
+      // owner can retry once the payment resolves (or it expires).
+      if (error?.hint === 'variant_in_live_order') throw new Error(t.adminVariantInLiveOrder)
       if (error) throw error
     }
     if (updates.length) {
@@ -382,6 +388,9 @@ export default function AdminProducts() {
   async function handleDelete(p: ProductCatalogEntry) {
     if (!confirm(t.adminDeleteConfirm(p.name))) return
     const { error } = await supabase.from('products').delete().eq('id', p.id)
+    // Deleting a product cascades to its variants, so the same live-order
+    // guard applies and the same explanation is owed.
+    if (error?.hint === 'variant_in_live_order') { toast.error(t.adminVariantInLiveOrder); return }
     if (error) { toast.error(error.message); return }
     toast.success(t.adminDeleted)
     load()

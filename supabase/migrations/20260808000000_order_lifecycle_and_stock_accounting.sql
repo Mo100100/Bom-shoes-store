@@ -1,0 +1,597 @@
+-- Order lifecycle and stock accounting.
+--
+-- Everything that moves an order between states now agrees on one question:
+-- does this order currently hold stock? orders.stock_reserved_at (added in
+-- 20260806000000) is the single answer, and every writer either stamps it,
+-- reads it, or clears it via release_order_stock().
+--
+-- Five holes closed here:
+--   1. Cancellations never gave stock back. The admin order list wrote
+--      `status` with a plain UPDATE, so a cancelled COD order kept its stock
+--      deducted forever. Admin status changes now go through
+--      admin_update_order_status(), which calls the existing
+--      release_order_stock() -- there is deliberately no second "give stock
+--      back" implementation in this file.
+--   2. fulfill_order() guarded only on payment_status = 'paid', so a COD
+--      order (status 'confirmed', payment 'pending', stock ALREADY taken by
+--      place_cod_order) would have its units decremented a second time by any
+--      path reaching it. It now refuses whenever stock_reserved_at is set, and
+--      stamps that column itself so a paid online order can be released too.
+--   3. Admin status changes bypassed stock accounting entirely: moving a
+--      pending online order to 'processing' marked it as being fulfilled
+--      without ever decrementing anything. Those transitions are now refused,
+--      and a trigger stops the client from writing status/payment_status
+--      directly at all.
+--   4. Orders orphaned at 'pending' (create-order threw before the customer
+--      ever saw a payment page, or the customer walked away from Kashier) are
+--      cancelled by an hourly job. They never held stock, so this is pure
+--      bookkeeping.
+--   5. Legacy products.stock had no `>= 0` check, unlike product_variants, so
+--      fulfill_order's no-variant fallback path could drive it negative.
+--
+-- Plus one guard on the other side of the same problem: a variant row that an
+-- order still needs cannot be deleted out from under it.
+
+-- ---------------------------------------------------------------------------
+-- 0. Drop the stale two-argument release_order_stock.
+--
+-- 20260806000000 widened the signature from (uuid, text) to
+-- (uuid, text, text, boolean) with `create or replace function`, which creates
+-- a SECOND function rather than replacing the old one whenever a two-argument
+-- version already exists. The old overload would keep its original EXECUTE
+-- grants -- a publicly callable, stock-mutating function. That migration has
+-- not been deployed anywhere yet, so this is defensive, but it costs one line.
+-- ---------------------------------------------------------------------------
+drop function if exists public.release_order_stock(uuid, text);
+
+-- ---------------------------------------------------------------------------
+-- 1. products.stock can never go negative.
+--
+-- product_variants.stock has had `check (stock >= 0)` since
+-- 20260704002000; the legacy column it replaced never got one, and
+-- fulfill_order still falls back to it for pre-variant order snapshots. Clean
+-- whatever is already negative first (0 is the only truthful floor -- a
+-- negative count is not a real quantity), then add the constraint.
+--
+-- Idempotent: the update matches nothing on a re-run and the constraint is
+-- dropped-if-exists before it is added.
+-- ---------------------------------------------------------------------------
+update public.products set stock = 0 where stock < 0;
+
+alter table public.products drop constraint if exists products_stock_non_negative;
+alter table public.products add constraint products_stock_non_negative check (stock >= 0);
+
+-- ---------------------------------------------------------------------------
+-- 2. Backfill stock_reserved_at for orders that were paid before this landed.
+--
+-- fulfill_order() provably decremented stock for every order it marked paid,
+-- so a paid order held stock even though nothing recorded that fact until now.
+-- created_at is the closest available stamp (orders has no updated_at) and is
+-- within minutes of the payment.
+--
+-- Without this, cancelling or refunding a historical paid order would silently
+-- return nothing, because release_order_stock() refuses to release an order
+-- that never recorded a reservation. Already-cancelled orders are left alone:
+-- their goods were never given back and re-opening that decision is the
+-- owner's call, not a migration's.
+--
+-- Idempotent: the `is null` guard makes a re-run a no-op.
+-- ---------------------------------------------------------------------------
+update public.orders
+set stock_reserved_at = created_at
+where payment_status = 'paid'
+  and status <> 'cancelled'
+  and stock_reserved_at is null
+  and stock_released_at is null;
+
+-- ---------------------------------------------------------------------------
+-- 3. fulfill_order(): never decrement stock twice, and record that it took it.
+--
+-- Re-emitted in full (a function body cannot be patched in place) from
+-- 20260704003001, with exactly two changes:
+--
+--   - A stock_reserved_at guard. The payment_status = 'paid' guard alone is
+--     blind to a Cash on Delivery order, which sits at status 'confirmed',
+--     payment_status 'pending' with its stock ALREADY committed by
+--     place_cod_order(). place_cod_order has the symmetric guard (it refuses
+--     any order that is not still 'pending'); this is the missing half. It
+--     deliberately does NOT try to also mark such an order paid: a COD order
+--     reaching the card-payment webhook is not a state this store can produce,
+--     so the safe move is to change nothing and say so loudly.
+--   - stock_reserved_at is stamped in the same UPDATE that marks the order
+--     paid, inside the same transaction as the decrement, so "stock was taken"
+--     and "we recorded that stock was taken" can never disagree. This is what
+--     lets release_order_stock() give a refunded card order's stock back.
+-- ---------------------------------------------------------------------------
+create or replace function public.fulfill_order(p_order_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $function$
+declare
+  v_items jsonb;
+  v_item jsonb;
+  v_payment_status text;
+  v_reserved_at timestamptz;
+  v_coupon_id uuid;
+  v_customer_email text;
+  v_variant_id uuid;
+  v_product_id uuid;
+  v_qty integer;
+  v_stock integer;
+begin
+  select items, payment_status, stock_reserved_at, coupon_id, customer_email
+  into v_items, v_payment_status, v_reserved_at, v_coupon_id, v_customer_email
+  from public.orders
+  where id = p_order_id
+  for update;
+
+  if not found then
+    raise exception 'fulfill_order: order % not found', p_order_id;
+  end if;
+
+  -- Idempotency guard: the order row itself is the source of truth, not the
+  -- caller's transactionId ledger.
+  if v_payment_status = 'paid' then
+    return false;
+  end if;
+
+  -- The other half of that guard: this order's units are already off the
+  -- shelf, so decrementing them again would sell inventory nobody has.
+  if v_reserved_at is not null then
+    raise warning 'fulfill_order: order % already reserved stock at %, refusing to decrement it twice',
+      p_order_id, v_reserved_at;
+    return false;
+  end if;
+
+  -- Pass 1: verify. Lock every referenced row up front and bail before
+  -- mutating anything if any single item can't be satisfied.
+  for v_variant_id in
+    select distinct (i->>'variant_id')::uuid
+    from jsonb_array_elements(coalesce(v_items, '[]'::jsonb)) i
+    where i->>'variant_id' is not null
+    order by 1
+  loop
+    select stock into v_stock
+    from public.product_variants
+    where id = v_variant_id
+    for update;
+
+    if not found then
+      raise exception 'fulfill_order: variant % not found', v_variant_id;
+    end if;
+  end loop;
+
+  for v_product_id in
+    select distinct (i->>'product_id')::uuid
+    from jsonb_array_elements(coalesce(v_items, '[]'::jsonb)) i
+    where i->>'variant_id' is null
+    order by 1
+  loop
+    select stock into v_stock
+    from public.products
+    where id = v_product_id
+    for update;
+
+    if not found then
+      raise exception 'fulfill_order: product % not found', v_product_id;
+    end if;
+  end loop;
+
+  for v_item in select * from jsonb_array_elements(coalesce(v_items, '[]'::jsonb))
+  loop
+    v_qty := (v_item->>'quantity')::integer;
+
+    if v_item->>'variant_id' is not null then
+      select stock into v_stock from public.product_variants where id = (v_item->>'variant_id')::uuid;
+    else
+      select stock into v_stock from public.products where id = (v_item->>'product_id')::uuid;
+    end if;
+
+    if v_stock < v_qty then
+      raise exception 'fulfill_order: insufficient stock for item % (have %, need %)',
+        coalesce(v_item->>'variant_id', v_item->>'product_id'), v_stock, v_qty;
+    end if;
+  end loop;
+
+  -- Pass 2: commit. Every item passed the check above, so it's safe to
+  -- decrement all of them and mark the order paid.
+  for v_item in select * from jsonb_array_elements(coalesce(v_items, '[]'::jsonb))
+  loop
+    v_qty := (v_item->>'quantity')::integer;
+
+    if v_item->>'variant_id' is not null then
+      update public.product_variants
+      set stock = stock - v_qty
+      where id = (v_item->>'variant_id')::uuid;
+    else
+      update public.products
+      set stock = stock - v_qty
+      where id = (v_item->>'product_id')::uuid;
+    end if;
+  end loop;
+
+  update public.orders
+  set payment_status = 'paid',
+      status = 'processing',
+      stock_reserved_at = now()
+  where id = p_order_id;
+
+  -- Record the redemption now that stock is committed and the order is paid.
+  -- ON CONFLICT DO NOTHING keeps a redelivered webhook from ever
+  -- double-counting the same order against the coupon's usage totals.
+  if v_coupon_id is not null then
+    insert into public.coupon_redemptions (coupon_id, order_id, customer_email)
+    values (v_coupon_id, p_order_id, v_customer_email)
+    on conflict (coupon_id, order_id) do nothing;
+  end if;
+
+  return true;
+exception
+  when others then
+    -- The EXCEPTION clause rolls back everything done in this block (the
+    -- stock decrements, the redemption insert, and locks above), but code
+    -- below still runs in the live transaction -- so this update is the only
+    -- effect that survives, recording the failure without any partial stock
+    -- changes.
+    raise warning 'fulfill_order failed for order %: %', p_order_id, sqlerrm;
+
+    update public.orders
+    set payment_status = 'failed'
+    where id = p_order_id;
+
+    return false;
+end;
+$function$;
+
+comment on function public.fulfill_order(uuid) is
+  'Atomically checks stock and decrements it (in product_variants, keyed by each order item''s variant_id; falling back to legacy products.stock by product_id for pre-deploy order snapshots with no variant_id) for every item on an order, marks it paid, stamps stock_reserved_at and records a coupon_redemptions row if the order has a coupon_id. Refuses any order that is already paid or that already holds a stock reservation (a Cash on Delivery order). Only ever called after Kashier confirms successful payment. Rolls back and marks the order failed if any item is out of stock or has no resolvable variant/product.';
+
+revoke all on function public.fulfill_order(uuid) from public;
+revoke execute on function public.fulfill_order(uuid) from anon, authenticated;
+grant execute on function public.fulfill_order(uuid) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 4. The client can no longer write order state directly.
+--
+-- "Admins can update orders" (base schema) let the admin order list PATCH
+-- /rest/v1/orders with any status it liked, which is how a pending online
+-- order could be moved to 'processing' with its stock never decremented, and
+-- how a cancellation could be recorded without giving the goods back.
+--
+-- The policy stays (it is what admin_update_order_status's own reads and this
+-- table's other columns rely on); this trigger takes the two state columns out
+-- of the client's reach instead. current_user is the role actually running the
+-- statement: 'authenticated'/'anon' for anything arriving through PostgREST,
+-- but the function OWNER inside a SECURITY DEFINER function, and
+-- 'service_role' for an edge function. So place_cod_order, fulfill_order,
+-- release_order_stock, admin_update_order_status and the edge functions all
+-- pass, and only a direct client write is refused.
+--
+-- Deliberately NOT a full state machine: the state machine lives in
+-- admin_update_order_status(), where it can also move stock. Duplicating it
+-- here would mean two copies to keep in agreement.
+-- ---------------------------------------------------------------------------
+create or replace function public.enforce_order_state_writer()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $function$
+begin
+  if (new.status is distinct from old.status
+      or new.payment_status is distinct from old.payment_status)
+     and current_user in ('anon', 'authenticated') then
+    raise exception 'order state must be changed through admin_update_order_status()'
+      using errcode = 'P0001', hint = 'order_direct_write';
+  end if;
+  return new;
+end;
+$function$;
+
+comment on function public.enforce_order_state_writer() is
+  'BEFORE UPDATE trigger on orders: refuses a status/payment_status change made directly by a client role, so every state change goes through admin_update_order_status() (or the service-role paths) and stock accounting cannot be bypassed.';
+
+-- Deliberately NOT security definer: it has to see the role actually running
+-- the statement. It reads nothing but NEW and OLD, so it needs no privileges
+-- of its own. Triggers fire regardless of EXECUTE grants, so closing the RPC
+-- surface costs nothing (same treatment as the trigger functions in
+-- 20260704009002).
+revoke execute on function public.enforce_order_state_writer() from public, anon, authenticated;
+
+drop trigger if exists enforce_order_state_writer on public.orders;
+create trigger enforce_order_state_writer
+  before update on public.orders
+  for each row execute function public.enforce_order_state_writer();
+
+-- ---------------------------------------------------------------------------
+-- 5. The one way an admin changes an order's state.
+--
+-- The state machine, in full. `active` below means one of confirmed,
+-- processing, shipped, delivered.
+--
+--   active   -> active     allowed, in BOTH directions. Advancing an order is
+--                          the owner's daily workflow and correcting a misclick
+--                          is part of it; none of these moves touch stock.
+--   anything -> cancelled  allowed. This is the only transition that moves
+--                          stock: whatever the order reserved is given back,
+--                          exactly once, by release_order_stock().
+--   pending  -> active     REFUSED unless the order actually holds stock
+--                          (paid, or stock_reserved_at set). A pending order
+--                          is an online order whose payment never landed: it
+--                          reserved nothing, so marking it processing/shipped
+--                          would ship goods the inventory still counts as
+--                          available. In practice this refuses every pending
+--                          order, which is the point.
+--   cancelled -> anything  REFUSED. Cancelling put the goods back on the shelf
+--                          and they may already be sold to someone else, so a
+--                          cancellation is terminal. Re-place the order.
+--   anything -> pending    REFUSED. 'pending' means "created, nothing decided
+--                          yet" and only create-order can produce it.
+--
+-- payment_status is separately settable to 'paid' and to nothing else, and
+-- only for a cash order that is still pending and not cancelled: that is the
+-- admin list's "mark cash collected" button. Online payments are marked paid
+-- by the Kashier webhook and never here, and no admin action ever writes
+-- 'refunded' -- only a real refund reported by Kashier does.
+--
+-- Cancelling a PAID order leaves payment_status alone (release_order_stock
+-- treats a null p_payment_status as "keep it"). The money really was taken;
+-- writing 'refunded' before anyone has refunded anything would hide a debt the
+-- owner still owes the customer.
+--
+-- SECURITY DEFINER and callable by `authenticated`, unlike the service-role
+-- functions in this schema: the admin order list calls it from the browser.
+-- It is gated internally by is_admin(), the same pattern the admin RLS
+-- policies use, and anon is revoked outright.
+-- ---------------------------------------------------------------------------
+create or replace function public.admin_update_order_status(
+  p_order_id uuid,
+  p_status text default null,
+  p_payment_status text default null
+)
+returns boolean
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_status text;
+  v_payment_status text;
+  v_payment_method text;
+  v_reserved_at timestamptz;
+  v_released_at timestamptz;
+  v_changed boolean := false;
+begin
+  if not public.is_admin() then
+    raise exception 'admin_update_order_status: not authorised'
+      using errcode = 'P0001', hint = 'not_admin';
+  end if;
+
+  select status, payment_status, payment_method, stock_reserved_at, stock_released_at
+  into v_status, v_payment_status, v_payment_method, v_reserved_at, v_released_at
+  from public.orders
+  where id = p_order_id
+  for update;
+
+  if not found then
+    raise exception 'admin_update_order_status: order % not found', p_order_id
+      using errcode = 'P0001', hint = 'order_not_found';
+  end if;
+
+  -- Marking the cash collected. Anything other than 'paid', or an order that
+  -- is not a still-pending cash order, is refused: a released or cancelled
+  -- order's goods are back on the shelf and must never read as paid.
+  if p_payment_status is not null and p_payment_status is distinct from v_payment_status then
+    if p_payment_status <> 'paid'
+       or v_payment_method <> 'cash'
+       or v_payment_status <> 'pending'
+       or v_status = 'cancelled'
+       or v_released_at is not null then
+      raise exception 'admin_update_order_status: cannot set payment_status % on order % (currently %, method %)',
+        p_payment_status, p_order_id, v_payment_status, v_payment_method
+        using errcode = 'P0001', hint = 'payment_not_markable';
+    end if;
+
+    update public.orders set payment_status = 'paid' where id = p_order_id;
+    -- Keep the local copy honest: a caller passing both arguments at once must
+    -- not have the status branch below act on the payment status this call
+    -- just replaced.
+    v_payment_status := 'paid';
+    v_changed := true;
+  end if;
+
+  if p_status is null or p_status = v_status then
+    return v_changed;
+  end if;
+
+  if p_status not in ('confirmed', 'processing', 'shipped', 'delivered', 'cancelled') then
+    raise exception 'admin_update_order_status: % is not a settable order status', p_status
+      using errcode = 'P0001', hint = 'status_not_settable';
+  end if;
+
+  if v_status = 'cancelled' then
+    raise exception 'admin_update_order_status: order % is cancelled and cannot be reopened', p_order_id
+      using errcode = 'P0001', hint = 'order_cancelled';
+  end if;
+
+  if p_status = 'cancelled' then
+    -- The single "give the stock back" implementation, reused rather than
+    -- repeated. It is idempotent in both directions: an order that reserved
+    -- nothing (a pending online order) and an order already released both
+    -- return false, and the plain UPDATE below then just records the
+    -- cancellation.
+    if not public.release_order_stock(
+      p_order_id,
+      'cancelled',
+      case when v_payment_status = 'paid' then null else 'failed' end,
+      false
+    ) then
+      update public.orders
+      set status = 'cancelled',
+          payment_status = case when payment_status = 'pending' then 'failed' else payment_status end
+      where id = p_order_id;
+    end if;
+    return true;
+  end if;
+
+  -- Everything left is a move into the active set. Only an order that holds
+  -- stock may be advanced.
+  if v_status = 'pending' and v_payment_status <> 'paid' and v_reserved_at is null then
+    raise exception 'admin_update_order_status: order % never reserved stock and cannot be advanced', p_order_id
+      using errcode = 'P0001', hint = 'order_never_reserved';
+  end if;
+
+  update public.orders set status = p_status where id = p_order_id;
+  return true;
+end;
+$function$;
+
+comment on function public.admin_update_order_status(uuid, text, text) is
+  'The only way an admin changes an order''s status or marks a cash order paid. Enforces the order state machine (cancellations are terminal, an order that never reserved stock cannot be advanced, only a pending cash order can be marked paid) and routes every cancellation through release_order_stock() so stock is given back exactly once. Admin-gated by is_admin().';
+
+revoke execute on function public.admin_update_order_status(uuid, text, text) from anon, public;
+grant execute on function public.admin_update_order_status(uuid, text, text) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 6. A variant an order still needs cannot be deleted.
+--
+-- The admin product editor preserves variant ids on save (src/lib/variantDiff.ts),
+-- but an admin can still remove a variant row outright. fulfill_order() raises
+-- 'variant % not found' when the id is gone, so: a customer pays, the owner
+-- deletes that size while the payment is in flight, the webhook lands, and the
+-- PAID order dies with its stock never decremented.
+--
+-- The guard is deliberately NARROW -- only orders that could still be
+-- fulfilled, i.e. still pending with no payment recorded. Everything else is
+-- safe to delete over:
+--   - A paid or COD order has already decremented its stock; fulfill_order
+--     will never run for it again.
+--   - release_order_stock() adds stock back with a plain UPDATE that matches
+--     no rows when the variant is gone, so a later cancellation degrades to
+--     "no stock returned for a size that no longer exists", not an error.
+-- Blocking on those would mean a size that ever sold could never be removed
+-- from the catalog, which is not a trade worth making for a shoe shop.
+--
+-- The window this refuses in is therefore the few minutes a customer spends on
+-- the Kashier payment page, and the hourly job in section 8 closes even that.
+--
+-- A soft-delete/archived flag was the alternative. It was rejected because it
+-- would have to be honoured by every read path in the app (storefront product
+-- pages, quick view, cart revalidation, the product_catalog view, the admin
+-- grid) and one missed filter silently sells an archived size.
+-- ---------------------------------------------------------------------------
+-- SECURITY DEFINER so the lookup sees every order regardless of who is doing
+-- the delete: an RLS-filtered read here would let the guard pass silently for
+-- a role that simply cannot see the order holding the variant.
+create or replace function public.prevent_live_variant_delete()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $function$
+declare
+  v_order_ref text;
+begin
+  select coalesce(o.kashier_order_id, o.id::text) into v_order_ref
+  from public.orders o
+  where o.status = 'pending'
+    and o.payment_status = 'pending'
+    and o.stock_reserved_at is null
+    and exists (
+      select 1
+      from jsonb_array_elements(coalesce(o.items, '[]'::jsonb)) i
+      where i->>'variant_id' = old.id::text
+    )
+  limit 1;
+
+  if v_order_ref is not null then
+    raise exception 'product variant % is on order %, which is still awaiting payment', old.id, v_order_ref
+      using errcode = 'P0001', hint = 'variant_in_live_order';
+  end if;
+
+  return old;
+end;
+$function$;
+
+comment on function public.prevent_live_variant_delete() is
+  'BEFORE DELETE trigger on product_variants: refuses to remove a variant that an order still awaiting payment references, because fulfill_order() raises when the variant id is gone and the paid order would die with its stock never decremented.';
+
+revoke execute on function public.prevent_live_variant_delete() from public, anon, authenticated;
+
+drop trigger if exists prevent_live_variant_delete on public.product_variants;
+create trigger prevent_live_variant_delete
+  before delete on public.product_variants
+  for each row execute function public.prevent_live_variant_delete();
+
+-- ---------------------------------------------------------------------------
+-- 7. One order per checkout attempt, however many times the request is sent.
+--
+-- If the response to create-order is lost (the customer's connection drops
+-- after the order was committed), pressing "place order" again places a SECOND
+-- Cash on Delivery order and reserves the stock twice. The client sends a
+-- request id it keeps across a lost response (src/pages/Checkout.tsx) and
+-- create-order returns the original order for a repeat of the same id.
+--
+-- Stored for COD orders only, which are the only ones that reserve stock -- a
+-- duplicated online order holds nothing and is cleaned up by section 8. The
+-- unique index is what makes the guarantee real: two requests racing past
+-- create-order's lookup cannot both insert.
+-- ---------------------------------------------------------------------------
+alter table public.orders add column if not exists client_request_id text;
+
+comment on column public.orders.client_request_id is
+  'Idempotency key sent by the checkout page, stored for Cash on Delivery orders only. A repeat of the same key returns the original order instead of placing a second one.';
+
+create unique index if not exists orders_client_request_id_key
+  on public.orders (client_request_id)
+  where client_request_id is not null;
+
+-- ---------------------------------------------------------------------------
+-- 8. Cancelling orders that were never paid for.
+--
+-- An order is inserted 'pending' before the Kashier session is created. If
+-- that call throws, or the customer closes the payment page, the row sits at
+-- 'pending' forever: it clutters the admin list, it keeps
+-- prevent_live_variant_delete above blocking, and nothing else will ever
+-- resolve it.
+--
+-- These orders hold NO stock (only place_cod_order and fulfill_order take
+-- stock, and neither has run for them), so this is bookkeeping and not
+-- inventory: it needs no epoch guard like release_expired_cod_orders, and it
+-- can safely include orders that predate this migration.
+--
+-- 72 hours, not a few: Kashier retries a webhook for 24 hours, and cancelling
+-- an order whose delivery is merely late would leave a real payment attached
+-- to a cancelled order. Anything arriving after the cancellation is refused by
+-- the webhook's state machine and logged loudly there, so the failure mode is
+-- visible rather than silent.
+--
+-- Bounded at 500 per run so one bad night cannot produce a single unbounded
+-- transaction. One statement, so it needs no function wrapped around it (same
+-- call as the rate-limit purge in 20260806000000).
+-- ---------------------------------------------------------------------------
+do $cron$
+begin
+  if exists (select 1 from cron.job where jobname = 'cancel-abandoned-pending-orders') then
+    perform cron.unschedule('cancel-abandoned-pending-orders');
+  end if;
+end;
+$cron$;
+
+select cron.schedule(
+  'cancel-abandoned-pending-orders',
+  '37 * * * *',
+  $$update public.orders
+    set status = 'cancelled', payment_status = 'failed'
+    where id in (
+      select id from public.orders
+      where status = 'pending'
+        and payment_status = 'pending'
+        and stock_reserved_at is null
+        and stock_released_at is null
+        and created_at < now() - interval '72 hours'
+      order by created_at
+      limit 500
+    )$$
+);

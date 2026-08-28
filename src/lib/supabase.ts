@@ -12,15 +12,19 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 // FunctionsHttpError whose `context` is the raw Response, which is the only
 // place that body is reachable from. Anything else (a network drop, a 5xx with
 // no body) yields nothing and the caller falls back to a generic message.
-export async function readServerError(err: unknown): Promise<{ code?: string; limit?: number }> {
+//
+// `responded` says whether the server answered at all, which is a different
+// question from whether it sent a code: a request that got no response may
+// still have been processed (see the retry handling in Checkout.tsx).
+export async function readServerError(err: unknown): Promise<{ responded: boolean; code?: string; limit?: number }> {
   const context = (err as { context?: unknown } | null)?.context
-  if (!(context instanceof Response)) return {}
+  if (!(context instanceof Response)) return { responded: false }
   // clone() itself throws synchronously if the body was already read, so the
   // whole read is guarded, not just the json() promise.
   try {
-    return await context.clone().json()
+    return { responded: true, ...await context.clone().json() }
   } catch {
-    return {}
+    return { responded: true }
   }
 }
 
@@ -150,6 +154,10 @@ export type Order = {
   created_at: string
   coupon_id: string | null
   discount_amount: number
+  // When this order actually took stock off the shelf (null = it never did).
+  // Written only by the database functions; the admin list reads it to know
+  // which status changes admin_update_order_status() will accept.
+  stock_reserved_at: string | null
 }
 
 // A coupon AND an automatic promotion are the same row: requires_code = true

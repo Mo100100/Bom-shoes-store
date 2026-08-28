@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useCart } from '@/contexts/CartContext'
 import { useAuth } from '@/contexts/AuthContext'
@@ -42,6 +42,16 @@ export default function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState<'online' | 'cash'>('online')
   const [checkoutConfig, setCheckoutConfig] = useState<CheckoutConfig>(DEFAULT_CHECKOUT_CONFIG)
   const [regions, setRegions] = useState<ShippingRegion[]>([])
+
+  // Idempotency key for this checkout attempt. A Cash on Delivery order is
+  // placed and its stock reserved before the response is sent, so a submit
+  // whose response is lost (connection drops, phone sleeps) leaves an order
+  // the customer cannot see -- and pressing the button again would place a
+  // second one. Sending the same key means the server returns that first
+  // order instead. It is regenerated only when the server actually answered:
+  // that answer decided the attempt, so the next press is a genuinely new
+  // order rather than a retry.
+  const requestIdRef = useRef(crypto.randomUUID())
 
   // Which payment methods the admin has enabled (site_content.checkout_config).
   useEffect(() => {
@@ -148,6 +158,7 @@ export default function Checkout() {
         ...(couponCode ? { couponCode } : {}),
         lang,
         paymentMethod,
+        clientRequestId: requestIdRef.current,
       }
 
       const { data, error } = await supabase.functions.invoke<CreateOrderResponse>('create-order', { body })
@@ -174,7 +185,12 @@ export default function Checkout() {
       window.location.href = data.checkoutUrl
     } catch (err: any) {
       console.error(err)
-      const { code, limit } = await readServerError(err)
+      const { responded, code, limit } = await readServerError(err)
+      // The server decided this attempt (it rejected the cart, the coupon, the
+      // cap): the next press is a new order, not a retry of this one. A
+      // failure with no response leaves the key in place so a retry can be
+      // recognised as the same order.
+      if (responded) requestIdRef.current = crypto.randomUUID()
       // The cap messages quote the ceiling, so they are only used when the
       // server actually sent one -- a body that could not be read falls back
       // to the generic message rather than telling the customer they are

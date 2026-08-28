@@ -40,6 +40,10 @@ const FAILED_STATUSES = ['FAILED', 'DECLINED', 'CANCELLED', 'CANCELED', 'REJECTE
 // Kashier can send (refund, void, authorize) is ignored: see deriveOutcome.
 const FULFILLABLE_EVENTS = ['pay', 'capture']
 
+// Events that mean money went back to the customer, so the goods go back on
+// the shelf: see planStockRelease.
+const REFUND_EVENTS = ['refund', 'void']
+
 // Verifies x-kashier-signature over the data.signatureKeys fields.
 // Construction: HMAC-SHA256 over "k=v" pairs in signatureKeys array order
 // joined with "&", which is the construction Kashier documents for webhooks.
@@ -137,12 +141,53 @@ export function checkPaidAmount(
   return { ok: true }
 }
 
+// A refund or a void of a payment we already applied: the money is on its way
+// back to the customer, so the units this order took have to go back on the
+// shelf. The caller hands the decision to release_order_stock(), which is the
+// single implementation of giving stock back.
+//
+// Three conditions, all required, because the `event` that distinguishes a
+// refund from a payment is NOT signed (see deriveOutcome) and a release is a
+// real inventory movement:
+//   - the order must currently be paid. A refund can only follow a payment,
+//     so anything else is a replay or a delivery for an order this store never
+//     charged.
+//   - the signed status must be a success. A failed refund attempt returns
+//     nothing to anybody.
+//   - the amount must equal the full order total, checked by the same
+//     checkPaidAmount the payment path uses. A partial refund does not put a
+//     whole order's goods back, and this store has no way to know which lines
+//     it covered, so it is left for a human.
+// `isRefund` is reported separately from the action so the caller can log a
+// refund it is declining to apply (a partial one, say) loudly, and stay quiet
+// about the ordinary payment deliveries that also pass through here.
+export function planStockRelease(
+  order: { payment_status?: string | null; total_amount?: number | null },
+  data: KashierWebhookData,
+  event?: unknown,
+): { action: 'release' | 'ignore'; isRefund: boolean; reason: string } {
+  if (typeof event !== 'string' || !REFUND_EVENTS.includes(event.trim().toLowerCase())) {
+    return { action: 'ignore', isRefund: false, reason: 'not a refund or void event' }
+  }
+  if ((order.payment_status ?? '') !== 'paid') {
+    return { action: 'ignore', isRefund: true, reason: 'order is not paid, so there is nothing to refund' }
+  }
+  if (String(data.status ?? '').toUpperCase() !== 'SUCCESS') {
+    return { action: 'ignore', isRefund: true, reason: 'refund did not succeed' }
+  }
+  const amountCheck = checkPaidAmount(data, order.total_amount ?? null)
+  if (!amountCheck.ok) {
+    return { action: 'ignore', isRefund: true, reason: `partial or mismatched refund: ${amountCheck.reason}` }
+  }
+  return { action: 'release', isRefund: true, reason: 'full refund confirmed' }
+}
+
 // The order state machine. Two rules it must never break: an order that is
 // already paid never transitions away from paid (a declined retry after a
 // successful payment must not flip it to failed), and an order that is
 // cancelled or refunded is never fulfilled.
 // Refund/void handling (releasing the stock back) is deliberately not here:
-// it belongs with release_order_stock and lands separately.
+// it is planStockRelease above, which hands the work to release_order_stock.
 export function planOrderTransition(
   order: { status?: string | null; payment_status?: string | null },
   outcome: PaymentOutcome,

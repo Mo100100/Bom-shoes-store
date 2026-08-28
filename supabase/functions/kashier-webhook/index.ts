@@ -21,6 +21,7 @@ import {
   checkPaidAmount,
   deriveOutcome,
   planOrderTransition,
+  planStockRelease,
   verifyKashierSignature,
   type KashierWebhookData,
 } from './verify.ts'
@@ -99,6 +100,48 @@ Deno.serve(async (req: Request) => {
     if (orderLookupError || !order) {
       console.error('kashier-webhook: no order found for merchantOrderId', merchantOrderId)
       return new Response('ignored: unknown order', { status: 200 })
+    }
+
+    // A refund or a void of a payment this store already applied: the goods go
+    // back on the shelf. release_order_stock is the single implementation of
+    // that (it is idempotent, locks in the same order as the other stock
+    // functions, and writes its own activity_logs entry), so this branch only
+    // decides whether to call it. It never fulfills anything, so it is handled
+    // before the payment state machine below and leaves it untouched.
+    const releasePlan = planStockRelease(order, payload.data, payload.event)
+    if (releasePlan.action === 'release') {
+      const { data: released, error: releaseError } = await admin.rpc('release_order_stock', {
+        p_order_id: order.id,
+        p_status: 'cancelled',
+        p_payment_status: 'refunded',
+        p_automatic: true,
+      })
+      if (releaseError) throw releaseError
+
+      // The order held no reservation to give back (it was released already,
+      // or it predates stock_reserved_at being recorded). The refund still
+      // happened, so record it: an order nobody was paid for must not keep
+      // reading as paid in the admin list.
+      if (!released) {
+        const { error: markError } = await admin
+          .from('orders')
+          .update({ status: 'cancelled', payment_status: 'refunded' })
+          .eq('id', order.id)
+        if (markError) throw markError
+      }
+
+      // Inventory moving because of a refund is worth a line in the logs even
+      // when everything worked: the owner has goods back to reshelve.
+      console.log(`kashier-webhook: refund applied to ${merchantOrderId} (stock returned: ${released === true})`)
+      await admin.from('processed_webhook_events').insert({ event_id: eventId })
+      return new Response('ok', { status: 200 })
+    }
+    if (releasePlan.isRefund) {
+      // A refund this store is NOT acting on (a partial one, or one for an
+      // order it never charged) needs a human: the money moved and the
+      // inventory did not.
+      console.error(`kashier-webhook: refund for ${merchantOrderId} not applied: ${releasePlan.reason}`)
+      return new Response('ignored: refund not applied', { status: 200 })
     }
 
     // The outcome comes from the signed `status`; the unsigned `event` can
