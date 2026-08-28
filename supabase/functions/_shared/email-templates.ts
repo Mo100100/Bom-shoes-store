@@ -73,6 +73,54 @@ export function renderOrderConfirmationEmail(opts: {
 </html>`
 }
 
+// Renders the confirmation for one order and hands it to Resend. Shared by
+// kashier-webhook (payment confirmed by the gateway) and
+// send-order-confirmation (payment confirmed by the owner because the webhook
+// never arrived), so the customer gets the same email either way.
+//
+// Throws nothing: an order that is fulfilled but whose email failed is far
+// better than the reverse, so every caller treats a send failure as a logged
+// non-event.
+export async function sendOrderConfirmationEmail(order: {
+  customer_name: string | null
+  customer_email: string | null
+  kashier_order_id: string | null
+  items: unknown
+  total_amount: number | null
+}): Promise<void> {
+  const resendApiKey = Deno.env.get('RESEND_API_KEY')
+  const fromEmail = Deno.env.get('RESEND_FROM_EMAIL')
+  if (!resendApiKey || !fromEmail || !order.customer_email) {
+    console.error('sendOrderConfirmationEmail: skipped, missing RESEND config or customer email')
+    return
+  }
+
+  const html = renderOrderConfirmationEmail({
+    customerName: order.customer_name ?? 'there',
+    orderRef: order.kashier_order_id ?? '',
+    items: Array.isArray(order.items) ? order.items : [],
+    total: order.total_amount ?? 0,
+  })
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${resendApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: fromEmail,
+      to: order.customer_email,
+      subject: `Your BOM Store order ${order.kashier_order_id} is confirmed`,
+      html,
+    }),
+  })
+
+  if (!res.ok) {
+    console.error('sendOrderConfirmationEmail: Resend send failed', res.status, await res.text())
+  }
+}
+
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')

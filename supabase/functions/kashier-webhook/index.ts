@@ -16,7 +16,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { corsHeaders } from '../_shared/cors.ts'
-import { renderOrderConfirmationEmail } from '../_shared/email-templates.ts'
+import { sendOrderConfirmationEmail } from '../_shared/email-templates.ts'
 import {
   checkPaidAmount,
   deriveOutcome,
@@ -234,45 +234,5 @@ function parsePayload(rawBody: string): KashierWebhookPayload | null {
     return JSON.parse(rawBody) as KashierWebhookPayload
   } catch {
     return null
-  }
-}
-
-async function sendOrderConfirmationEmail(order: {
-  customer_name: string | null
-  customer_email: string | null
-  kashier_order_id: string | null
-  items: unknown
-  total_amount: number | null
-}) {
-  const resendApiKey = Deno.env.get('RESEND_API_KEY')
-  const fromEmail = Deno.env.get('RESEND_FROM_EMAIL')
-  if (!resendApiKey || !fromEmail || !order.customer_email) {
-    console.error('kashier-webhook: skipping confirmation email, missing RESEND config or customer email')
-    return
-  }
-
-  const html = renderOrderConfirmationEmail({
-    customerName: order.customer_name ?? 'there',
-    orderRef: order.kashier_order_id ?? '',
-    items: Array.isArray(order.items) ? order.items : [],
-    total: order.total_amount ?? 0,
-  })
-
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${resendApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: fromEmail,
-      to: order.customer_email,
-      subject: `Your BOM Store order ${order.kashier_order_id} is confirmed`,
-      html,
-    }),
-  })
-
-  if (!res.ok) {
-    console.error('kashier-webhook: Resend send failed', res.status, await res.text())
   }
 }

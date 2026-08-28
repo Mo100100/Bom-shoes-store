@@ -103,11 +103,16 @@ where payment_status = 'paid'
 --     and "we recorded that stock was taken" can never disagree. This is what
 --     lets release_order_stock() give a refunded card order's stock back.
 -- ---------------------------------------------------------------------------
+-- `set app.order_write` is what lets this function's own UPDATE past
+-- enforce_order_state_writer (section 4). It is part of the definition rather
+-- than an ALTER FUNCTION so that anyone re-emitting this body carries it
+-- across; dropping it silently breaks every payment.
 create or replace function public.fulfill_order(p_order_id uuid)
 returns boolean
 language plpgsql
 security definer
 set search_path = public, pg_temp
+set app.order_write = 'on'
 as $function$
 declare
   v_items jsonb;
@@ -262,12 +267,27 @@ grant execute on function public.fulfill_order(uuid) to service_role;
 --
 -- The policy stays (it is what admin_update_order_status's own reads and this
 -- table's other columns rely on); this trigger takes the two state columns out
--- of the client's reach instead. current_user is the role actually running the
--- statement: 'authenticated'/'anon' for anything arriving through PostgREST,
--- but the function OWNER inside a SECURITY DEFINER function, and
--- 'service_role' for an edge function. So place_cod_order, fulfill_order,
--- release_order_stock, admin_update_order_status and the edge functions all
--- pass, and a direct client write is refused.
+-- of the client's reach instead.
+--
+-- What the trigger trusts is a TRANSACTION-LOCAL FLAG, not a role. Every
+-- trusted database function carries `set app.order_write = 'on'` in its own
+-- definition (see the ALTER FUNCTION block below for the ones defined in
+-- earlier migrations), which Postgres applies for the duration of that call
+-- and reverts on exit, so it can never leak to the caller or across a pooled
+-- connection. A client cannot set it: PostgREST only ever sets the request.*
+-- GUCs from the JWT and headers, never an arbitrary one.
+--
+-- Role identity is NOT used to infer trust. An earlier draft allowed anything
+-- that was a member of service_role, on the assumption that the role owning
+-- the SECURITY DEFINER functions is a superuser and therefore a member of
+-- every role. That assumption is FALSE on Supabase cloud, where `postgres` is
+-- not a superuser, and if it does not hold, every stock-moving function in the
+-- schema loses its write at once: a total checkout outage. The one role name
+-- still accepted is the literal 'service_role', because the edge functions
+-- write orders through PostgREST (kashier-webhook marking a payment failed,
+-- create-order closing an order whose payment session could not be built) and
+-- cannot set a transaction-local GUC from there. That is a string comparison
+-- against the role PostgREST switches to, not an inference from a grant.
 --
 -- Deliberately NOT a full state machine: the state machine lives in
 -- admin_update_order_status(), where it can also move stock. Duplicating it
@@ -279,16 +299,15 @@ language plpgsql
 set search_path = public, pg_temp
 as $function$
 begin
-  -- An ALLOWLIST, not a denylist: anything that is not a member of
-  -- service_role is refused. Naming the client roles instead would silently
-  -- stop covering any new PostgREST-reachable role Supabase or a later
-  -- migration adds. service_role is a member of itself, and the owner of the
-  -- SECURITY DEFINER functions (and the cron role) is a superuser, which
-  -- pg_has_role reports as a member of every role -- so the legitimate writers
-  -- pass and everything unknown fails closed.
+  -- An ALLOWLIST: the write is refused unless it comes from inside a function
+  -- that declares app.order_write, or from the service role. Naming the client
+  -- roles to deny instead would silently stop covering any new
+  -- PostgREST-reachable role Supabase or a later migration adds; this fails
+  -- closed for every path nobody has thought of yet.
   if (new.status is distinct from old.status
       or new.payment_status is distinct from old.payment_status)
-     and not pg_has_role(current_user, 'service_role', 'member') then
+     and current_setting('app.order_write', true) is distinct from 'on'
+     and current_user <> 'service_role' then
     raise exception 'order state must be changed through admin_update_order_status()'
       using errcode = 'P0001', hint = 'order_direct_write';
   end if;
@@ -310,6 +329,20 @@ drop trigger if exists enforce_order_state_writer on public.orders;
 create trigger enforce_order_state_writer
   before update on public.orders
   for each row execute function public.enforce_order_state_writer();
+
+-- The trusted writers defined in earlier migrations get the same flag. ALTER
+-- FUNCTION rather than a re-emitted body: their logic is not changing here and
+-- two copies of place_cod_order in this repo would be worse than one line
+-- each. Postgres applies the setting for the duration of the call and reverts
+-- it on exit, exactly as it does for search_path.
+--
+-- If a LATER migration re-emits one of these bodies, it must carry
+-- `set app.order_write = 'on'` with it. The assertion at the end of this file
+-- is the check for that: it fails the deploy rather than letting the store
+-- discover it at the checkout.
+alter function public.place_cod_order(uuid) set app.order_write = 'on';
+alter function public.release_order_stock(uuid, text, text, boolean) set app.order_write = 'on';
+alter function public.release_expired_cod_orders(integer) set app.order_write = 'on';
 
 -- ---------------------------------------------------------------------------
 -- 5. The one way an admin changes an order's state.
@@ -370,6 +403,9 @@ returns boolean
 language plpgsql
 security definer
 set search_path to 'public', 'pg_temp'
+-- See fulfill_order above: this is what gets its writes past
+-- enforce_order_state_writer, and it must survive any re-emission.
+set app.order_write = 'on'
 as $function$
 declare
   v_status text;
@@ -635,9 +671,51 @@ create unique index if not exists orders_client_request_id_key
 -- visible rather than silent.
 --
 -- Bounded at 500 per run so one bad night cannot produce a single unbounded
--- transaction. One statement, so it needs no function wrapped around it (same
--- call as the rate-limit purge in 20260806000000).
+-- transaction.
+--
+-- A function rather than the one inline statement the rate-limit purge in
+-- 20260806000000 uses, for one reason: it writes orders.status, so it needs to
+-- carry `set app.order_write = 'on'` past enforce_order_state_writer, and a
+-- cron command string has nowhere to put that.
 -- ---------------------------------------------------------------------------
+create or replace function public.cancel_abandoned_pending_orders(p_older_than_hours integer default 72)
+returns integer
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+set app.order_write = 'on'
+as $function$
+declare
+  v_cancelled integer := 0;
+begin
+  with doomed as (
+    select id
+    from public.orders
+    where status = 'pending'
+      and payment_status = 'pending'
+      and payment_method <> 'cash'
+      and stock_reserved_at is null
+      and stock_released_at is null
+      and created_at > (select effective_from from public.cod_expiry_epoch limit 1)
+      and created_at < now() - make_interval(hours => greatest(coalesce(p_older_than_hours, 72), 1))
+    order by created_at
+    limit 500
+  )
+  update public.orders o
+  set status = 'cancelled', payment_status = 'failed'
+  from doomed d
+  where o.id = d.id;
+
+  get diagnostics v_cancelled = row_count;
+  return v_cancelled;
+end;
+$function$;
+
+comment on function public.cancel_abandoned_pending_orders(integer) is
+  'Closes online orders left at pending because the customer never paid (or the payment session could not be created). They hold no stock, so this is bookkeeping. Bounded by cod_expiry_epoch so pre-existing orders are never touched.';
+
+revoke execute on function public.cancel_abandoned_pending_orders(integer) from anon, authenticated, public;
+
 do $cron$
 begin
   if exists (select 1 from cron.job where jobname = 'cancel-abandoned-pending-orders') then
@@ -649,18 +727,36 @@ $cron$;
 select cron.schedule(
   'cancel-abandoned-pending-orders',
   '37 * * * *',
-  $$update public.orders
-    set status = 'cancelled', payment_status = 'failed'
-    where id in (
-      select id from public.orders
-      where status = 'pending'
-        and payment_status = 'pending'
-        and payment_method <> 'cash'
-        and stock_reserved_at is null
-        and stock_released_at is null
-        and created_at > (select effective_from from public.cod_expiry_epoch limit 1)
-        and created_at < now() - interval '72 hours'
-      order by created_at
-      limit 500
-    )$$
+  $$select public.cancel_abandoned_pending_orders()$$
 );
+
+-- ---------------------------------------------------------------------------
+-- 9. Assert the write flag actually landed.
+--
+-- enforce_order_state_writer refuses any order state change that does not
+-- carry app.order_write, so a typo in one of the ALTER FUNCTION lines above,
+-- or a later migration re-emitting one of these bodies without the setting,
+-- takes out that path completely: COD checkout, payment fulfilment, refunds,
+-- cancellations. Fail the deploy here instead of finding out at the checkout.
+-- ---------------------------------------------------------------------------
+do $assert$
+declare
+  v_missing text;
+begin
+  select string_agg(p.proname, ', ')
+  into v_missing
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public'
+    and p.proname in (
+      'place_cod_order', 'fulfill_order', 'release_order_stock',
+      'admin_update_order_status', 'release_expired_cod_orders',
+      'cancel_abandoned_pending_orders'
+    )
+    and not coalesce(array_to_string(p.proconfig, ',') like '%app.order_write=on%', false);
+
+  if v_missing is not null then
+    raise exception 'app.order_write is not set on: %. Order state writes from those functions would be refused.', v_missing;
+  end if;
+end;
+$assert$;

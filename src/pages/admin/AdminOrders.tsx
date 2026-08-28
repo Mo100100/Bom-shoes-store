@@ -113,12 +113,22 @@ export default function AdminOrders() {
   //             answer to a dropped webhook would be cancelling an order the
   //             customer has already paid for.
   async function markPaid(order: Order) {
-    if (order.payment_method !== 'cash' && !confirm(t.adminMarkPaidConfirm)) return
+    const isOnlineFulfil = order.payment_method !== 'cash'
+    if (isOnlineFulfil && !confirm(t.adminMarkPaidConfirm)) return
     const { error } = await supabase.rpc('admin_update_order_status', {
       p_order_id: order.id,
       p_payment_status: 'paid',
     })
     if (error) { toast.error(refusalMessage(error.hint, error.message)); return }
+    // The customer of a lost webhook never got the confirmation the gateway
+    // path sends, so send it here. Non-fatal exactly as it is in the webhook:
+    // the order is fulfilled either way and a failed email must not read as a
+    // failed fulfilment.
+    if (isOnlineFulfil && order.kashier_order_id) {
+      supabase.functions
+        .invoke('send-order-confirmation', { body: { orderId: order.kashier_order_id } })
+        .catch(err => console.error('send-order-confirmation failed', err))
+    }
     toast.success(t.adminMarkedPaid)
     load()
   }

@@ -229,8 +229,9 @@ export default function AdminProducts() {
       // The database refuses to remove a variant an order is still waiting to
       // be paid for: fulfill_order() looks the row up by id when the payment
       // lands, and a missing row kills that paid order with its stock never
-      // decremented. Nothing is saved, so the grid still holds the row and the
-      // owner can retry once the payment resolves (or it expires).
+      // decremented. Deletes run first here, so no other variant write has
+      // happened, but the product row above IS already committed -- which is
+      // exactly what the message says.
       if (error?.hint === 'variant_in_live_order') throw new Error(t.adminVariantInLiveOrder)
       if (error) throw error
     }
@@ -389,8 +390,9 @@ export default function AdminProducts() {
     if (!confirm(t.adminDeleteConfirm(p.name))) return
     const { error } = await supabase.from('products').delete().eq('id', p.id)
     // Deleting a product cascades to its variants, so the same live-order
-    // guard applies and the same explanation is owed.
-    if (error?.hint === 'variant_in_live_order') { toast.error(t.adminVariantInLiveOrder); return }
+    // guard applies. Its own message, though: nothing was removed and nothing
+    // was saved here, unlike the save path.
+    if (error?.hint === 'variant_in_live_order') { toast.error(t.adminProductInLiveOrder); return }
     if (error) { toast.error(error.message); return }
     toast.success(t.adminDeleted)
     load()

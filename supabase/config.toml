@@ -80,6 +80,13 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 
+[functions.send-order-confirmation]
+# Default (true): only a signed-in admin may call this, and the function asks
+# the database is_admin() with that same JWT before it sends anything (see
+# supabase/functions/send-order-confirmation/index.ts).
+enabled = true
+verify_jwt = true
+
 [functions.sitemap]
 # Search-engine crawlers request this directly with no Supabase JWT (same as
 # robots.txt), so JWT verification must be off.
