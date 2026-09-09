@@ -9,6 +9,7 @@ import Cart from './pages/Cart'
 import Checkout from './pages/Checkout'
 import CheckoutSuccess from './pages/CheckoutSuccess'
 import CheckoutFailed from './pages/CheckoutFailed'
+import OrderLookup from './pages/OrderLookup'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import Account from './pages/Account'
@@ -39,6 +40,9 @@ function App() {
         <Route path="/checkout" element={<Checkout />} />
         <Route path="/checkout/success" element={<CheckoutSuccess />} />
         <Route path="/checkout/failed" element={<CheckoutFailed />} />
+        {/* Public on purpose: checkout takes no account, so a guest has no
+            /account to find their order in. The reference is the capability. */}
+        <Route path="/order" element={<OrderLookup />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
