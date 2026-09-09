@@ -24,16 +24,8 @@ export const translations = {
     errorBoundaryMessage: 'Something went wrong on our end. Please reload the page.',
     errorBoundaryReload: 'Reload page',
 
-    // Announcement bar
-
     // Navigation
     navShop: 'Shop',
-    navSneakers: 'Sneakers',
-    navBoots: 'Boots',
-    navLoafers: 'Loafers',
-    navSlippers: 'Slippers',
-    navDerbies: 'Derbies',
-    navSandals: 'Sandals',
     navBrands: 'Brands',
     navSale: 'Sale',
     navPolicies: 'Policies & Cancellations',
@@ -55,9 +47,6 @@ export const translations = {
     // Footer
     footerShop: 'Shop',
     footerAtelier: 'Explore',
-    footerOurStory: 'Our story',
-    footerCraftsmanship: 'Brands',
-    footerCare: 'Care guide',
     footerContact: 'Contact',
     footerCopyright: '© 2026 BOM Store. All rights reserved.',
     footerSecure: 'Secure checkout by Kashier',
@@ -74,23 +63,9 @@ export const translations = {
     homeHeroCta2: 'Discover boots',
     homeHeroScroll: 'Scroll',
     homeShopTheLook: 'Shop the Look',
-    homeStat1: 'Brands stocked',
-    homeStat2: 'Governorates covered',
-    homeStat3: 'Cash on delivery',
-    homePhilosophyEyebrow: 'How we pick',
-    homePhilosophyTitle: 'We do not make shoes. We choose them, one pair at a time.',
-    homePhilosophyBadges: 'Authentic brands, Cash on delivery, Delivery across Egypt',
     homeFeaturedEyebrow: 'The Collection',
     homeFeaturedTitle: 'Featured pieces',
     homeFeaturedViewAll: 'View all',
-    homePromiseEyebrow: 'Our Promise',
-    homePromise1Title: 'Authentic brands',
-    homePromise1Desc: 'We stock the brands themselves, never a lookalike.',
-    homePromise2Title: 'Pay when it arrives',
-    homePromise2Desc: 'Cash on delivery, so you can pay the courier at your door.',
-    homePromise3Title: 'Delivery across Egypt',
-    homePromise3Desc: 'All 27 governorates. The price follows yours, and you see it before you pay.',
-    homeNewsletterEyebrow: 'Notes from BOM Store',
     homeNewsletterTitle: 'New arrivals, first',
     homeNewsletterDesc: 'New arrivals and restocks, straight to your inbox. Nothing else.',
     homeNewsletterPlaceholder: 'your@email.com',
@@ -114,16 +89,6 @@ export const translations = {
     marqueeLine4: '14-day returns',
     marqueeLine5: 'All 27 governorates',
     marqueeLine6: 'Ask us on WhatsApp',
-
-    // New: categories section
-    homeCategoriesEyebrow: 'Shop by category',
-    homeCategoriesTitle: 'Find your pair',
-    homeCategoriesSubtitle: 'Start from the shape you are after.',
-
-    // New: best sellers
-    homeBestEyebrow: 'The favourites',
-    homeBestTitle: 'Best sellers',
-    homeBestViewAll: 'View all bestsellers',
 
     // New: brand bar
     homeBrandsEyebrow: 'Shop by brand',
@@ -175,7 +140,6 @@ export const translations = {
     shopNoMatch: 'Nothing matches these filters.',
     shopLoadError: 'Could not load the collection. Please try again.',
     shopViewAll: 'View all',
-    shopFeatured: 'Featured',
     shopNew: 'New',
     shopSale: 'Sale',
     // Grid price when a product's sizes are not all the same price -- the
@@ -326,7 +290,6 @@ export const translations = {
     checkoutStep2: 'Step 2',
     checkoutPayment: 'Payment',
     checkoutPaymentDesc: 'You will be redirected to Kashier to complete your payment securely. We accept all major cards, mobile wallets, and bank transfers.',
-    checkoutKashierTitle: 'Secure Kashier checkout',
     checkoutKashierDesc: 'Your card details are processed by Kashier, our PCI-DSS compliant payment partner. BOM Store never sees or stores your card information.',
     checkoutContinue: (amount: string) => `Continue to Kashier, ${amount}`,
     checkoutPayOnline: 'Pay online (card)',
@@ -339,7 +302,6 @@ export const translations = {
     fieldFullName: 'Full name',
     fieldEmail: 'Email',
     fieldPhone: 'Phone',
-    fieldCountry: 'Country',
     fieldAddress: 'Address',
     fieldCity: 'City',
     fieldNotes: 'Delivery notes',
@@ -875,16 +837,8 @@ export const translations = {
     errorBoundaryMessage: 'حدث خطأ ما من جانبنا. يرجى إعادة تحميل الصفحة.',
     errorBoundaryReload: 'إعادة تحميل الصفحة',
 
-    // Announcement bar
-
     // Navigation
     navShop: 'المتجر',
-    navSneakers: 'أحذية رياضية',
-    navBoots: 'بوط',
-    navLoafers: 'لوفرز',
-    navSlippers: 'نعال',
-    navDerbies: 'دربي',
-    navSandals: 'صنادل',
     navBrands: 'الماركات',
     navSale: 'تخفيضات',
     navPolicies: 'السياسات والإلغاء',
@@ -906,9 +860,6 @@ export const translations = {
     // Footer
     footerShop: 'المتجر',
     footerAtelier: 'روابط',
-    footerOurStory: 'قصتنا',
-    footerCraftsmanship: 'الماركات',
-    footerCare: 'دليل العناية',
     footerContact: 'تواصل',
     footerCopyright: '© 2026 BOM Store. كل الحقوق محفوظة.',
     footerSecure: 'دفع آمن عبر كاشير',
@@ -925,23 +876,9 @@ export const translations = {
     homeHeroCta2: 'اكتشف البوط',
     homeHeroScroll: 'مرر',
     homeShopTheLook: 'تسوق الإطلالة',
-    homeStat1: 'ماركة في المتجر',
-    homeStat2: 'محافظة نوصل لها',
-    homeStat3: 'دفع عند الاستلام',
-    homePhilosophyEyebrow: 'إزاي بنختار',
-    homePhilosophyTitle: 'إحنا مش بنصنع أحذية. إحنا بنختارها، زوج ورا زوج.',
-    homePhilosophyBadges: 'ماركات أصلية, دفع عند الاستلام, توصيل لكل مصر',
     homeFeaturedEyebrow: 'المجموعة',
     homeFeaturedTitle: 'قطع مختارة',
     homeFeaturedViewAll: 'عرض الكل',
-    homePromiseEyebrow: 'وعدنا',
-    homePromise1Title: 'ماركات أصلية',
-    homePromise1Desc: 'بنبيع الماركات نفسها، مش تقليد.',
-    homePromise2Title: 'ادفع لما يوصلك',
-    homePromise2Desc: 'الدفع عند الاستلام، تدفع للمندوب عند الباب.',
-    homePromise3Title: 'توصيل لكل مصر',
-    homePromise3Desc: 'كل الـ27 محافظة. السعر حسب محافظتك، وبيظهرلك قبل ما تدفع.',
-    homeNewsletterEyebrow: 'ملاحظات من BOM Store',
     homeNewsletterTitle: 'الجديد يوصلك الأول',
     homeNewsletterDesc: 'الوصلات الجديدة والمقاسات اللي بترجع، على بريدك مباشرة. ولا حاجة تانية.',
     homeNewsletterPlaceholder: 'البريد@الإلكتروني.com',
@@ -965,16 +902,6 @@ export const translations = {
     marqueeLine4: 'إرجاع خلال 14 يوم',
     marqueeLine5: 'توصيل لكل محافظات مصر الـ27',
     marqueeLine6: 'اسألنا على واتساب',
-
-    // New: categories section
-    homeCategoriesEyebrow: 'تسوق حسب الفئة',
-    homeCategoriesTitle: 'لاقي زوجك',
-    homeCategoriesSubtitle: 'ابدأ من الشكل اللي بتدور عليه.',
-
-    // New: best sellers
-    homeBestEyebrow: 'المفضلة',
-    homeBestTitle: 'الأكثر مبيعا',
-    homeBestViewAll: 'اطلع على الأكثر مبيعا',
 
     // New: brand bar
     homeBrandsEyebrow: 'تسوق حسب الماركة',
@@ -1026,7 +953,6 @@ export const translations = {
     shopNoMatch: 'مفيش حاجة مطابقة للفلاتر دي.',
     shopLoadError: 'تعذر تحميل المجموعة. يرجى المحاولة مرة أخرى.',
     shopViewAll: 'عرض الكل',
-    shopFeatured: 'مختارة',
     shopNew: 'جديد',
     shopSale: 'تخفيض',
     shopPriceFrom: (price: string) => `يبدأ من ${price}`,
@@ -1170,7 +1096,6 @@ export const translations = {
     checkoutStep2: 'الخطوة 2',
     checkoutPayment: 'الدفع',
     checkoutPaymentDesc: 'سيتم تحويلك إلى كاشير لإكمال الدفع بأمان. نقبل كافة البطاقات الرئيسية، المحافظ الإليكترونية، و التحويلات المصرفية.',
-    checkoutKashierTitle: 'دفع آمن عبر كاشير',
     checkoutKashierDesc: 'تتم معالجة بيانات بطاقتك عبر كاشير، شريكنا المتوافق مع معايير PCI-DSS. BOM Store لا ترى ولا تحفظ بيانات بطاقتك.',
     checkoutContinue: (amount: string) => `متابعة إلى كاشير، ${amount}`,
     checkoutPayOnline: 'الدفع أونلاين (بطاقة)',
@@ -1183,7 +1108,6 @@ export const translations = {
     fieldFullName: 'الاسم الكامل',
     fieldEmail: 'البريد الإلكتروني',
     fieldPhone: 'الهاتف',
-    fieldCountry: 'الدولة',
     fieldAddress: 'العنوان',
     fieldCity: 'المدينة',
     fieldNotes: 'ملاحظات التسليم',
