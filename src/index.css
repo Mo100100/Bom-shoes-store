@@ -379,6 +379,30 @@ summary:focus-visible {
   outline-offset: 2px;
 }
 
+/* iOS Safari zooms the page in whenever a focused control's font-size is under
+   16px, and it never zooms back out: the customer finishes checkout on a page
+   scrolled sideways, with the submit button off screen. Every field in the app
+   is text-sm (14px), so raise them on coarse (touch) pointers only and leave
+   the desktop design at 14px. `!important` is what beats Tailwind's text-sm
+   utility, the same reason the focus ring above needs it. Nothing in the app
+   sets an input larger than text-sm, so this only ever raises. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* And while a thumb is the pointer, a py-2 text field is a 40px target.
+     Checkboxes, radios and file pickers are excluded: they size themselves,
+     and stretching them to 44px only distorts the control. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  select,
+  textarea {
+    min-height: 44px;
+  }
+}
+
 /* Minimal markdown-body styling (Policies page, admin-authored content) --
    no typography plugin, just the handful of elements markdown can produce. */
 .prose-policies h1, .prose-policies h2, .prose-policies h3 {
