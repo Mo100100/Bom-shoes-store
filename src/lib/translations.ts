@@ -1711,3 +1711,7 @@ export const translations = {
 } as const
 
 export type TranslationKey = keyof typeof translations.en
+
+// One language's worth of strings: what useT() hands back, and what any
+// helper that renders a string outside a component has to be given.
+export type Translations = (typeof translations)[Lang]

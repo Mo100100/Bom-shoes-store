@@ -9,6 +9,8 @@ import { supabase, Order, ProductCatalogEntry } from '@/lib/supabase'
 import { Loader2, Package, Heart } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import WishlistButton from '@/components/WishlistButton'
+import { orderStatusLabel } from '@/lib/orderStatus'
+import type { Translations } from '@/lib/translations'
 
 const STATUS_MAP_EN: Record<string, string> = {
   pending: 'border-muted-foreground/40 text-muted-foreground',
@@ -182,22 +184,11 @@ function Stat({ label, value }: { label: string; value: string | number }) {
   )
 }
 
-function StatusBadge({ status, t }: { status: string; t: any }) {
+function StatusBadge({ status, t }: { status: string; t: Translations }) {
   const cls = STATUS_MAP_EN[status] || STATUS_MAP_EN.pending
-  // Map status to translation
-  const labelMap: Record<string, string> = {
-    pending: t.statusPending,
-    confirmed: t.statusConfirmed,
-    processing: t.statusProcessing,
-    shipped: t.statusShipped,
-    delivered: t.statusDelivered,
-    cancelled: t.statusCancelled,
-    paid: t.statusPaid,
-    failed: t.statusFailed,
-  }
   return (
     <span className={`px-2.5 py-1 text-[10px] tracking-widest uppercase border ${cls}`}>
-      {labelMap[status] || status}
+      {orderStatusLabel(status, t)}
     </span>
   )
 }

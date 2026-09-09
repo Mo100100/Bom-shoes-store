@@ -7,20 +7,10 @@ import { useCurrency } from '@/contexts/CurrencyContext'
 import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { Package, ShoppingBag, TrendingUp, ListOrdered, Loader2 } from 'lucide-react'
 import LoadErrorPanel from '@/components/LoadErrorPanel'
+import { orderStatusLabel } from '@/lib/orderStatus'
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
-
-const STATUS_LABEL_MAP: Record<string, string> = {
-  pending: 'statusPending',
-  confirmed: 'statusConfirmed',
-  processing: 'statusProcessing',
-  shipped: 'statusShipped',
-  delivered: 'statusDelivered',
-  cancelled: 'statusCancelled',
-  paid: 'statusPaid',
-  failed: 'statusFailed',
-}
 
 const CHART_DAYS = 30
 const LOW_STOCK_BELOW = 10
@@ -126,11 +116,6 @@ export default function AdminDashboard() {
     setLoading(false)
   }
   useEffect(() => { load() }, [])
-
-  function statusLabel(s: string): string {
-    const key = STATUS_LABEL_MAP[s]
-    return key ? (t as any)[key] : s
-  }
 
   if (loading) {
     return (
@@ -280,7 +265,7 @@ export default function AdminDashboard() {
                   </div>
                   <div className="text-end flex-shrink-0 ms-4">
                     <p className="font-medium">{formatPrice(Number(o.total_amount))}</p>
-                    <p className="text-xs text-muted-foreground">{statusLabel(o.status)}</p>
+                    <p className="text-xs text-muted-foreground">{orderStatusLabel(o.status, t)}</p>
                   </div>
                 </div>
               ))}
