@@ -106,7 +106,7 @@ export default function AdminProducts() {
   const t = useT()
   const { formatPrice, currency } = useCurrency()
   const { categories, categoryLabel } = useCategories()
-  const { brands, brandLabel } = useBrands()
+  const { brands, brandLabel, loadError: brandsLoadError } = useBrands()
   const CATEGORY_VALUES = categories.map(c => c.value)
   // What the two selects in the editor are actually bound to. A product can
   // hold a category or brand that is no longer in its list (renamed, deleted,
@@ -587,8 +587,15 @@ export default function AdminProducts() {
                     className="w-full bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none cursor-pointer"
                   >
                     <option value="">{t.adminBrandNoneOption}</option>
+                    {/* An unmatched value still has to be shown, or the
+                        control would display "None" over a product that has a
+                        brand. But when the brand LIST failed to load, "no
+                        longer in the list" would be a guess: show the stored
+                        value plainly instead. */}
                     {editingBrand && !brands.some(b => b.value === editingBrand) && (
-                      <option value={editingBrand}>{t.adminOptionNotInList(editingBrand)}</option>
+                      <option value={editingBrand}>
+                        {brandsLoadError ? editingBrand : t.adminOptionNotInList(editingBrand)}
+                      </option>
                     )}
                     {brands.map(b => (
                       <option key={b.value} value={b.value}>{b.name}</option>

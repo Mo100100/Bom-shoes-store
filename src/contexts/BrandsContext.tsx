@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react'
+import { createContext, useContext, useEffect, useState, useRef, ReactNode, useCallback } from 'react'
 import { supabase, Brand } from '@/lib/supabase'
 import { brandLabel as labelFor } from '@/lib/brands'
 
@@ -23,13 +23,27 @@ export function BrandsProvider({ children }: { children: ReactNode }) {
   const [brands, setBrands] = useState<Brand[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
+  // What is currently on screen, readable inside reload() without making
+  // `brands` a dependency of it (that would rebuild reload on every fetch and
+  // re-fire the mount effect below in a loop).
+  const brandsRef = useRef<Brand[]>([])
 
   const reload = useCallback(async () => {
+    // Back to true on a retry too: without this the retry button on /brands
+    // looks inert, because nothing on screen changes until the request lands.
+    setLoading(true)
     const { data, error } = await supabase.from('brands').select('*').order('position')
-    // Keep whatever was already showing on a failed reload rather than
-    // blanking the brand bar the admin is looking at.
-    if (error) setLoadError(true)
-    else { setBrands(data || []); setLoadError(false) }
+    if (error) {
+      // A failed REFRESH keeps the good rows already showing: replacing a
+      // working grid with an error message because a background reload blipped
+      // is worse than data a few seconds stale. loadError is only for the case
+      // where the failure leaves nothing to show at all.
+      setLoadError(brandsRef.current.length === 0)
+    } else {
+      brandsRef.current = data || []
+      setBrands(brandsRef.current)
+      setLoadError(false)
+    }
     setLoading(false)
   }, [])
 
