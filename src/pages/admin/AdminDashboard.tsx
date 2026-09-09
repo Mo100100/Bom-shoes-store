@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase, Order, ProductCatalogEntry } from '@/lib/supabase'
-import { useT } from '@/contexts/LanguageContext'
+import { useLanguage, useT } from '@/contexts/LanguageContext'
+import { Lang } from '@/lib/translations'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { Package, ShoppingBag, TrendingUp, ListOrdered, Loader2 } from 'lucide-react'
@@ -50,9 +51,9 @@ type LowStockProduct = Pick<ProductCatalogEntry, 'id' | 'name' | 'image_url' | '
 // day the store had, whatever timezone the admin's browser is in: a bare
 // `new Date('2026-09-09')` is parsed as UTC midnight and reads as the 8th west
 // of Greenwich.
-function dayLabel(isoDay: string): string {
+function dayLabel(isoDay: string, lang: Lang): string {
   const [y, m, d] = isoDay.split('-').map(Number)
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return new Date(y, m - 1, d).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US', { month: 'short', day: 'numeric' })
 }
 
 export default function AdminDashboard() {
@@ -69,6 +70,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const t = useT()
+  const { lang } = useLanguage()
   const { formatPrice } = useCurrency()
   const catalogPrice = useCatalogPrice()
 
@@ -111,8 +113,10 @@ export default function AdminDashboard() {
     })
     setRecentOrders((recentRes.data || []) as RecentOrder[])
     setTopProducts((lowStockRes.data || []) as LowStockProduct[])
+    // The raw 'YYYY-MM-DD' is kept and formatted at render time: a label baked
+    // in here would stay in the language the dashboard was loaded in.
     setRevenueChart((summary.revenue_by_day || []).map(d => ({
-      date: dayLabel(d.date),
+      date: d.date,
       revenue: Number(d.revenue) || 0,
     })))
     setSellersChart((summary.best_sellers || []).map(s => ({
@@ -185,6 +189,7 @@ export default function AdminDashboard() {
                     axisLine={{ stroke: 'hsl(var(--border))' }}
                     tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11 }}
                     interval={Math.ceil(revenueChart.length / 6)}
+                    tickFormatter={(v: string) => dayLabel(v, lang)}
                   />
                   <YAxis
                     tickLine={false}
@@ -197,6 +202,7 @@ export default function AdminDashboard() {
                     contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: 0, fontSize: 12 }}
                     labelStyle={{ color: 'hsl(var(--foreground))' }}
                     formatter={(v: number) => [formatPrice(v), t.adminRevenue]}
+                    labelFormatter={(v: string) => dayLabel(v, lang)}
                   />
                   <Line
                     type="monotone"

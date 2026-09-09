@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { supabase, Order } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import { useT } from '@/contexts/LanguageContext'
+import { useLanguage, useT } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { Loader2, ChevronDown, ChevronUp, Search } from 'lucide-react'
 import LoadErrorPanel from '@/components/LoadErrorPanel'
@@ -88,6 +88,7 @@ export default function AdminOrders() {
   const loadIdRef = useRef(0)
   const { isAdmin } = useAuth()
   const t = useT()
+  const { lang } = useLanguage()
   const { formatPrice } = useCurrency()
 
   function toggleSort(key: SortKey) {
@@ -334,17 +335,27 @@ export default function AdminOrders() {
                     onClick={() => setExpandedId(id => (id === o.id ? null : o.id))}
                   >
                     <td className="px-4 py-4 font-mono text-xs text-muted-foreground">
-                      <span className="inline-flex items-center gap-1.5">
+                      {/* Real <button>, not just the row's onClick, so the
+                          toggle is reachable and operable from the keyboard
+                          (a bare onClick on <tr> is invisible to Tab/Enter).
+                          Same fix as AdminActivityLog. */}
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); setExpandedId(id => (id === o.id ? null : o.id)) }}
+                        aria-expanded={expandedId === o.id}
+                        aria-label={expandedId === o.id ? t.adminCollapseDetails : t.adminExpandDetails}
+                        className="inline-flex items-center gap-1.5 cursor-pointer text-start"
+                      >
                         {expandedId === o.id ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
                         {o.kashier_order_id || o.id.slice(0, 8)}
-                      </span>
+                      </button>
                     </td>
                     <td className="px-4 py-4">
                       <p className="font-medium">{o.customer_name || t.dash}</p>
                       <p className="text-xs text-muted-foreground">{o.customer_email}</p>
                     </td>
                     <td className="px-4 py-4 text-muted-foreground whitespace-nowrap">
-                      {new Date(o.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      {new Date(o.created_at).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US', { month: 'short', day: 'numeric' })}
                     </td>
                     <td className="px-4 py-4 text-muted-foreground">
                       {pieceCount(o.items)} {pieceCount(o.items) === 1 ? t.piece : t.pieces}

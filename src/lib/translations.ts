@@ -594,6 +594,12 @@ export const translations = {
     adminDiscountBxgyOff: (buy: number, get: number, percent: number) => `Buy ${buy} Get ${get} ${percent}% off`,
     adminNoDateLimit: 'No date limit',
     adminAny: 'Any',
+    // The arrow runs start -> end, so it has to follow the reading direction:
+    // U+2192 is not a mirrored character, so an RTL paragraph leaves it
+    // pointing from the end date back at the start date. The Arabic string
+    // uses the leftwards arrow instead (same intent as the `flip-rtl` class
+    // does for icon components).
+    adminDateRange: (start: string, end: string) => `${start} → ${end}`,
 
     // Admin - bundles
     adminAddBundle: 'Add bundle',
@@ -609,6 +615,7 @@ export const translations = {
     adminQuantityMustBePositive: 'Quantity must be a whole number of 1 or more.',
     adminSelectProduct: 'Select a product',
     adminRemoveRow: 'Remove row',
+    adminRemoveRowConfirm: 'Remove this row? There is no undo, though nothing is written until you save.',
     adminNameRequired: 'Name is required',
     adminBundleUpdated: 'Bundle updated',
     adminBundleCreated: 'Bundle created',
@@ -804,6 +811,7 @@ export const translations = {
     adminTestimonialsCount: (n: number) => `${n} ${n === 1 ? 'testimonial' : 'testimonials'}`,
     adminAddTestimonial: 'Add testimonial',
     adminEditTestimonial: 'Edit testimonial',
+    adminDeleteTestimonial: 'Delete testimonial',
     adminNewTestimonial: 'New testimonial',
     adminNoTestimonials: 'No testimonials yet',
     adminColOrder: 'Order',
@@ -1435,6 +1443,7 @@ export const translations = {
     adminDiscountBxgyOff: (buy: number, get: number, percent: number) => `اشتر ${buy} واحصل على ${get} بخصم ${percent}%`,
     adminNoDateLimit: 'بلا حد زمني',
     adminAny: 'أي وقت',
+    adminDateRange: (start: string, end: string) => `${start} ← ${end}`,
 
     // Admin - bundles
     adminAddBundle: 'إضافة حزمة',
@@ -1450,6 +1459,7 @@ export const translations = {
     adminQuantityMustBePositive: 'يجب أن تكون الكمية رقما صحيحا لا يقل عن 1.',
     adminSelectProduct: 'اختر منتجا',
     adminRemoveRow: 'إزالة الصف',
+    adminRemoveRowConfirm: 'إزالة هذا الصف؟ لا يمكن التراجع، مع أن شيئا لا يحفظ قبل الضغط على حفظ.',
     adminNameRequired: 'الاسم مطلوب',
     adminBundleUpdated: 'تم تحديث الحزمة',
     adminBundleCreated: 'تم إنشاء الحزمة',
@@ -1642,6 +1652,7 @@ export const translations = {
     adminTestimonialsCount: (n: number) => `${n} ${n === 1 ? 'رأي واحد' : 'آراء'}`,
     adminAddTestimonial: 'إضافة رأي',
     adminEditTestimonial: 'تعديل الرأي',
+    adminDeleteTestimonial: 'حذف الرأي',
     adminNewTestimonial: 'رأي جديد',
     adminNoTestimonials: 'لا آراء بعد',
     adminColOrder: 'الترتيب',

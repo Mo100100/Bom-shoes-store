@@ -139,6 +139,9 @@ export default function AdminBundles() {
     setItemRows(rows => rows && [...rows, blankItemRow()])
   }
   function removeItemRow(key: string) {
+    // Nothing is written until Save, but there is no undo and a bundle's rows
+    // are the bundle: same confirm() every other destructive control here has.
+    if (!confirm(t.adminRemoveRowConfirm)) return
     setItemRows(rows => rows && rows.filter(r => r._key !== key))
   }
 

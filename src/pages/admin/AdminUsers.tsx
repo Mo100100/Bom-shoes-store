@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase, Profile } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import { useT } from '@/contexts/LanguageContext'
+import { useLanguage, useT } from '@/contexts/LanguageContext'
 import { Loader2, ChevronDown, Search } from 'lucide-react'
 import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
@@ -28,6 +28,7 @@ export default function AdminUsers() {
   const [search, setSearch] = useState('')
   const { profile: me, isAdmin } = useAuth()
   const t = useT()
+  const { lang } = useLanguage()
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -127,7 +128,7 @@ export default function AdminUsers() {
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">{p.full_name || t.dash}</td>
                       <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                        {new Date(p.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                        {new Date(p.created_at).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
                       </td>
                       <td className="px-4 py-3">
                         {isAdmin ? (

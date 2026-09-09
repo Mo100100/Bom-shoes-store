@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { supabase, Coupon } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
-import { useT } from '@/contexts/LanguageContext'
+import { useLanguage, useT } from '@/contexts/LanguageContext'
+import { Lang } from '@/lib/translations'
 import { Loader2, Plus, X, Edit2, Trash2 } from 'lucide-react'
 import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
@@ -56,12 +57,14 @@ function discountLabel(c: Coupon, formatPrice: (n: number) => string, t: Transla
   return t.adminFreeShipping
 }
 
-function dateRangeLabel(c: Coupon, t: Translations): string {
-  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null)
+function dateRangeLabel(c: Coupon, t: Translations, lang: Lang): string {
+  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null)
   const start = fmt(c.starts_at)
   const end = fmt(c.ends_at)
   if (!start && !end) return t.adminNoDateLimit
-  return `${start || t.adminAny} → ${end || t.adminAny}`
+  // The arrow itself is part of the translated string: it has to point the way
+  // the language reads.
+  return t.adminDateRange(start || t.adminAny, end || t.adminAny)
 }
 
 export default function AdminCoupons() {
@@ -76,6 +79,7 @@ export default function AdminCoupons() {
   const { formatPrice, currency } = useCurrency()
   const { categories } = useCategories()
   const t = useT()
+  const { lang } = useLanguage()
   const CATEGORY_VALUES = categories.map(c => c.value)
 
   async function load() {
@@ -264,7 +268,7 @@ export default function AdminCoupons() {
                     <td className="px-4 py-3">
                       {usageCounts[c.id] || 0} / {c.usage_limit ?? '∞'}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{dateRangeLabel(c, t)}</td>
+                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{dateRangeLabel(c, t, lang)}</td>
                     <td className="px-4 py-3 text-end">
                       <button onClick={() => openEdit(c)} className="p-1.5 hover:bg-muted cursor-pointer" aria-label={t.adminEditCoupon}>
                         <Edit2 className="w-3.5 h-3.5" />

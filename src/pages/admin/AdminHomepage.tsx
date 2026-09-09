@@ -353,6 +353,9 @@ function ShowcaseTab({
     setPick('')
   }
   function remove(idx: number) {
+    // The trash sits right beside the two move arrows in a cluster of 3.5px
+    // icons, and there is no undo, so a misclick is the realistic failure.
+    if (!confirm(t.adminRemoveRowConfirm)) return
     setField('product_ids', ids.filter((_, i) => i !== idx))
   }
   function move(idx: number, dir: -1 | 1) {
@@ -424,6 +427,7 @@ function TrustBadgesTab({ value, setField, onSave, readOnly }: { value: any; set
     setField('items', [...items, { icon: 'Truck', title_en: '', title_ar: '', desc_en: '', desc_ar: '' }])
   }
   function removeItem(idx: number) {
+    if (!confirm(t.adminRemoveRowConfirm)) return
     setField('items', items.filter((_, i) => i !== idx))
   }
 
@@ -524,6 +528,7 @@ function AnnouncementTab({ value, setField, onSave, readOnly }: { value: any; se
     setField('lines', [...lines, { en: '', ar: '' }])
   }
   function removeLine(idx: number) {
+    if (!confirm(t.adminRemoveRowConfirm)) return
     setField('lines', lines.filter((_, i) => i !== idx))
   }
   function move(idx: number, dir: -1 | 1) {
@@ -584,6 +589,7 @@ function FooterLinksTab({ value, setField, onSave, readOnly }: { value: any; set
     setField('items', [...items, { label_en: '', label_ar: '', url: '' }])
   }
   function removeItem(idx: number) {
+    if (!confirm(t.adminRemoveRowConfirm)) return
     setField('items', items.filter((_, i) => i !== idx))
   }
 
@@ -845,7 +851,7 @@ function TestimonialsTab() {
                       <button onClick={() => openEdit(r)} className="p-1.5 hover:bg-muted cursor-pointer" aria-label={t.adminEditTestimonial}>
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
-                      <button onClick={() => handleDelete(r)} className="p-1.5 hover:bg-muted text-red-700 cursor-pointer" aria-label={t.adminTestimonialDeleted}>
+                      <button onClick={() => handleDelete(r)} className="p-1.5 hover:bg-muted text-red-700 cursor-pointer" aria-label={t.adminDeleteTestimonial}>
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </td>

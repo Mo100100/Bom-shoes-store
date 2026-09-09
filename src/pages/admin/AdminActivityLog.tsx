@@ -1,6 +1,6 @@
 import { useEffect, useState, Fragment } from 'react'
 import { supabase, ActivityLog } from '@/lib/supabase'
-import { useT } from '@/contexts/LanguageContext'
+import { useLanguage, useT } from '@/contexts/LanguageContext'
 import { Loader2, ChevronDown, ChevronRight } from 'lucide-react'
 import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
@@ -28,6 +28,7 @@ export default function AdminActivityLog() {
   // counts/product names.
   const [actorNames, setActorNames] = useState<Record<string, string>>({})
   const t = useT()
+  const { lang } = useLanguage()
 
   // Labels are singular for readability; the filter value itself is the real
   // entity_type stored on the row, which is the trigger's tg_table_name (i.e.
@@ -150,7 +151,7 @@ export default function AdminActivityLog() {
                       onClick={() => toggle(l.id)}
                     >
                       <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                        {new Date(l.created_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}
+                        {new Date(l.created_at).toLocaleString(lang === 'ar' ? 'ar-EG' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' })}
                       </td>
                       <td className="px-4 py-3">{actorLabel(l)}</td>
                       <td className="px-4 py-3">

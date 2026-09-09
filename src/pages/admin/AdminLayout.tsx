@@ -28,6 +28,12 @@ export default function AdminLayout() {
   // channel effect on every navigation).
   const pathRef = useRef(location.pathname)
   useEffect(() => { pathRef.current = location.pathname }, [location.pathname])
+  // Same reason as pathRef: the realtime channel below subscribes once, so a
+  // callback that closed over `t`/`formatPrice` would keep announcing orders
+  // in whichever language the tab was opened in, forever. Re-subscribing on
+  // every language change would tear the socket down and rebuild it instead.
+  const toastRef = useRef({ t, formatPrice })
+  useEffect(() => { toastRef.current = { t, formatPrice } }, [t, formatPrice])
 
   // Set once here rather than in every admin child page -- every /admin/*
   // route renders through this layout's <Outlet/>, so one noindex'd title
@@ -54,12 +60,13 @@ export default function AdminLayout() {
         { event: 'INSERT', schema: 'public', table: 'orders' },
         payload => {
           const o = payload.new
+          const { t: tr, formatPrice: price } = toastRef.current
           setUnreadOrders(n => (pathRef.current === '/admin/orders' ? n : n + 1))
           toast.info(
-            t.adminNewOrderToast(
+            tr.adminNewOrderToast(
               o.kashier_order_id || o.id.slice(0, 8),
-              o.customer_name || o.customer_email || t.dash,
-              formatPrice(Number(o.total_amount || 0))
+              o.customer_name || o.customer_email || tr.dash,
+              price(Number(o.total_amount || 0))
             )
           )
         }
@@ -67,7 +74,6 @@ export default function AdminLayout() {
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Visiting the Orders tab clears its unread badge.
@@ -159,7 +165,7 @@ export default function AdminLayout() {
             <button
               onClick={() => setMobileNavOpen(false)}
               className="p-2 cursor-pointer"
-              aria-label="Close menu"
+              aria-label={t.navCloseMenu}
             >
               <X className="w-5 h-5" />
             </button>
@@ -175,7 +181,7 @@ export default function AdminLayout() {
               <button
                 onClick={() => setMobileNavOpen(true)}
                 className="lg:hidden p-2 -ms-2 border border-border hover:bg-card transition-colors cursor-pointer"
-                aria-label="Open admin menu"
+                aria-label={t.navOpenMenu}
               >
                 <Menu className="w-5 h-5" />
               </button>
