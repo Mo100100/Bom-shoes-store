@@ -191,6 +191,20 @@ export const translations = {
     productStockMaxed: 'Your basket already holds every one we have left',
     productChooseSize: 'Please choose a size',
     productShip1: 'Delivery priced by your governorate',
+    // The real per-governorate prices, read from site_content.shipping at
+    // render time. No delivery TIME is quoted here: nothing in this project
+    // records one, and a promised day we cannot keep is worse than silence.
+    productDeliveryRange: (min: string, max: string) => `Delivery ${min} to ${max}, by governorate. You see your exact price at checkout.`,
+    productDeliveryFlat: (price: string) => `Delivery ${price} to any governorate.`,
+    productSizeSoldOut: 'The faded sizes are sold out in this colour.',
+    productSizeGuide: 'Size guide and returns',
+    // Deliberately no brand conversion chart. We resell 22 brands and hold no
+    // verified last data for any of them, and a made-up chart causes the exact
+    // returns a size guide exists to prevent.
+    productSizeGuideBrands: 'The size we list is the size the brand itself printed on the box. We do not convert between brands: a 42 in one brand can fit like a 41 in another, and we will not guess on your behalf.',
+    productSizeGuideMeasure: 'Measure at home: stand on a sheet of paper with your heel against a wall, mark the tip of your longest toe, then measure from the wall to the mark in centimetres. Measure in the evening, measure both feet, and go by the larger one.',
+    productSizeGuideAsk: 'Still unsure? Message us on WhatsApp with the brand and the size you normally wear before you order.',
+    productSizeGuideReturns: '14 days to return or exchange, unworn and in its original box. Sale items are final.',
     productShip2: '14-day returns',
     productShip3: 'Ask us anything on WhatsApp',
     productAccordion1: 'Details',
@@ -1003,6 +1017,14 @@ export const translations = {
     productStockMaxed: 'سلتك تحتوي بالفعل على كل ما تبقى لدينا',
     productChooseSize: 'يرجى اختيار مقاس',
     productShip1: 'سعر التوصيل حسب محافظتك',
+    productDeliveryRange: (min: string, max: string) => `التوصيل من ${min} لـ ${max} على حسب المحافظة، والسعر بالظبط بيبان قبل ما تأكد الطلب.`,
+    productDeliveryFlat: (price: string) => `التوصيل ${price} لأي محافظة.`,
+    productSizeSoldOut: 'المقاسات الباهتة خلصت في اللون ده.',
+    productSizeGuide: 'دليل المقاسات والإرجاع',
+    productSizeGuideBrands: 'المقاس اللي بنكتبه هو المقاس اللي الماركة نفسها كاتباه على العلبة. إحنا مش بنحوّل بين جداول الماركات: 42 عند ماركة ممكن يجي زي 41 عند ماركة تانية، ومش هنخمّن بدالك.',
+    productSizeGuideMeasure: 'قيس رجلك في البيت: قف على ورقة وكعبك في الحيطة، علّم عند أطول صباع، وبعدين قيس من الحيطة للعلامة بالسنتيمتر. اعمل كده بالليل، وقيس الرجلين واعتمد الأكبر فيهم.',
+    productSizeGuideAsk: 'لسه محتار؟ كلمنا على واتساب وقول لنا الماركة والمقاس اللي بتلبسه عادة قبل ما تطلب.',
+    productSizeGuideReturns: 'عندك 14 يوم للإرجاع أو الاستبدال، بشرط إنه ما اتلبسش وفي علبته الأصلية. قطع التخفيضات مفيش فيها إرجاع.',
     productShip2: 'إرجاع خلال 14 يومًا',
     productShip3: 'اسألنا في أي حاجة على واتساب',
     productAccordion1: 'التفاصيل',

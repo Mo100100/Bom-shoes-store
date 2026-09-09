@@ -11,6 +11,7 @@ import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { useRecentlyViewed } from '@/hooks/useRecentlyViewed'
 import { useSeo } from '@/hooks/useSeo'
 import { compareSizes, defaultSizeForColor, firstInStockVariant } from '@/lib/sizes'
+import { fetchShippingConfig } from '@/lib/checkoutConfig'
 import WishlistButton from '@/components/WishlistButton'
 import RatingStars from '@/components/RatingStars'
 import SectionHeading from '@/components/SectionHeading'
@@ -318,6 +319,9 @@ export default function ProductDetail() {
   const selectedVariant = hasVariants ? variants.find(v => v.color === color && v.size === size) : undefined
   const effectivePrice = selectedVariant ? (selectedVariant.price_override ?? product?.price ?? 0) : (product?.price ?? 0)
   const outOfStock = hasVariants ? (!selectedVariant || selectedVariant.stock === 0) : (product?.stock ?? 0) === 0
+  // What is left of the exact combo the Add button would add. Same number the
+  // grid card shows, and the same threshold it uses (ProductCard).
+  const selectedStock = hasVariants ? (selectedVariant?.stock ?? 0) : (product?.stock ?? 0)
 
   function sizeAvailable(s: string) {
     if (!hasVariants) return true
@@ -389,6 +393,24 @@ export default function ProductDetail() {
     toast.success(t.reviewsSubmitSuccess)
     loadReviews(product.id)
   }
+
+  // The real per-governorate delivery prices (site_content.shipping), read once
+  // for the range line below. A failed read leaves it null and the line falls
+  // back to naming the rule without a number: an invented delivery price is
+  // exactly the kind of promise the checkout then refuses to honour.
+  const [shippingRange, setShippingRange] = useState<{ min: number; max: number } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchShippingConfig()
+      .then(({ regions }) => {
+        const prices = regions.map(r => Number(r.price)).filter(n => Number.isFinite(n) && n >= 0)
+        if (cancelled || prices.length === 0) return
+        setShippingRange({ min: Math.min(...prices), max: Math.max(...prices) })
+      })
+      .catch(() => { /* no number is better than a wrong one */ })
+    return () => { cancelled = true }
+  }, [])
 
   // Back-in-stock notify: keyed to the currently selected variant, reset
   // whenever the user switches size/color to a different (in- or out-of-
@@ -653,6 +675,34 @@ export default function ProductDetail() {
                   )
                 })}
               </div>
+              {sizeOptions.some(sz => !sizeAvailable(sz)) && (
+                <p className="text-xs text-muted-foreground mt-3">{t.productSizeSoldOut}</p>
+              )}
+              {selectedStock > 0 && selectedStock < 10 && (
+                <p className="text-xs text-terracotta mt-2">{t.shopOnlyLeft(selectedStock)}</p>
+              )}
+
+              {/* Size guide. No brand conversion chart on purpose: this store
+                  resells 22 brands and has no verified last data for any of
+                  them, and a chart we made up would cause the returns a size
+                  guide is meant to prevent. What it can honestly give is how to
+                  measure, what the printed number does and does not mean, and
+                  the way back if it still comes out wrong. */}
+              <details className="mt-5 border-t border-border group">
+                <summary className="flex items-center justify-between cursor-pointer list-none min-h-[44px] py-2">
+                  <span className="text-xs tracking-widest uppercase">{t.productSizeGuide}</span>
+                  <span className="text-lg group-open:rotate-45 transition-transform">+</span>
+                </summary>
+                <div className="space-y-3 text-sm text-foreground/80 font-light leading-relaxed pt-1 pb-3 max-w-md">
+                  <p>{t.productSizeGuideBrands}</p>
+                  <p>{t.productSizeGuideMeasure}</p>
+                  <p>{t.productSizeGuideAsk}</p>
+                  <p>
+                    {t.productSizeGuideReturns}{' '}
+                    <Link to="/policies" className="border-b border-foreground pb-0.5">{t.navPolicies}</Link>
+                  </p>
+                </div>
+              </details>
             </div>
 
             {/* Add */}
@@ -775,7 +825,13 @@ export default function ProductDetail() {
             <div className="mt-10 pt-8 border-t border-border space-y-4 text-sm">
               <div className="flex items-center gap-3 text-foreground/80">
                 <Check className="w-4 h-4 text-foreground/60" />
-                <span>{t.productShip1}</span>
+                <span>
+                  {!shippingRange
+                    ? t.productShip1
+                    : shippingRange.min === shippingRange.max
+                    ? t.productDeliveryFlat(formatPrice(shippingRange.min))
+                    : t.productDeliveryRange(formatPrice(shippingRange.min), formatPrice(shippingRange.max))}
+                </span>
               </div>
               <div className="flex items-center gap-3 text-foreground/80">
                 <Check className="w-4 h-4 text-foreground/60" />
