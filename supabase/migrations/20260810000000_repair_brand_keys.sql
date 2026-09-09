@@ -26,6 +26,19 @@
 -- matching the predicate and says so, and the owner repairing a key by hand
 -- first is the same no-op for that row.
 
+-- The `alter table ... add constraint` at the bottom takes ACCESS EXCLUSIVE on
+-- brands, which BrandsContext reads on every visitor's first paint, and the
+-- repair loop below takes row locks on brands and products. With the default
+-- lock_timeout of 0 either waits FOREVER behind a long reader, and every new
+-- reader of brands then queues BEHIND the waiting ALTER: no brand strip, no
+-- /brands page and no brand label on any product card, until someone finds and
+-- kills the session. Fail fast instead. The transaction rolls back and the
+-- migration is re-run, which costs nothing because every step here is guarded
+-- and re-runnable. Note this bounds how long the migration WAITS for the lock,
+-- not how long it holds it: the constraint is added NOT VALID and the repair
+-- touches one row.
+set local lock_timeout = '3s';
+
 comment on column public.brands.value is
   'Immutable identifier. products.brand stores this (free text, no FK). Seeded from the brand name at creation and never updated again -- rename `name` instead, which is what the storefront and the admin display.';
 

@@ -38,6 +38,18 @@
 -- owner's answer, and read the trade-off in the report before you do.
 -- ---------------------------------------------------------------------------
 
+-- The `alter table ... add constraint` in 1b below takes ACCESS EXCLUSIVE on
+-- products, the table behind product_catalog and so behind every storefront
+-- page load, and behind place_cod_order(). With the default lock_timeout of 0
+-- that ALTER waits FOREVER for one long running reader to finish, and every
+-- new reader of products then queues BEHIND the waiting ALTER: the whole
+-- storefront goes dark until someone finds and kills the session. Fail fast
+-- instead. The transaction rolls back and the migration is re-run in a quieter
+-- minute, which costs nothing because it is guarded and idempotent. Note this
+-- bounds how long the migration WAITS for the lock, not how long it holds it:
+-- the constraint is added NOT VALID, so no table scan follows it.
+set local lock_timeout = '3s';
+
 -- 1a. Say what is in the table now, so the next person does not have to go and
 --     look. Read only.
 do $$

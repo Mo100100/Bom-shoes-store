@@ -31,6 +31,19 @@
 -- sequential scan. At ~118 products and a few hundred orders that is free; at
 -- the 10,000 orders these functions are being written for it is not.
 -- ---------------------------------------------------------------------------
+
+-- The three `create index` statements below cannot be CONCURRENT (that is
+-- forbidden inside a transaction, and this file is one), so each takes SHARE
+-- on orders, which blocks every checkout INSERT while it is held. With the
+-- default lock_timeout of 0 the first one also waits FOREVER for an in-flight
+-- order to commit, with every later checkout queued BEHIND it: the store takes
+-- no money until someone finds and kills the session. Fail fast instead. The
+-- transaction rolls back and the migration is re-run, which costs nothing
+-- because all three are `if not exists`. Note this bounds how long the
+-- migration WAITS for each lock, not how long it holds it: the builds scan a
+-- few hundred rows.
+set local lock_timeout = '3s';
+
 create index if not exists orders_created_at_idx
   on public.orders (created_at desc);
 
