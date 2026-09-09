@@ -107,7 +107,12 @@ export default function Checkout() {
   const [errors, setErrors] = useState<FieldErrors>({})
   const [discountAmount, setDiscountAmount] = useState(0)
   const [couponError, setCouponError] = useState<string | null>(null)
-  const [paymentMethod, setPaymentMethod] = useState<'online' | 'cash'>('online')
+  // Cash on Delivery is the default, and the only method the store accepts
+  // today (site_content.checkout_config has online_enabled false). It is also
+  // the majority choice in this market when both are on, so it stays the
+  // default either way; the effect below only moves off it when cash itself
+  // is switched off.
+  const [paymentMethod, setPaymentMethod] = useState<'online' | 'cash'>('cash')
   const [checkoutConfig, setCheckoutConfig] = useState<CheckoutConfig>(DEFAULT_CHECKOUT_CONFIG)
   const [regions, setRegions] = useState<ShippingRegion[]>([])
   const [regionsLoading, setRegionsLoading] = useState(true)
@@ -161,13 +166,25 @@ export default function Checkout() {
 
   // Which payment methods the admin has enabled (site_content.checkout_config).
   useEffect(() => {
-    fetchCheckoutConfig().then(cfg => {
-      setCheckoutConfig(cfg)
-      // If online is off, default the selection to cash (and vice versa) so a
-      // disabled method is never the pre-selected one.
-      if (!cfg.online_enabled && cfg.cash_enabled) setPaymentMethod('cash')
-      else if (cfg.online_enabled && !cfg.cash_enabled) setPaymentMethod('online')
-    })
+    fetchCheckoutConfig().then(
+      cfg => {
+        setCheckoutConfig(cfg)
+        // Cash is already the default, so the only move needed is off it, when
+        // the admin has switched cash off and left card on. A disabled method
+        // must never be the pre-selected one.
+        if (cfg.online_enabled && !cfg.cash_enabled) setPaymentMethod('online')
+      },
+      // fetchCheckoutConfig THROWS on a read error. Unhandled, that left the
+      // state at its defaults with nothing selected and the wrong wording on
+      // the submit button. Cash is the safe fallback: offering cash the store
+      // does not take costs one phone call, offering card it cannot process
+      // sends the customer into a payment form that does not exist.
+      err => {
+        console.error('Checkout: could not read site_content.checkout_config:', err)
+        setCheckoutConfig(DEFAULT_CHECKOUT_CONFIG)
+        setPaymentMethod('cash')
+      },
+    )
     loadShipping()
   }, [])
 
@@ -487,8 +504,15 @@ export default function Checkout() {
                       className={`w-full bg-transparent border-b ${errors.regionCode ? 'border-terracotta' : 'border-foreground/30'} focus:border-foreground outline-none py-2 text-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`}
                     >
                       <option value="" disabled>{regionsLoading ? t.checkoutRegionsLoading : t.checkoutSelectRegion}</option>
+                      {/* The price rides along in the label, so the control
+                          that raises "how much is delivery" answers it in the
+                          same glance. A region left at the seed price of 0 is
+                          shown bare rather than as free delivery the checkout
+                          would not honour (same rule as src/lib/shippingRange.ts). */}
                       {regions.map(r => (
-                        <option key={r.code} value={r.code}>{regionLabel(r, lang)}</option>
+                        <option key={r.code} value={r.code}>
+                          {r.price > 0 ? `${regionLabel(r, lang)} · ${formatPrice(r.price)}` : regionLabel(r, lang)}
+                        </option>
                       ))}
                     </select>
                   )}
@@ -528,6 +552,28 @@ export default function Checkout() {
               </p>
 
               <div className="space-y-3">
+                {/* Cash on delivery, first: it is the only method the store
+                    accepts today, and the majority choice in this market when
+                    both are on. */}
+                {checkoutConfig.cash_enabled && (
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('cash')}
+                  aria-pressed={paymentMethod === 'cash'}
+                  className={`w-full text-start border p-5 transition-colors cursor-pointer ${paymentMethod === 'cash' ? 'border-foreground bg-muted/30' : 'border-border hover:border-foreground/40'}`}
+                >
+                  <div className="flex items-start gap-4">
+                    <span className={`mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center ${paymentMethod === 'cash' ? 'border-foreground' : 'border-muted-foreground'}`}>
+                      {paymentMethod === 'cash' && <span className="w-2 h-2 rounded-full bg-foreground" />}
+                    </span>
+                    <div className="flex-1">
+                      <h3 className="font-display text-lg mb-1 flex items-center gap-2"><Banknote className="w-4 h-4" /> {t.checkoutCashOnDelivery}</h3>
+                      <p className="text-sm text-muted-foreground font-light leading-relaxed">{t.checkoutCashDesc}</p>
+                    </div>
+                  </div>
+                </button>
+                )}
+
                 {/* Pay online (Kashier) */}
                 {checkoutConfig.online_enabled && (
                 <button
@@ -550,26 +596,6 @@ export default function Checkout() {
                         <span className="px-2 py-1 border border-border">FAWRY</span>
                         <span className="px-2 py-1 border border-border">VODAFONE CASH</span>
                       </div>
-                    </div>
-                  </div>
-                </button>
-                )}
-
-                {/* Cash on delivery */}
-                {checkoutConfig.cash_enabled && (
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('cash')}
-                  aria-pressed={paymentMethod === 'cash'}
-                  className={`w-full text-start border p-5 transition-colors cursor-pointer ${paymentMethod === 'cash' ? 'border-foreground bg-muted/30' : 'border-border hover:border-foreground/40'}`}
-                >
-                  <div className="flex items-start gap-4">
-                    <span className={`mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center ${paymentMethod === 'cash' ? 'border-foreground' : 'border-muted-foreground'}`}>
-                      {paymentMethod === 'cash' && <span className="w-2 h-2 rounded-full bg-foreground" />}
-                    </span>
-                    <div className="flex-1">
-                      <h3 className="font-display text-lg mb-1 flex items-center gap-2"><Banknote className="w-4 h-4" /> {t.checkoutCashOnDelivery}</h3>
-                      <p className="text-sm text-muted-foreground font-light leading-relaxed">{t.checkoutCashDesc}</p>
                     </div>
                   </div>
                 </button>
@@ -610,7 +636,8 @@ export default function Checkout() {
               )}
             </button>
             <p className="text-[11px] text-muted-foreground text-center">
-              {t.checkoutTerms}
+              {t.checkoutTerms}{' '}
+              <Link to="/policies" className="border-b border-foreground/40 pb-0.5">{t.checkoutTermsLink}</Link>.
             </p>
           </form>
 
