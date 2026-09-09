@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { supabase, Testimonial } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
@@ -37,34 +37,60 @@ type TabKey = typeof TABS[number]['key']
 export default function AdminHomepage() {
   const [tab, setTab] = useState<TabKey>('hero')
   const [loading, setLoading] = useState(true)
-  const [drafts, setDrafts] = useState<Record<string, any>>({})
+  // `null` means the content has never been read successfully. Saving writes
+  // back the whole jsonb blob, so a draft built on a failed read would replace
+  // the live seeded rows with `{}`. Keeping "not loaded" out of band from
+  // "loaded and empty" is what makes that impossible: the tabs, and with them
+  // every Save button, are not rendered at all while drafts is null.
+  const [drafts, setDrafts] = useState<Record<string, any> | null>(null)
   const [products, setProducts] = useState<ProductOption[]>([])
   const { isAdmin } = useAuth()
   const t = useT()
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
-      const [{ data: contentRows }, { data: productRows }] = await Promise.all([
-        supabase.from('site_content').select('key, value').in('key', SITE_CONTENT_KEYS as unknown as string[]),
-        supabase.from('product_catalog').select('id, name, slug').order('name'),
-      ])
+  // Same guard as Shop.tsx: only the most recently started load may touch
+  // state, so a slow failure can't land after a retry has already succeeded.
+  const loadIdRef = useRef(0)
+
+  async function load() {
+    const id = ++loadIdRef.current
+    setLoading(true)
+    const [content, catalog] = await Promise.all([
+      supabase.from('site_content').select('key, value').in('key', SITE_CONTENT_KEYS as unknown as string[]),
+      supabase.from('product_catalog').select('id, name, slug').order('name'),
+    ])
+    if (id !== loadIdRef.current) return
+    if (content.error || catalog.error) {
+      setDrafts(null)
+      setProducts([])
+    } else {
       const map: Record<string, any> = {}
-      for (const row of contentRows || []) map[row.key] = row.value
+      for (const row of content.data || []) map[row.key] = row.value
       setDrafts(map)
-      setProducts(productRows || [])
-      setLoading(false)
+      setProducts(catalog.data || [])
     }
-    load()
-  }, [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
 
   function setField(key: SiteContentKey, field: string, value: any) {
-    setDrafts(d => ({ ...d, [key]: { ...d[key], [field]: value } }))
+    setDrafts(d => (d ? { ...d, [key]: { ...d[key], [field]: value } } : d))
   }
 
   async function saveKey(key: SiteContentKey) {
-    const { error } = await supabase.from('site_content').update({ value: drafts[key] || {} }).eq('key', key)
+    // Second lock behind the render guard below: no draft, no write.
+    if (!drafts) { toast.error(t.adminHomepageLoadError); return }
+    const { data, error } = await supabase
+      .from('site_content')
+      .update({ value: drafts[key] || {} })
+      .eq('key', key)
+      .select('key, value')
     if (error) { toast.error(error.message); return }
+    // A zero-row match returns no error, so an unchecked update would toast
+    // "Saved" after an RLS denial or against a key that isn't seeded.
+    if (!data.length) { toast.error(t.adminSaveNotApplied); return }
+    // Re-sync this key from the row the database actually stored, instead of
+    // leaving the editor on the copy read at mount.
+    setDrafts(d => (d ? { ...d, [key]: data[0].value } : d))
     toast.success(t.adminSaved)
   }
 
@@ -72,6 +98,21 @@ export default function AdminHomepage() {
     return (
       <div className="py-24 flex justify-center">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  // A failed read is never dressed up as "nothing configured yet".
+  if (!drafts) {
+    return (
+      <div className="py-24 text-center">
+        <p className="text-terracotta">{t.adminHomepageLoadError}</p>
+        <button
+          onClick={() => load()}
+          className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+        >
+          {t.failedTryAgain}
+        </button>
       </div>
     )
   }

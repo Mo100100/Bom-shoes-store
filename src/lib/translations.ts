@@ -510,6 +510,7 @@ export const translations = {
     adminSavingBtn: 'Saving…',
     adminSaved: 'Saved',
     adminSaveFailed: 'Save failed',
+    adminSaveNotApplied: 'Nothing was written. Reload the page and try again.',
     adminDeleteFailed: 'Delete failed',
     adminUploadFailed: 'Upload failed',
 
@@ -585,6 +586,7 @@ export const translations = {
     adminNewBundle: 'New bundle',
     adminDeleteBundle: 'Delete bundle',
     adminRequiredProducts: 'Required products',
+    adminBundleItemsLoadError: 'Could not load this bundle\'s products. Saving is disabled so they are not deleted.',
     adminAddRow: '+ Add row',
     adminSelectProduct: 'Select a product',
     adminRemoveRow: 'Remove row',
@@ -699,6 +701,7 @@ export const translations = {
     adminDeleteImage: 'Delete image',
 
     // Admin - homepage tabs
+    adminHomepageLoadError: 'Could not load the homepage content. Nothing can be saved until it loads.',
     adminHeroTab: 'Hero',
     adminShowcaseTab: 'Showcase',
     adminCuratedTab: 'Curated',
@@ -1314,6 +1317,7 @@ export const translations = {
     adminSavingBtn: 'جار الحفظ…',
     adminSaved: 'تم الحفظ',
     adminSaveFailed: 'فشل الحفظ',
+    adminSaveNotApplied: 'لم يتم حفظ أي شيء. أعد تحميل الصفحة وحاول مرة أخرى.',
     adminDeleteFailed: 'فشل الحذف',
     adminUploadFailed: 'فشل الرفع',
 
@@ -1389,6 +1393,7 @@ export const translations = {
     adminNewBundle: 'حزمة جديدة',
     adminDeleteBundle: 'حذف الحزمة',
     adminRequiredProducts: 'المنتجات المطلوبة',
+    adminBundleItemsLoadError: 'تعذر تحميل منتجات هذه الحزمة. تم تعطيل الحفظ حتى لا تحذف.',
     adminAddRow: '+ إضافة صف',
     adminSelectProduct: 'اختر منتجا',
     adminRemoveRow: 'إزالة الصف',
@@ -1503,6 +1508,7 @@ export const translations = {
     adminDeleteImage: 'حذف الصورة',
 
     // Admin - homepage tabs
+    adminHomepageLoadError: 'تعذر تحميل محتوى الصفحة الرئيسية. لا يمكن الحفظ حتى يتم التحميل.',
     adminHeroTab: 'الواجهة',
     adminShowcaseTab: 'العرض',
     adminCuratedTab: 'المختارة',

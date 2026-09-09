@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase, Bundle } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
@@ -42,7 +42,12 @@ export default function AdminBundles() {
   const [products, setProducts] = useState<ProductOption[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<Partial<Bundle> | null>(null)
-  const [itemRows, setItemRows] = useState<ItemRow[]>([])
+  // `null` means this bundle's items were never read successfully. saveItems
+  // replaces the whole list, so an unloaded list must never reach it: that
+  // would delete the bundle's real products and put nothing back.
+  const [itemRows, setItemRows] = useState<ItemRow[] | null>([])
+  const [itemsLoading, setItemsLoading] = useState(false)
+  const itemsLoadIdRef = useRef(0)
   const [saving, setSaving] = useState(false)
   const { isAdmin } = useAuth()
   const { formatPrice, currency } = useCurrency()
@@ -65,12 +70,27 @@ export default function AdminBundles() {
   useEffect(() => { load() }, [])
 
   async function loadItems(bundleId: string) {
-    const { data } = await supabase.from('bundle_items').select('*').eq('bundle_id', bundleId)
-    const rows: ItemRow[] = (data || []).map(i => ({ id: i.id, product_id: i.product_id, quantity: i.quantity, _key: i.id }))
+    // Held as null for the whole round trip, so the rows on screen always
+    // belong to the bundle being edited: reopening a different bundle can
+    // never leave the previous one's items sitting in the editor, ready to be
+    // saved over the new bundle. The id guard is Shop.tsx's: only the most
+    // recent call may land, so a slow response can't overwrite a newer one.
+    const id = ++itemsLoadIdRef.current
+    setItemRows(null)
+    setItemsLoading(true)
+    const { data, error } = await supabase.from('bundle_items').select('*').eq('bundle_id', bundleId)
+    if (id !== itemsLoadIdRef.current) return
+    setItemsLoading(false)
+    if (error) return
+    const rows: ItemRow[] = data.map(i => ({ id: i.id, product_id: i.product_id, quantity: i.quantity, _key: i.id }))
     setItemRows(rows.length ? rows : [blankItemRow()])
   }
 
   function openNew() {
+    // Drop any bundle-items read still in flight from a bundle opened before
+    // this one, so its rows can't land in the new bundle's editor.
+    itemsLoadIdRef.current++
+    setItemsLoading(false)
     setEditing({ ...EMPTY })
     setItemRows([blankItemRow()])
   }
@@ -80,13 +100,13 @@ export default function AdminBundles() {
   }
 
   function updateItemRow(key: string, field: keyof ItemRow, value: string | number) {
-    setItemRows(rows => rows.map(r => (r._key === key ? { ...r, [field]: value } : r)))
+    setItemRows(rows => rows && rows.map(r => (r._key === key ? { ...r, [field]: value } : r)))
   }
   function addItemRow() {
-    setItemRows(rows => [...rows, blankItemRow()])
+    setItemRows(rows => rows && [...rows, blankItemRow()])
   }
   function removeItemRow(key: string) {
-    setItemRows(rows => rows.filter(r => r._key !== key))
+    setItemRows(rows => rows && rows.filter(r => r._key !== key))
   }
 
   async function toggleActive(b: Bundle) {
@@ -100,8 +120,13 @@ export default function AdminBundles() {
   // reasoning as AdminProducts.saveVariants (a per-row update loop can race
   // against unique/foreign-key constraints mid-loop; delete+insert sidesteps
   // that entirely, and this is an admin-only, low-traffic screen).
-  async function saveItems(bundleId: string) {
-    const rows = itemRows
+  //
+  // `current` is a parameter, not state: this function deletes every existing
+  // row for the bundle, so it must be impossible to call it with a list that
+  // came from a failed read. handleSave is the only caller and it cannot get
+  // past its own guard with a null list.
+  async function saveItems(bundleId: string, current: ItemRow[]) {
+    const rows = current
       .filter(r => r.product_id) // ponytail: skip incomplete rows, don't persist rows with no product picked
       .map(row => ({
         bundle_id: bundleId,
@@ -119,6 +144,8 @@ export default function AdminBundles() {
   async function handleSave() {
     if (!editing) return
     if (!editing.name?.trim()) { toast.error(t.adminNameRequired); return }
+    // The items list never loaded: saving would wipe the bundle's products.
+    if (!itemRows) { toast.error(t.adminBundleItemsLoadError); return }
     setSaving(true)
     try {
       const payload = {
@@ -131,15 +158,18 @@ export default function AdminBundles() {
 
       let bundleId = editing.id
       if (bundleId) {
-        const { error } = await supabase.from('bundles').update(payload).eq('id', bundleId)
+        const { data, error } = await supabase.from('bundles').update(payload).eq('id', bundleId).select('id')
         if (error) throw error
+        // A zero-row match returns no error, so without this an RLS denial or
+        // a bundle deleted in another tab would report success.
+        if (!data.length) throw new Error(t.adminSaveNotApplied)
       } else {
         const { data, error } = await supabase.from('bundles').insert(payload).select().single()
         if (error) throw error
         bundleId = data.id
       }
 
-      await saveItems(bundleId!)
+      await saveItems(bundleId!, itemRows)
 
       toast.success(editing.id ? t.adminBundleUpdated : t.adminBundleCreated)
       setEditing(null)
@@ -286,34 +316,53 @@ export default function AdminBundles() {
               <div className="pt-2 border-t border-border">
                 <div className="flex items-center justify-between mb-2 mt-4">
                   <span className="block text-xs tracking-widest uppercase text-muted-foreground">{t.adminRequiredProducts}</span>
-                  <button type="button" onClick={addItemRow} className="text-xs underline cursor-pointer">{t.adminAddRow}</button>
+                  {itemRows && <button type="button" onClick={addItemRow} className="text-xs underline cursor-pointer">{t.adminAddRow}</button>}
                 </div>
-                <div className="space-y-2">
-                  {itemRows.map(row => (
-                    <div key={row._key} className="grid grid-cols-[1fr_5rem_1.5rem] gap-2 items-center">
-                      <select
-                        value={row.product_id}
-                        onChange={e => updateItemRow(row._key, 'product_id', e.target.value)}
-                        className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none cursor-pointer"
-                      >
-                        <option value="" disabled>{t.adminSelectProduct}</option>
-                        {products.map(p => (
-                          <option key={p.id} value={p.id}>{p.name}</option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        min={1}
-                        value={row.quantity}
-                        onChange={e => updateItemRow(row._key, 'quantity', Number(e.target.value) || 1)}
-                        className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none"
-                      />
-                      <button type="button" onClick={() => removeItemRow(row._key)} className="p-1 text-red-700 cursor-pointer" aria-label={t.adminRemoveRow}>
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                {itemsLoading ? (
+                  <div className="py-6 flex justify-center">
+                    <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : itemRows === null ? (
+                  // A failed read is never shown as "no products yet": the rows
+                  // editor is replaced outright and Save stays disabled.
+                  <div className="py-6 text-center">
+                    <p className="text-sm text-terracotta">{t.adminBundleItemsLoadError}</p>
+                    <button
+                      type="button"
+                      onClick={() => editing.id && loadItems(editing.id)}
+                      className="mt-3 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+                    >
+                      {t.failedTryAgain}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {itemRows.map(row => (
+                      <div key={row._key} className="grid grid-cols-[1fr_5rem_1.5rem] gap-2 items-center">
+                        <select
+                          value={row.product_id}
+                          onChange={e => updateItemRow(row._key, 'product_id', e.target.value)}
+                          className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none cursor-pointer"
+                        >
+                          <option value="" disabled>{t.adminSelectProduct}</option>
+                          {products.map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          min={1}
+                          value={row.quantity}
+                          onChange={e => updateItemRow(row._key, 'quantity', Number(e.target.value) || 1)}
+                          className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none"
+                        />
+                        <button type="button" onClick={() => removeItemRow(row._key)} className="p-1 text-red-700 cursor-pointer" aria-label={t.adminRemoveRow}>
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             <div className="p-6 border-t border-border flex items-center justify-end gap-3 sticky bottom-0 bg-background">
@@ -322,7 +371,7 @@ export default function AdminBundles() {
               </button>
               <button
                 onClick={handleSave}
-                disabled={saving}
+                disabled={saving || !itemRows}
                 className="px-5 py-2.5 text-sm bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 cursor-pointer flex items-center gap-2"
               >
                 {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
