@@ -223,9 +223,7 @@ export default function Shop() {
     setSelectedSizes(current => current.includes(s) ? current.filter(x => x !== s) : [...current, s])
   }
 
-  async function quickAdd(p: ProductCatalogEntry, e: React.MouseEvent) {
-    e.preventDefault()
-    e.stopPropagation()
+  async function quickAdd(p: ProductCatalogEntry) {
     setQuickAddingId(p.id)
     const { data: variants, error } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size').order('color')
     setQuickAddingId(null)
