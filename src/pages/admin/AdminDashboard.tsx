@@ -72,35 +72,46 @@ export default function AdminDashboard() {
   const [revenueChart, setRevenueChart] = useState<{ date: string; revenue: number }[]>([])
   const [sellersChart, setSellersChart] = useState<{ name: string; units: number }[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const t = useT()
   const { formatPrice } = useCurrency()
 
-  useEffect(() => {
-    async function load() {
-      const [{ data: orders }, { data: products }] = await Promise.all([
-        supabase.from('orders').select('*'),
-        supabase.from('product_catalog').select('*'),
-      ])
-
-      const paidOrders = (orders || []).filter(o => o.payment_status === 'paid')
-      const revenue = paidOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0)
-      setStats({
-        revenue,
-        orders: (orders || []).length,
-        products: (products || []).length,
-        pending: (orders || []).filter(o => o.status === 'pending' || o.status === 'confirmed').length,
-      })
-      setRecentOrders((orders || []).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 5))
-      // Only genuinely low-stock products (< 10) belong under "Low Stock" --
-      // previously this sorted low-first but always sliced 5, so a fully-
-      // stocked catalog still listed 5 items as if they were low.
-      setTopProducts((products || []).filter(p => p.total_stock < 10).sort((a, b) => a.total_stock - b.total_stock).slice(0, 5))
-      setRevenueChart(revenueByDay(paidOrders))
-      setSellersChart(bestSellers(paidOrders))
+  async function load() {
+    setLoading(true)
+    const [orderRes, productRes] = await Promise.all([
+      supabase.from('orders').select('*'),
+      supabase.from('product_catalog').select('*'),
+    ])
+    // Zero revenue, zero orders and an empty chart are what a failed read used
+    // to draw. This is the first screen of the admin: it has to be honest or
+    // nothing behind it is trusted.
+    if (orderRes.error || productRes.error) {
+      setLoadError(true)
       setLoading(false)
+      return
     }
-    load()
-  }, [])
+    setLoadError(false)
+    const orders = orderRes.data
+    const products = productRes.data
+
+    const paidOrders = (orders || []).filter(o => o.payment_status === 'paid')
+    const revenue = paidOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0)
+    setStats({
+      revenue,
+      orders: (orders || []).length,
+      products: (products || []).length,
+      pending: (orders || []).filter(o => o.status === 'pending' || o.status === 'confirmed').length,
+    })
+    setRecentOrders((orders || []).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 5))
+    // Only genuinely low-stock products (< 10) belong under "Low Stock" --
+    // previously this sorted low-first but always sliced 5, so a fully-
+    // stocked catalog still listed 5 items as if they were low.
+    setTopProducts((products || []).filter(p => p.total_stock < 10).sort((a, b) => a.total_stock - b.total_stock).slice(0, 5))
+    setRevenueChart(revenueByDay(paidOrders))
+    setSellersChart(bestSellers(paidOrders))
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
 
   function statusLabel(s: string): string {
     const key = STATUS_LABEL_MAP[s]
@@ -111,6 +122,20 @@ export default function AdminDashboard() {
     return (
       <div className="py-24 flex justify-center">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="border border-terracotta bg-card p-12 text-center">
+        <p className="text-terracotta">{t.adminLoadError}</p>
+        <button
+          onClick={() => load()}
+          className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+        >
+          {t.failedTryAgain}
+        </button>
       </div>
     )
   }

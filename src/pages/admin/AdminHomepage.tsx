@@ -675,6 +675,7 @@ const EMPTY_TESTIMONIAL: Partial<Testimonial> = {
 function TestimonialsTab() {
   const [rows, setRows] = useState<Testimonial[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [editing, setEditing] = useState<Partial<Testimonial> | null>(null)
   const [saving, setSaving] = useState(false)
   const { isAdmin } = useAuth()
@@ -682,8 +683,11 @@ function TestimonialsTab() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('testimonials').select('*').order('position')
-    setRows(data || [])
+    const { data, error } = await supabase.from('testimonials').select('*').order('position')
+    // A failed read must not read as "no testimonials", which is an invitation
+    // to type the live ones in again.
+    setLoadError(!!error)
+    setRows(error ? [] : data || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -731,8 +735,11 @@ function TestimonialsTab() {
       }
 
       if (editing.id) {
-        const { error } = await supabase.from('testimonials').update(payload).eq('id', editing.id)
+        const { data, error } = await supabase.from('testimonials').update(payload).eq('id', editing.id).select('id')
         if (error) throw error
+        // A zero-row match returns no error: without this an edited quote that
+        // never landed would still toast "Testimonial updated".
+        if (!data.length) throw new Error(t.adminSaveNotApplied)
       } else {
         const { error } = await supabase.from('testimonials').insert(payload)
         if (error) throw error
@@ -759,7 +766,8 @@ function TestimonialsTab() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">{t.adminTestimonialsCount(rows.length)}</p>
+        {/* A count over a failed read would read as "you have none". */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminTestimonialsCount(rows.length)}</p>}
         {isAdmin && (
           <button
             onClick={openNew}
@@ -774,6 +782,16 @@ function TestimonialsTab() {
       {loading ? (
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : loadError ? (
+        <div className="border border-terracotta bg-card p-12 text-center">
+          <p className="text-terracotta">{t.adminLoadError}</p>
+          <button
+            onClick={() => load()}
+            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          >
+            {t.failedTryAgain}
+          </button>
         </div>
       ) : (
         <div className="border border-border bg-card overflow-hidden">

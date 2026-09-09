@@ -14,6 +14,7 @@ const ROLE_LABEL_MAP: Record<string, 'adminRoleCustomer' | 'adminRoleAdmin'> = {
 export default function AdminUsers() {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [search, setSearch] = useState('')
   const { profile: me, isAdmin } = useAuth()
   const t = useT()
@@ -29,18 +30,33 @@ export default function AdminUsers() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .order('created_at', { ascending: false })
-    setProfiles(data || [])
+    // An empty user list is impossible (whoever is reading this screen is in
+    // it), so rendering one for a failed read would only ever be a lie.
+    setLoadError(!!error)
+    setProfiles(error ? [] : data || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
 
   async function updateRole(p: Profile, newRole: string) {
-    const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', p.id)
+    // Losing the only other admin is not something to discover later: the
+    // owner would be alone on the account with no way back except SQL.
+    // Self-demotion is already impossible (the select is disabled, and a
+    // trigger refuses it), so this is only ever about somebody else.
+    const otherAdmins = profiles.filter(x => x.role === 'admin' && x.id !== me?.id)
+    if (newRole !== 'admin' && p.role === 'admin' && otherAdmins.length === 1) {
+      if (!confirm(t.adminLastAdminConfirm)) { load(); return }
+    }
+    const { data, error } = await supabase
+      .from('profiles').update({ role: newRole }).eq('id', p.id).select('id')
     if (error) { toast.error(error.message); return }
+    // A role change matching no row comes back with no error: an RLS denial
+    // here would otherwise report a promotion or a demotion that never was.
+    if (!data.length) { toast.error(t.adminSaveNotApplied); load(); return }
     toast.success(t.adminRoleUpdated)
     load()
   }
@@ -48,7 +64,8 @@ export default function AdminUsers() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">{t.adminUsersCount(filtered.length)}</p>
+        {/* A count over a failed read would read as "you have no users". */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminUsersCount(filtered.length)}</p>}
       </div>
 
       <div className="relative mb-4 max-w-sm">
@@ -66,6 +83,16 @@ export default function AdminUsers() {
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
+      ) : loadError ? (
+        <div className="py-24 text-center">
+          <p className="text-terracotta">{t.adminLoadError}</p>
+          <button
+            onClick={() => load()}
+            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          >
+            {t.failedTryAgain}
+          </button>
+        </div>
       ) : (
         <div className="border border-border bg-card overflow-hidden">
           <div className="overflow-x-auto">
@@ -79,6 +106,11 @@ export default function AdminUsers() {
                 </tr>
               </thead>
               <tbody>
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-12 text-center text-muted-foreground">{t.adminNoUsers}</td>
+                  </tr>
+                )}
                 {filtered.map(p => {
                   const isSelf = p.id === me?.id
                   return (

@@ -68,6 +68,7 @@ export default function AdminCoupons() {
   const [usageCounts, setUsageCounts] = useState<Record<string, number>>({})
   const [products, setProducts] = useState<ProductOption[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [editing, setEditing] = useState<Partial<Coupon> | null>(null)
   const [saving, setSaving] = useState(false)
   const { isAdmin } = useAuth()
@@ -78,15 +79,19 @@ export default function AdminCoupons() {
 
   async function load() {
     setLoading(true)
-    const [{ data: couponRows }, { data: redemptions }, { data: productRows }] = await Promise.all([
+    const [couponRes, redemptionRes, productRes] = await Promise.all([
       supabase.from('coupons').select('*').order('created_at', { ascending: false }),
       supabase.from('coupon_redemptions').select('coupon_id'),
       supabase.from('products').select('id, name').order('name'),
     ])
-    setCoupons(couponRows || [])
-    setProducts(productRows || [])
+    // "No coupons yet" over live discount codes invites the owner to create a
+    // second SAVE20 that then stacks with the first one.
+    const failed = !!(couponRes.error || redemptionRes.error || productRes.error)
+    setLoadError(failed)
+    setCoupons(failed ? [] : couponRes.data || [])
+    setProducts(failed ? [] : productRes.data || [])
     const counts: Record<string, number> = {}
-    for (const r of redemptions || []) counts[r.coupon_id] = (counts[r.coupon_id] || 0) + 1
+    if (!failed) for (const r of redemptionRes.data || []) counts[r.coupon_id] = (counts[r.coupon_id] || 0) + 1
     setUsageCounts(counts)
     setLoading(false)
   }
@@ -139,8 +144,11 @@ export default function AdminCoupons() {
       }
 
       if (editing.id) {
-        const { error } = await supabase.from('coupons').update(payload).eq('id', editing.id)
+        const { data, error } = await supabase.from('coupons').update(payload).eq('id', editing.id).select('id')
         if (error) throw error
+        // A zero-row match returns no error, so without this a tightened limit
+        // or an end date that never landed would still toast "Coupon updated".
+        if (!data.length) throw new Error(t.adminSaveNotApplied)
       } else {
         const { error } = await supabase.from('coupons').insert(payload)
         if (error) throw error
@@ -176,7 +184,8 @@ export default function AdminCoupons() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">{t.adminCouponCount(coupons.length)}</p>
+        {/* A count over a failed read would read as "you have no coupons". */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminCouponCount(coupons.length)}</p>}
         {isAdmin && (
           <button
             onClick={openNew}
@@ -191,6 +200,16 @@ export default function AdminCoupons() {
       {loading ? (
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : loadError ? (
+        <div className="border border-terracotta bg-card p-12 text-center">
+          <p className="text-terracotta">{t.adminLoadError}</p>
+          <button
+            onClick={() => load()}
+            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          >
+            {t.failedTryAgain}
+          </button>
         </div>
       ) : (
         <div className="border border-border bg-card overflow-hidden">

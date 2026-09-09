@@ -45,6 +45,7 @@ function allowedStatuses(order: Order): string[] {
 export default function AdminOrders() {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [filter, setFilter] = useState<string>('all')
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
@@ -65,11 +66,14 @@ export default function AdminOrders() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('orders')
       .select('*')
       .order('created_at', { ascending: false })
-    setOrders(data || [])
+    // "No orders yet" on a shop that has orders is the single most alarming
+    // thing this dashboard can say, so a failed read never renders as one.
+    setLoadError(!!error)
+    setOrders(error ? [] : data || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -178,7 +182,8 @@ export default function AdminOrders() {
             </button>
           ))}
         </div>
-        <p className="text-sm text-muted-foreground">{t.adminOrdersCount(filtered.length)}</p>
+        {/* A count over a failed read would read as "you have no orders". */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminOrdersCount(filtered.length)}</p>}
       </div>
 
       <div className="relative mb-4 max-w-sm">
@@ -195,6 +200,16 @@ export default function AdminOrders() {
       {loading ? (
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : loadError ? (
+        <div className="border border-terracotta bg-card p-12 text-center">
+          <p className="text-terracotta">{t.adminLoadError}</p>
+          <button
+            onClick={() => load()}
+            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          >
+            {t.failedTryAgain}
+          </button>
         </div>
       ) : filtered.length === 0 ? (
         <div className="border border-border bg-card p-12 text-center">

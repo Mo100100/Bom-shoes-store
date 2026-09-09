@@ -12,6 +12,7 @@ const EMPTY: Partial<HeroBanner> = {
 export default function AdminBanners() {
   const [banners, setBanners] = useState<HeroBanner[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [editing, setEditing] = useState<Partial<HeroBanner> | null>(null)
   const [saving, setSaving] = useState(false)
   const { isAdmin } = useAuth()
@@ -19,8 +20,11 @@ export default function AdminBanners() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('hero_banners').select('*').order('position')
-    setBanners(data || [])
+    const { data, error } = await supabase.from('hero_banners').select('*').order('position')
+    // An empty table and a failed read looked identical here, and the empty
+    // one invites the owner to re-create banners the storefront still shows.
+    setLoadError(!!error)
+    setBanners(error ? [] : data || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -73,8 +77,11 @@ export default function AdminBanners() {
       }
 
       if (editing.id) {
-        const { error } = await supabase.from('hero_banners').update(payload).eq('id', editing.id)
+        const { data, error } = await supabase.from('hero_banners').update(payload).eq('id', editing.id).select('id')
         if (error) throw error
+        // A zero-row match returns no error, so without this an RLS denial or
+        // a banner deleted in another tab would report "Banner updated".
+        if (!data.length) throw new Error(t.adminSaveNotApplied)
       } else {
         const { error } = await supabase.from('hero_banners').insert(payload)
         if (error) throw error
@@ -101,7 +108,8 @@ export default function AdminBanners() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">{t.adminBannerCount(banners.length)}</p>
+        {/* A count over a failed read would read as "you have no banners". */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminBannerCount(banners.length)}</p>}
         {isAdmin && (
           <button
             onClick={openNew}
@@ -116,6 +124,16 @@ export default function AdminBanners() {
       {loading ? (
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : loadError ? (
+        <div className="border border-terracotta bg-card p-12 text-center">
+          <p className="text-terracotta">{t.adminLoadError}</p>
+          <button
+            onClick={() => load()}
+            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          >
+            {t.failedTryAgain}
+          </button>
         </div>
       ) : (
         <div className="border border-border bg-card overflow-hidden">

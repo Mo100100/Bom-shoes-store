@@ -179,8 +179,14 @@ export default function AdminSettings() {
   // other path to one, so a payload built from a failed read cannot be written.
   async function saveContent(key: string, value: unknown): Promise<boolean> {
     if (!contentLoaded) { toast.error(t.adminSettingsContentLoadError); return false }
-    const { error } = await supabase.from('site_content').update({ value }).eq('key', key)
+    const { data, error } = await supabase
+      .from('site_content').update({ value }).eq('key', key).select('key')
     if (error) { toast.error(error.message || t.adminSaveFailed); return false }
+    // A zero-row match returns no error. This is the one write path for the
+    // shipping price table, the payment methods and the contact block, so an
+    // unchecked "Saved" here is the owner believing Cairo now costs 60 EGP
+    // when the row still says 40.
+    if (!data.length) { toast.error(t.adminSaveNotApplied); return false }
     toast.success(t.adminSaved)
     return true
   }
@@ -321,8 +327,13 @@ export default function AdminSettings() {
   }
 
   async function handleUpdateCategoryLabel(value: string, field: 'label_en' | 'label_ar', text: string) {
-    const { error } = await supabase.from('categories').update({ [field]: text }).eq('value', value)
+    const { data, error } = await supabase
+      .from('categories').update({ [field]: text }).eq('value', value).select('value').maybeSingle()
     if (error) { toast.error(error.message || t.adminSaveFailed); return }
+    // Same guard the brand rename has: an UPDATE matching no row returns no
+    // error, and the reload below would then quietly put the old label back
+    // with nothing said.
+    if (!data) { toast.error(t.adminSaveNotApplied); return }
     reloadCategories()
   }
 
@@ -430,8 +441,16 @@ export default function AdminSettings() {
       const { error: upErr } = await supabase.storage.from('store-assets').upload(path, file)
       if (upErr) throw upErr
       const { data: pub } = supabase.storage.from('store-assets').getPublicUrl(path)
-      const { error: dbErr } = await supabase.from('brands').update({ logo_url: pub.publicUrl }).eq('value', value)
+      const { data: saved, error: dbErr } = await supabase
+        .from('brands').update({ logo_url: pub.publicUrl }).eq('value', value).select('value').maybeSingle()
       if (dbErr) throw dbErr
+      // An UPDATE matching no row comes back with no error and no row, which
+      // is a "Saved" toast over an unchanged brand and an orphaned upload --
+      // the same trap the store logo upload above had.
+      if (!saved) {
+        await removeStoreAsset(pub.publicUrl)
+        throw new Error(t.adminSaveFailed)
+      }
       toast.success(t.adminSaved)
       reloadBrands()
     } catch (e: any) {

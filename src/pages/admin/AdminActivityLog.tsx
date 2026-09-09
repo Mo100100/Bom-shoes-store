@@ -2,6 +2,7 @@ import { useEffect, useState, Fragment } from 'react'
 import { supabase, ActivityLog } from '@/lib/supabase'
 import { useT } from '@/contexts/LanguageContext'
 import { Loader2, ChevronDown, ChevronRight } from 'lucide-react'
+import { toast } from 'sonner'
 
 const PAGE_SIZE = 50
 
@@ -14,6 +15,7 @@ function actionClass(action: string): string {
 export default function AdminActivityLog() {
   const [logs, setLogs] = useState<ActivityLog[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [filter, setFilter] = useState('all')
@@ -56,8 +58,11 @@ export default function AdminActivityLog() {
 
   async function load() {
     setLoading(true)
-    const { data } = await buildQuery(filter).range(0, PAGE_SIZE - 1)
-    const rows = data || []
+    const { data, error } = await buildQuery(filter).range(0, PAGE_SIZE - 1)
+    const rows = error ? [] : data || []
+    // "No activity recorded yet" for a failed read is how an audit trail stops
+    // being an audit trail: nothing looks wrong.
+    setLoadError(!!error)
     setLogs(rows)
     setHasMore(rows.length === PAGE_SIZE)
     setExpanded(new Set())
@@ -68,7 +73,10 @@ export default function AdminActivityLog() {
 
   async function loadMore() {
     setLoadingMore(true)
-    const { data } = await buildQuery(filter).range(logs.length, logs.length + PAGE_SIZE - 1)
+    const { data, error } = await buildQuery(filter).range(logs.length, logs.length + PAGE_SIZE - 1)
+    // A failed page must not read as "that was the end of the log": keep the
+    // button and say what happened, rather than silently hiding the rest.
+    if (error) { toast.error(t.adminLoadError); setLoadingMore(false); return }
     const rows = data || []
     setLogs(prev => [...prev, ...rows])
     setHasMore(rows.length === PAGE_SIZE)
@@ -113,6 +121,16 @@ export default function AdminActivityLog() {
       {loading ? (
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : loadError ? (
+        <div className="border border-terracotta bg-card p-12 text-center">
+          <p className="text-terracotta">{t.adminLoadError}</p>
+          <button
+            onClick={() => load()}
+            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          >
+            {t.failedTryAgain}
+          </button>
         </div>
       ) : logs.length === 0 ? (
         <div className="border border-border bg-card p-12 text-center">

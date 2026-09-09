@@ -85,6 +85,7 @@ async function syncFeaturedImage(productId: string) {
 export default function AdminProducts() {
   const [products, setProducts] = useState<ProductCatalogEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [editing, setEditing] = useState<Partial<Product> | null>(null)
   const [saving, setSaving] = useState(false)
   const [images, setImages] = useState<ProductImage[]>([])
@@ -148,8 +149,12 @@ export default function AdminProducts() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('product_catalog').select('*').order('created_at', { ascending: false })
-    setProducts(data || [])
+    const { data, error } = await supabase.from('product_catalog').select('*').order('created_at', { ascending: false })
+    // A failed read is not an empty catalog: "No products yet" over 118 live
+    // products is exactly the kind of thing that sends an owner looking for a
+    // backup that was never needed.
+    setLoadError(!!error)
+    setProducts(error ? [] : data || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -159,8 +164,13 @@ export default function AdminProducts() {
     setImages(data || [])
   }
 
-  async function loadVariants(productId: string) {
-    const { data } = await supabase.from('product_variants').select('*').eq('product_id', productId).order('created_at')
+  // Returns whether the rows in the grid are the ones the database holds.
+  // handleSave replaces the whole variant set from this grid, so an empty grid
+  // built from a FAILED read would delete every size the product has, with its
+  // stock. openEdit refuses to open the editor at all in that case.
+  async function loadVariants(productId: string): Promise<boolean> {
+    const { data, error } = await supabase.from('product_variants').select('*').eq('product_id', productId).order('created_at')
+    if (error) return false
     const rows: VariantRow[] = (data || []).map(v => ({
       id: v.id,
       size: v.size,
@@ -173,6 +183,7 @@ export default function AdminProducts() {
     }))
     setVariantRows(rows)
     setVariantErrors({})
+    return true
   }
 
   async function loadCostPrice(productId: string) {
@@ -189,9 +200,12 @@ export default function AdminProducts() {
     setDragIndex(null)
   }
   async function openEdit(p: ProductCatalogEntry) {
-    setEditing({ ...p })
     setDragIndex(null)
-    await Promise.all([loadImages(p.id), loadVariants(p.id), loadCostPrice(p.id)])
+    const [, variantsLoaded] = await Promise.all([loadImages(p.id), loadVariants(p.id), loadCostPrice(p.id)])
+    // Opened only once its sizes are really in hand, so Save can never write
+    // an emptiness that came from a dropped read.
+    if (!variantsLoaded) { toast.error(t.adminLoadError); return }
+    setEditing({ ...p })
   }
 
   function updateVariantRow(key: string, field: keyof VariantRow, value: string | number) {
@@ -291,7 +305,10 @@ export default function AdminProducts() {
     // unique in this project) rather than stored separately.
     const path = img.url.split('/product-images/')[1]
     if (path) await supabase.storage.from('product-images').remove([decodeURIComponent(path)])
-    await supabase.from('product_images').delete().eq('id', img.id)
+    // The file is already gone by here, so a row that survives leaves a broken
+    // image in the gallery. Silence was the worst of the three outcomes.
+    const { data, error } = await supabase.from('product_images').delete().eq('id', img.id).select('id')
+    if (error || !data?.length) toast.error(error?.message || t.adminDeleteFailed)
     await loadImages(editing.id)
     await syncFeaturedImage(editing.id)
   }
@@ -350,8 +367,13 @@ export default function AdminProducts() {
 
       let productId = editing.id
       if (productId) {
-        const { error } = await supabase.from('products').update(payload).eq('id', productId)
+        const { data, error } = await supabase.from('products').update(payload).eq('id', productId).select('id')
         if (error) throw error
+        // A zero-row match returns no error: an RLS denial, or a product
+        // deleted in another tab, would otherwise toast "Product updated"
+        // over a row that never changed. The variant writes below would then
+        // be attached to a product the owner thinks holds the new price.
+        if (!data.length) throw new Error(t.adminSaveNotApplied)
       } else {
         // stock/sizes/colors/image_url are legacy columns this form no longer
         // edits directly; seed them so NOT NULL constraints are satisfied,
@@ -366,7 +388,11 @@ export default function AdminProducts() {
       }
 
       await saveVariants(productId!, desiredVariants)
-      await supabase.from('product_costs').upsert({ product_id: productId, cost_price: costPrice })
+      // The cost price is what every profit figure on the dashboard is built
+      // from, so a rejected write here must not pass as a saved product.
+      const { error: costError } = await supabase
+        .from('product_costs').upsert({ product_id: productId, cost_price: costPrice })
+      if (costError) throw costError
 
       // Keep legacy products.stock/sizes/colors in sync from the variants we
       // just wrote, so pages that still read those flat columns directly
@@ -411,7 +437,8 @@ export default function AdminProducts() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">{t.adminPieces(visibleProducts.length)}</p>
+        {/* A count over a failed read would read as "you have no products". */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminPieces(visibleProducts.length)}</p>}
         {isAdmin && (
           <button
             onClick={openNew}
@@ -449,6 +476,16 @@ export default function AdminProducts() {
       {loading ? (
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : loadError ? (
+        <div className="border border-terracotta bg-card p-12 text-center">
+          <p className="text-terracotta">{t.adminLoadError}</p>
+          <button
+            onClick={() => load()}
+            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          >
+            {t.failedTryAgain}
+          </button>
         </div>
       ) : visibleProducts.length === 0 ? (
         <div className="border border-border bg-card p-12 text-center">

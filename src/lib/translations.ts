@@ -382,6 +382,9 @@ export const translations = {
     failedTryAgain: 'Try again',
     failedBack: 'Back to basket',
 
+    // Auth
+    authProfileLoadError: 'Could not load your account, so this page cannot check your access. You are still signed in.',
+
     // Login
     loginEyebrow: 'Returning customer',
     loginTitle: 'Welcome back',
@@ -513,6 +516,7 @@ export const translations = {
     adminSaved: 'Saved',
     adminSaveFailed: 'Save failed',
     adminSaveNotApplied: 'Nothing was written. Reload the page and try again.',
+    adminLoadError: 'Could not load this list. It has not been emptied, this screen just could not read it.',
     adminDeleteFailed: 'Delete failed',
     adminUploadFailed: 'Upload failed',
 
@@ -678,6 +682,8 @@ export const translations = {
     adminRoleCustomer: 'customer',
     adminRoleAdmin: 'admin',
     adminCantChangeOwnRole: "You can't change your own role here",
+    adminLastAdminConfirm: 'This is the only other admin. Take their access away and you are the only admin left. Continue?',
+    adminNoUsers: 'No users match this search',
 
     // Admin - count nouns
     adminUsersCount: (n: number) => `${n} ${n === 1 ? 'user' : 'users'}`,
@@ -1202,6 +1208,9 @@ export const translations = {
     failedTryAgain: 'حاول مرة أخرى',
     failedBack: 'العودة إلى السلة',
 
+    // Auth
+    authProfileLoadError: 'تعذر تحميل حسابك، لذا لا تستطيع هذه الصفحة التحقق من صلاحيتك. ما زلت مسجل الدخول.',
+
     // Login
     loginEyebrow: 'عميل عائد',
     loginTitle: 'مرحبا بعودتك',
@@ -1333,6 +1342,7 @@ export const translations = {
     adminSaved: 'تم الحفظ',
     adminSaveFailed: 'فشل الحفظ',
     adminSaveNotApplied: 'لم يتم حفظ أي شيء. أعد تحميل الصفحة وحاول مرة أخرى.',
+    adminLoadError: 'تعذر تحميل هذه القائمة. لم يتم حذف محتواها، هذه الشاشة فقط لم تستطع قراءتها.',
     adminDeleteFailed: 'فشل الحذف',
     adminUploadFailed: 'فشل الرفع',
 
@@ -1498,6 +1508,8 @@ export const translations = {
     adminRoleCustomer: 'عميل',
     adminRoleAdmin: 'مسؤول',
     adminCantChangeOwnRole: 'لا يمكنك تغيير دورك من هنا',
+    adminLastAdminConfirm: 'هذا هو المسؤول الآخر الوحيد. إذا سحبت صلاحيته ستصبح المسؤول الوحيد. هل تريد المتابعة؟',
+    adminNoUsers: 'لا يوجد مستخدمون مطابقون لهذا البحث',
 
     // Admin - count nouns
     adminUsersCount: (n: number) => `${n} ${n === 1 ? 'مستخدم واحد' : 'مستخدم'}`,
