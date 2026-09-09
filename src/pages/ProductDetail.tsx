@@ -12,6 +12,7 @@ import { useRecentlyViewed } from '@/hooks/useRecentlyViewed'
 import { useSeo } from '@/hooks/useSeo'
 import { compareSizes, defaultSizeForColor, firstInStockVariant } from '@/lib/sizes'
 import { fetchShippingConfig } from '@/lib/checkoutConfig'
+import { shippingRange } from '@/lib/shippingRange'
 import WishlistButton from '@/components/WishlistButton'
 import RatingStars from '@/components/RatingStars'
 import SectionHeading from '@/components/SectionHeading'
@@ -395,18 +396,18 @@ export default function ProductDetail() {
   }
 
   // The real per-governorate delivery prices (site_content.shipping), read once
-  // for the range line below. A failed read leaves it null and the line falls
-  // back to naming the rule without a number: an invented delivery price is
-  // exactly the kind of promise the checkout then refuses to honour.
-  const [shippingRange, setShippingRange] = useState<{ min: number; max: number } | null>(null)
+  // for the range line below. A failed read, or shipping the owner has not
+  // priced yet, leaves it null and the line falls back to naming the rule
+  // without a number: an invented delivery price is exactly the kind of promise
+  // the checkout then refuses to honour. See src/lib/shippingRange.ts.
+  const [deliveryRange, setDeliveryRange] = useState<{ min: number; max: number } | null>(null)
 
   useEffect(() => {
     let cancelled = false
     fetchShippingConfig()
       .then(({ regions }) => {
-        const prices = regions.map(r => Number(r.price)).filter(n => Number.isFinite(n) && n >= 0)
-        if (cancelled || prices.length === 0) return
-        setShippingRange({ min: Math.min(...prices), max: Math.max(...prices) })
+        if (cancelled) return
+        setDeliveryRange(shippingRange(regions))
       })
       .catch(() => { /* no number is better than a wrong one */ })
     return () => { cancelled = true }
@@ -826,11 +827,11 @@ export default function ProductDetail() {
               <div className="flex items-center gap-3 text-foreground/80">
                 <Check className="w-4 h-4 text-foreground/60" />
                 <span>
-                  {!shippingRange
+                  {!deliveryRange
                     ? t.productShip1
-                    : shippingRange.min === shippingRange.max
-                    ? t.productDeliveryFlat(formatPrice(shippingRange.min))
-                    : t.productDeliveryRange(formatPrice(shippingRange.min), formatPrice(shippingRange.max))}
+                    : deliveryRange.min === deliveryRange.max
+                    ? t.productDeliveryFlat(formatPrice(deliveryRange.min))
+                    : t.productDeliveryRange(formatPrice(deliveryRange.min), formatPrice(deliveryRange.max))}
                 </span>
               </div>
               <div className="flex items-center gap-3 text-foreground/80">
