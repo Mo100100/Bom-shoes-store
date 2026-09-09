@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useCart, CartItem } from '@/contexts/CartContext'
-import { couponRejectionMessage, TAX_RATE } from '@/lib/cart'
+import { couponRejectionMessage } from '@/lib/cart'
 import { useT } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { supabase, readServerError } from '@/lib/supabase'
@@ -110,9 +110,8 @@ export default function Cart() {
   // one yet here), so it's excluded from this running total and shown as
   // "calculated at checkout". A free-shipping coupon is noted but doesn't
   // change the number shown here.
-  const tax = totalPrice * TAX_RATE
   const hasDiscount = !!discount && discount.amount > 0
-  const grand = totalPrice + tax - (hasDiscount ? discount!.amount : 0)
+  const grand = totalPrice - (hasDiscount ? discount!.amount : 0)
 
   if (items.length === 0) {
     return (
@@ -341,10 +340,6 @@ export default function Cart() {
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">{t.cartShipping}</dt>
                   <dd className="text-muted-foreground text-xs">{discount?.freeShipping ? t.cartFree : t.cartShipAtCheckout}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">{t.cartTax}</dt>
-                  <dd>{formatPrice(tax)}</dd>
                 </div>
                 <div className="pt-3 mt-3 border-t border-border flex justify-between items-baseline">
                   <dt>{t.cartTotal}</dt>

@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { supabase, readServerError } from '@/lib/supabase'
-import { couponRejectionMessage, TAX_RATE } from '@/lib/cart'
+import { couponRejectionMessage } from '@/lib/cart'
 import type { CreateOrderRequest, CreateOrderResponse } from '@/lib/kashier'
 import {
   DEFAULT_CHECKOUT_CONFIG, fetchCheckoutConfig, fetchShippingConfig, regionLabel,
@@ -175,8 +175,7 @@ export default function Checkout() {
   // waiver, which is why the whole total is reconciled from the preview now
   // and not just the discount line.
   const shipping = selectedRegion?.price ?? 0
-  const tax = totalPrice * TAX_RATE
-  const grand = Math.max(0, totalPrice + shipping + tax - discountAmount)
+  const grand = Math.max(0, totalPrice + shipping - discountAmount)
 
   function setField(k: keyof typeof form, v: string) {
     setForm(f => ({ ...f, [k]: v }))
@@ -490,7 +489,6 @@ export default function Checkout() {
                   <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartDiscount}</dt><dd>−{formatPrice(discountAmount)}</dd></div>
                 )}
                 <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartShipping}</dt><dd>{!selectedRegion ? '-' : shipping === 0 ? t.cartFree : formatPrice(shipping)}</dd></div>
-                <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartTax}</dt><dd>{formatPrice(tax)}</dd></div>
                 <div className="pt-3 border-t border-border flex justify-between items-baseline">
                   <dt>{t.cartTotal}</dt>
                   <dd className="font-display text-2xl">{formatPrice(grand)}</dd>

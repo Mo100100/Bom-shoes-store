@@ -3,12 +3,6 @@
 // (same arrangement as src/lib/sizes.ts). Everything about React, Supabase and
 // localStorage stays in the context; only the arithmetic lives here.
 
-// Sales tax rate shown on the Cart and Checkout pages. Must match the
-// server's own TAX_RATE (supabase/functions/create-order/index.ts) -- the
-// server recomputes the total from scratch and is authoritative, but a client
-// estimate that disagrees just confuses the shopper before they even submit.
-export const TAX_RATE = 0.08
-
 // Just enough of a product_variants row to price and cap a line. Structural on
 // purpose so this module stays free of the Supabase types.
 export type VariantSnapshot = {
