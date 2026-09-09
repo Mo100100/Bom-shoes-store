@@ -12,7 +12,6 @@ export const translations = {
     errorBoundaryReload: 'Reload page',
 
     // Announcement bar
-    announcement: 'Free shipping on orders over $200. Crafted slowly, shipped with care.',
 
     // Navigation
     navShop: 'Shop',
@@ -102,7 +101,7 @@ export const translations = {
 
     // New: marquee strip
     marqueeLine1: 'Handcrafted in Cairo',
-    marqueeLine2: 'Free shipping over $200',
+    marqueeLine2: 'Delivery priced by governorate',
     marqueeLine3: 'Resoled for life',
     marqueeLine4: '30 day quiet returns',
     marqueeLine5: 'Goodyear welted',
@@ -145,8 +144,8 @@ export const translations = {
     homeDropSecs: 'Secs',
 
     // New: trust badge strip
-    homeTrust1Title: 'Worldwide shipping',
-    homeTrust1Desc: 'Free on orders over $200, wherever you are.',
+    homeTrust1Title: 'Delivery across Egypt',
+    homeTrust1Desc: 'Your governorate sets the delivery cost, and you see it before you pay.',
     homeTrust2Title: 'Quality, guaranteed',
     homeTrust2Desc: 'Vegetable-tanned leather, Goodyear welted, resoled for life.',
     homeTrust3Title: 'Easy returns',
@@ -215,13 +214,13 @@ export const translations = {
     productPhotoLabel: (n: number, name: string) => `View photo ${n} of ${name}`,
     productStockMaxed: 'Your basket already holds every one we have left',
     productChooseSize: 'Please choose a size',
-    productShip1: 'Free shipping on orders over $200',
+    productShip1: 'Delivery priced by your governorate',
     productShip2: '30-day quiet returns',
     productShip3: 'Resoled for life, free of charge',
     productAccordion1: 'Craft and materials',
     productAccordion1Text: 'Hand-cut from a single hide of Italian calfskin, tanned with chestnut and mimosa bark over six weeks. The sole is Goodyear-welted to a vegetable-tanned leather midsole and a Vibram rubber outsole, allowing the shoe to be resoled repeatedly over a lifetime of wear.',
     productAccordion2: 'Shipping',
-    productAccordion2Text: 'Each pair is dispatched within 2 business days from our workshop. Domestic shipping is 2 to 4 days. International shipping is 5 to 10 days.',
+    productAccordion2Text: 'Each pair is dispatched within 2 business days. Delivery inside Egypt takes 2 to 4 days, and the cost depends on your governorate.',
     productAccordion3: 'Care',
     productAccordion3Text: 'Brush gently with a soft-bristle brush after wear. Apply a neutral cream conditioner every six weeks. Store with cedar shoe trees in a cool, dry place.',
     productNotFound: 'This piece has wandered off.',
@@ -875,7 +874,6 @@ export const translations = {
     errorBoundaryReload: 'إعادة تحميل الصفحة',
 
     // Announcement bar
-    announcement: 'شحن مجاني للطلبات فوق 200 دولار. تصنع ببطء، تشحن بعناية.',
 
     // Navigation
     navShop: 'المتجر',
@@ -965,7 +963,7 @@ export const translations = {
 
     // New: marquee strip
     marqueeLine1: 'يصنع باليد في القاهرة',
-    marqueeLine2: 'شحن مجاني فوق 200 دولار',
+    marqueeLine2: 'سعر التوصيل حسب المحافظة',
     marqueeLine3: 'تجديد النعل مدى الحياة',
     marqueeLine4: 'إرجاع هادئ خلال 30 يوم',
     marqueeLine5: 'مخيط بطريقة Goodyear',
@@ -1008,8 +1006,8 @@ export const translations = {
     homeDropSecs: 'ثوان',
 
     // New: trust badge strip
-    homeTrust1Title: 'شحن حول العالم',
-    homeTrust1Desc: 'مجاني للطلبات فوق 200 دولار، أينما كنت.',
+    homeTrust1Title: 'التوصيل داخل مصر',
+    homeTrust1Desc: 'سعر التوصيل يتحدد حسب محافظتك، ويظهر لك قبل الدفع.',
     homeTrust2Title: 'جودة مضمونة',
     homeTrust2Desc: 'جلد مدبوغ نباتيا، مخيط بطريقة Goodyear، و إعادة نعل مدى الحياة.',
     homeTrust3Title: 'إرجاع سهل',
@@ -1073,13 +1071,13 @@ export const translations = {
     productPhotoLabel: (n: number, name: string) => `عرض الصورة ${n} من ${name}`,
     productStockMaxed: 'سلتك تحتوي بالفعل على كل ما تبقى لدينا',
     productChooseSize: 'يرجى اختيار مقاس',
-    productShip1: 'شحن مجاني للطلبات فوق 200 دولار',
+    productShip1: 'سعر التوصيل حسب محافظتك',
     productShip2: 'إرجاع هادئ خلال 30 يوما',
     productShip3: 'إعادة نعل مدى الحياة، بالمجان',
     productAccordion1: 'الصنعة و المواد',
     productAccordion1Text: 'مقصوص باليد من جلد عجل إيطالي واحد، مدبوغ بقشر الكستناء و الميموزا مدة ستة أسابيع. النعل مخيط بخيامة قدرة إلى نعل أوسط جلدي نباتي و نعل خارجي مطاطي، يمكن إعادة تنعيله مرات عديدة طوال عمر الحذاء.',
     productAccordion2: 'الشحن',
-    productAccordion2Text: 'كل زوج يشحن خلال يومين عمل من ورشتنا. الشحن المحلي يستغرق 2 إلى 4 أيام. الشحن الدولي 5 إلى 10 أيام.',
+    productAccordion2Text: 'كل زوج يخرج للشحن خلال يومي عمل. التوصيل داخل مصر يستغرق من 2 إلى 4 أيام، وسعره يتحدد حسب المحافظة.',
     productAccordion3: 'العناية',
     productAccordion3Text: 'امسح بفرشاة ناعمة بعد كل لبسة. استخدم ملطف جلد محايدا كل ستة أسابيع. احفظه بقوالب خشب الأرز في مكان بارد جاف.',
     productNotFound: 'هذه القطعة ضاعت.',
