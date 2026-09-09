@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase, ProductCatalogEntry } from '@/lib/supabase'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
@@ -37,6 +37,9 @@ export default function Home() {
 
   useSeo({ title: `${t.brandName} · ${t.brandTagline}`, description: t.homeHeroSubtitle })
 
+  // One catalog read for the whole page: the curated grid and the showcase's
+  // fallback both come out of it, so the showcase no longer runs its own copy
+  // of the same two queries.
   const loadProducts = useCallback(async () => {
     setProductsLoading(true)
     setProductsError(false)
@@ -44,7 +47,7 @@ export default function Home() {
       supabase.from('product_catalog').select('*').eq('featured', true)
         .order('created_at', { ascending: false }).limit(10),
       supabase.from('product_catalog').select('*')
-        .order('created_at', { ascending: false }).limit(10),
+        .order('created_at', { ascending: false }).limit(20),
     ])
     // "We sell nothing" and "we could not look" must not draw the same thing,
     // so a failed read gets the error panel, never the empty grid.
@@ -96,11 +99,22 @@ export default function Home() {
     toast.success(t.productAdded, { description: t.productAddedSize(p.name, variant.size) })
   }
 
-  const pool = featured.length > 0 ? featured : recent
+  const pool = useMemo(() => (featured.length > 0 ? featured : recent), [featured, recent])
   const heroProduct = pool[0]
   const lookThumbs = pool.slice(0, 2)
   const curatedLimit = content.curated?.limit ?? 5
-  const curated = pool.slice(0, curatedLimit)
+  const curated = useMemo(() => pool.slice(0, curatedLimit), [pool, curatedLimit])
+
+  // What the showcase falls back to when the admin has picked no products of
+  // its own: the newest pairs the curated grid is not already showing. Both
+  // sections used to take the head of the same ordering, so the homepage
+  // exposed the same five products twice out of a catalog of 118. Memoised
+  // because it is a prop: a fresh array every render would re-run the
+  // showcase's effects on every render.
+  const showcaseFallback = useMemo(() => {
+    const shown = new Set(curated.map(p => p.id))
+    return recent.filter(p => !shown.has(p.id)).slice(0, 3)
+  }, [recent, curated])
 
   const heroC = content.hero
   const curatedC = content.curated
@@ -252,9 +266,6 @@ export default function Home() {
       </section>
       )}
 
-      {/* ===== 3D SCROLL SHOWCASE (kept -- signature feature) ===== */}
-      {showcaseEnabled && <ShoeShowcase3D />}
-
       {/* ===== CURATED FOR YOU ===== */}
       {curatedEnabled && (
       <section className="bg-background px-6 lg:px-8 py-20 lg:py-24">
@@ -304,6 +315,10 @@ export default function Home() {
         </div>
       </section>
       )}
+
+      {/* ===== SCROLL SHOWCASE (signature feature, now BELOW the grid so the
+              first buyable product is not two screens of scrolling away) ===== */}
+      {showcaseEnabled && <ShoeShowcase3D config={content.showcase} fallback={showcaseFallback} />}
 
       {/* ===== LIMITED DROP ===== */}
       {dropEnabled && (
