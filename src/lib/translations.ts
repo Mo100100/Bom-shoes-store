@@ -49,7 +49,13 @@ export const translations = {
     footerAtelier: 'Explore',
     footerContact: 'Contact',
     footerCopyright: '© 2026 BOM Store. All rights reserved.',
-    footerSecure: 'Secure checkout by Kashier',
+    // Renders on every page, and on the cart, whatever the owner has enabled
+    // in site_content.checkout_config. Card payment is a switch (currently
+    // off), so always-on copy must not name a card gateway as the way to pay.
+    // Only the strings gated on `online_enabled` may do that.
+    footerSecure: 'Secure checkout',
+    // The published policy is 14 days, unworn and in the original box, sale
+    // items final. Do not write another window here.
     footerReturns: '14-day returns',
     footerQuote: 'The real thing, every pair.',
     footerViewOnMap: 'View on map',
@@ -118,7 +124,7 @@ export const translations = {
     homeTrust3Title: 'Easy returns',
     homeTrust3Desc: '14 days to return or exchange, unworn and in its box.',
     homeTrust4Title: 'Secure payments',
-    homeTrust4Desc: 'Every order processed securely through Kashier.',
+    homeTrust4Desc: 'Your order and your details are handled securely, end to end.',
 
     // Brands
     brandsEyebrow: 'Shop by Brand',
@@ -260,7 +266,7 @@ export const translations = {
     cartFree: 'Free',
     cartTotal: 'Total',
     cartCheckout: 'Proceed to checkout',
-    cartSecure: 'Secure payment by Kashier, 30-day returns',
+    cartSecure: 'Secure checkout, 14-day returns',
     cartClear: 'Clear basket',
     cartContinue: 'Continue browsing',
     cartRemove: 'Remove',
@@ -289,7 +295,7 @@ export const translations = {
     checkoutShipping: 'Shipping details',
     checkoutStep2: 'Step 2',
     checkoutPayment: 'Payment',
-    checkoutPaymentDesc: 'You will be redirected to Kashier to complete your payment securely. We accept all major cards, mobile wallets, and bank transfers.',
+    checkoutPaymentDesc: 'Choose how you would like to pay.',
     checkoutKashierDesc: 'Your card details are processed by Kashier, our PCI-DSS compliant payment partner. BOM Store never sees or stores your card information.',
     checkoutContinue: (amount: string) => `Continue to Kashier, ${amount}`,
     checkoutPayOnline: 'Pay online (card)',
@@ -862,7 +868,7 @@ export const translations = {
     footerAtelier: 'روابط',
     footerContact: 'تواصل',
     footerCopyright: '© 2026 BOM Store. كل الحقوق محفوظة.',
-    footerSecure: 'دفع آمن عبر كاشير',
+    footerSecure: 'دفع آمن',
     footerReturns: 'إرجاع خلال 14 يوم',
     footerQuote: 'أصلي، زوج بعد زوج.',
     footerViewOnMap: 'عرض على الخريطة',
@@ -931,7 +937,7 @@ export const translations = {
     homeTrust3Title: 'إرجاع سهل',
     homeTrust3Desc: '14 يوم للإرجاع أو الاستبدال، بشرط إنه ملبسش وفي علبته.',
     homeTrust4Title: 'دفع آمن',
-    homeTrust4Desc: 'كل طلب يعالج بأمان عبر كاشير.',
+    homeTrust4Desc: 'طلبك وبياناتك محمية من أول خطوة لآخرها.',
 
     // Brands
     brandsEyebrow: 'تسوق حسب الماركة',
@@ -1068,7 +1074,7 @@ export const translations = {
     cartFree: 'مجاني',
     cartTotal: 'الإجمالي',
     cartCheckout: 'الانتقال إلى الدفع',
-    cartSecure: 'دفع آمن عبر كاشير، إرجاع خلال 30 يوما',
+    cartSecure: 'دفع آمن، إرجاع خلال 14 يومًا',
     cartClear: 'إفراغ السلة',
     cartContinue: 'متابعة التسوق',
     cartRemove: 'إزالة',
@@ -1095,7 +1101,7 @@ export const translations = {
     checkoutShipping: 'تفاصيل الشحن',
     checkoutStep2: 'الخطوة 2',
     checkoutPayment: 'الدفع',
-    checkoutPaymentDesc: 'سيتم تحويلك إلى كاشير لإكمال الدفع بأمان. نقبل كافة البطاقات الرئيسية، المحافظ الإليكترونية، و التحويلات المصرفية.',
+    checkoutPaymentDesc: 'اختر طريقة الدفع المناسبة لك.',
     checkoutKashierDesc: 'تتم معالجة بيانات بطاقتك عبر كاشير، شريكنا المتوافق مع معايير PCI-DSS. BOM Store لا ترى ولا تحفظ بيانات بطاقتك.',
     checkoutContinue: (amount: string) => `متابعة إلى كاشير، ${amount}`,
     checkoutPayOnline: 'الدفع أونلاين (بطاقة)',
