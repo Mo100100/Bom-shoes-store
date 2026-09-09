@@ -49,7 +49,9 @@ declare
 begin
   select
     count(*),
-    count(*) filter (where slug is null or btrim(slug) = ''),
+    -- The exact NEGATION of the products_slug_not_blank CHECK added below.
+    -- Keep the two in step.
+    count(*) filter (where slug is null or slug <> btrim(slug) or slug = ''),
     -- Not a slug this store could have generated: anything outside ASCII
     -- alphanumerics, the Arabic block and the separating hyphen.
     count(*) filter (where slug !~ '^[a-z0-9؀-ۿ]+(-[a-z0-9؀-ۿ]+)*$')
@@ -61,6 +63,18 @@ begin
 
   raise notice 'product slugs: % rows, % blank, % not machine generated, % duplicated',
     v_total, v_blank, v_odd, v_dupes;
+
+  -- The CHECK below is added NOT VALID, so the ALTER succeeds whatever is in
+  -- the table and a violating row would not be caught here at all. It would be
+  -- caught much later and much worse: a NOT VALID check is still evaluated
+  -- against the new row version of every future UPDATE of that row, and
+  -- place_cod_order() and fulfill_order() both UPDATE products.stock. One
+  -- blank or untrimmed slug would therefore freeze that product and fail every
+  -- checkout that touches it, weeks after this migration was applied and with
+  -- nothing pointing back at it. Stopping now is the cheap failure.
+  if v_blank > 0 then
+    raise exception 'product slugs: % row(s) have a blank or untrimmed slug. Fix them by hand (or enable section 1c) before adding the constraint', v_blank;
+  end if;
 end $$;
 
 -- 1b. A blank slug is an unroutable product. The client can no longer produce
@@ -208,10 +222,15 @@ comment on function public.admin_reorder_positions_by_value(text, text[]) is
 revoke execute on function public.admin_reorder_positions_by_value(text, text[]) from anon, public;
 grant execute on function public.admin_reorder_positions_by_value(text, text[]) to authenticated;
 
--- The admin used to compute max(position) + 1 from the array in the browser,
--- so two admins adding a brand at the same moment both read the same maximum
--- and their rows landed on the same position, unordered against each other
--- until somebody reordered the list.
+-- The admin used to compute max(position) + 1 from the array loaded in the
+-- browser, which could be hours old, so a brand added while another tab held
+-- a stale list landed on a position another row already had.
+--
+-- This narrows that window to the gap between two inserts; it does NOT close
+-- it. Under READ COMMITTED neither transaction can see the other's uncommitted
+-- row, so two truly concurrent inserts still read the same maximum. The cost
+-- of that is two rows sharing a position until the next reorder renumbers
+-- them, which is not worth a unique index or an advisory lock.
 --
 -- ponytail: position 0 means "not specified", which is what the column default
 -- gives when the client omits it. Nothing in the app inserts a deliberate 0
@@ -235,7 +254,7 @@ end;
 $$;
 
 comment on function public.assign_next_position() is
-  'BEFORE INSERT on brands and categories: puts a new row last when no position was given (null, or the default 0), instead of trusting a maximum computed in the browser.';
+  'BEFORE INSERT on brands and categories: puts a new row last when no position was given (null, or the default 0), instead of trusting a maximum computed in the browser. Narrows but does not close the concurrent-insert race: two inserts in flight together still read the same maximum, and the next reorder renumbers them.';
 
 drop trigger if exists brands_assign_next_position on public.brands;
 create trigger brands_assign_next_position

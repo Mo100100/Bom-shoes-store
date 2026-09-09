@@ -171,11 +171,12 @@ export default function AdminCoupons() {
   }
 
   // Deleting a redeemed coupon is money history, not a list entry.
-  // coupon_redemptions.coupon_id cascades on delete while orders.coupon_id has
-  // no delete action, so the database either refuses the delete with a raw
-  // Postgres message or, for an order that was since removed, destroys the
-  // redemption rows the per-customer limit is counted from. Neither is
-  // something to find out by clicking.
+  // coupon_redemptions.coupon_id cascades on delete, but the redemption row
+  // only exists alongside its order (coupon_redemptions.order_id cascades from
+  // orders), and orders.coupon_id has NO delete action. So a coupon any order
+  // still points at is refused by the database rather than cascaded away: the
+  // history is safe, and what the owner used to get was the raw English
+  // constraint message. Both refusals are stated up front here instead.
   async function handleDelete(c: Coupon) {
     const used = usageCounts[c.id] || 0
     // The counts come from the same read that renders this row, and a failed
@@ -184,9 +185,9 @@ export default function AdminCoupons() {
     if (used > 0) { toast.error(t.adminCouponHasRedemptions(used)); return }
     if (!confirm(t.adminCouponDeleteConfirm(c.code || t.adminThisAutoPromotion))) return
     const { data, error } = await supabase.from('coupons').delete().eq('id', c.id).select('id')
-    // An order can carry coupon_id without a redemption row (it was placed but
-    // never paid), so the foreign key can still refuse what the count allowed.
-    // That refusal arrives as a raw English constraint message otherwise.
+    // An order can carry coupon_id without a redemption row (it was placed
+    // but never paid, so fulfill_order never recorded one), so the foreign key
+    // still refuses some deletes the redemption count allowed.
     if (error?.code === '23503') { toast.error(t.adminCouponOnOrders); return }
     if (error) { toast.error(error.message); return }
     // A zero-row delete returns no error: an RLS denial would otherwise toast

@@ -44,8 +44,12 @@ test('nextFreeSlug numbers a slug that is already taken', () => {
 })
 
 test('nextFreeSlug falls back rather than returning an empty slug', () => {
-  assert.equal(nextFreeSlug('', []), FALLBACK_SLUG)
-  assert.equal(nextFreeSlug('', [FALLBACK_SLUG]), `${FALLBACK_SLUG}-2`)
+  // The literal, not the imported constant: asserting against FALLBACK_SLUG
+  // would pass for FALLBACK_SLUG = '', which is the blank slug this whole
+  // module exists to prevent.
+  assert.equal(nextFreeSlug('', []), 'product')
+  assert.equal(nextFreeSlug('', ['product']), 'product-2')
+  assert.equal(FALLBACK_SLUG, 'product', 'the fallback is what the app writes')
 })
 
 test('a generated slug cannot collide with the hand-typed live ones', () => {

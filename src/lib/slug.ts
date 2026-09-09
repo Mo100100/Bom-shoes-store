@@ -20,7 +20,7 @@
 // What a slug may keep: ASCII alphanumerics plus the Arabic block, which
 // covers Arabic letters, the Arabic-Indic digits and the harakat. Everything
 // else -- spaces, punctuation, emoji, Latin accents -- becomes a separator.
-// The same class is written out in the 20260811000000 migration; keep the two
+// The same class is written out in the 20260813000000 migration; keep the two
 // in step if either changes.
 const SLUG_STRIP = /[^a-z0-9\u0600-\u06ff]+/g
 const SLUG_EDGE_DASHES = /^-+|-+$/g

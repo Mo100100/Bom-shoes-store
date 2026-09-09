@@ -423,7 +423,7 @@ export default function AdminProducts() {
       // admin edits the box. 117 of the 118 live products carry a single emoji
       // or Arabic letter typed by hand to get around the old generator, and
       // rewriting one of those URLs as a side effect of a price edit is the
-      // owner's decision, not this screen's -- see the 20260811000000
+      // owner's decision, not this screen's -- see the 20260813000000
       // migration. Clearing the box regenerates the slug from the name.
       const storedSlug = products.find(p => p.id === editing.id)?.slug || ''
       const typedSlug = editing.slug || ''

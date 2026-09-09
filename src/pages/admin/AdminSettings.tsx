@@ -330,9 +330,11 @@ export default function AdminSettings() {
     const invalid = validateBrandName(label_en, categories.flatMap(c => [c.value, c.label_en]))
     if (invalid) { toast.error(nameErrorMessage(invalid, t)); return }
     setSavingCategory(true)
-    // No position: the database assigns max + 1 (see the 20260811000000
-    // migration). Computed here from the loaded array, two admins adding at
-    // the same moment both read the same max and landed on the same position.
+    // No position: the database assigns max + 1 on insert (see the
+    // 20260813000000 migration). It used to be computed from the array loaded
+    // in this browser, which can be hours stale. Two inserts in flight at the
+    // same instant can still land on the same position, and the next reorder
+    // renumbers them.
     const { data, error } = await supabase
       .from('categories')
       .insert({ value: label_en, label_en, label_ar })
