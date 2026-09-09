@@ -60,19 +60,24 @@ export default function ProductCard({
   const topLabel = brandName || categoryLabel
 
   return (
-    // The card is a <div> holding a <Link>, not one big <Link>: the quick-view
-    // and quick-add buttons used to sit INSIDE the link and cancel it with
-    // preventDefault, so a tap that missed either button by a few pixels
+    // The card is a <div> holding a <Link>, not one big <Link>: the wishlist,
+    // quick-view and quick-add buttons used to sit INSIDE the link and cancel
+    // it with preventDefault, so a tap that missed any of them by a few pixels
     // navigated to the product instead of doing what the customer aimed at.
+    // A <button> descending from an <a> is also invalid HTML: the anchor
+    // swallows the button's accessible name and activation is ambiguous.
     // Outside the link there is nothing to cancel and nothing to miss into.
+    // `relative` is what the heart below positions against.
     <div
       className={cn(
-        'group flex flex-col fade-up bg-background border border-border rounded-[14px] p-[18px] transition-all duration-300 hover:-translate-y-[3px] hover:shadow-[0_18px_44px_rgba(20,20,20,0.10)] hover:border-[#d6d1c5]',
+        'group relative flex flex-col fade-up bg-background border border-border rounded-[14px] p-[18px] transition-all duration-300 hover:-translate-y-[3px] hover:shadow-[0_18px_44px_rgba(20,20,20,0.10)] hover:border-[#d6d1c5]',
         className
       )}
       style={animationDelay ? { animationDelay } : undefined}
     >
-      <Link to={`/product/${p.slug}`} className="block">
+      {/* Without aria-label the link's name is the alt text, brand, name,
+          price and every badge read out as one paragraph. */}
+      <Link to={`/product/${p.slug}`} aria-label={p.name} className="block">
         <div className="relative bg-[#f3f1ec] rounded-[10px] aspect-square overflow-hidden flex items-center justify-center mb-[18px]">
           <img
             src={p.image_url || ''}
@@ -96,13 +101,6 @@ export default function ProductCard({
               {bxgyBadge}
             </div>
           )}
-
-          <div className="absolute top-3 end-3">
-            <WishlistButton
-              productId={p.id}
-              className="p-0 w-11 h-11 rounded-full bg-white/85 backdrop-blur-sm shadow-sm flex items-center justify-center"
-            />
-          </div>
         </div>
 
         <div className="px-0.5">
@@ -120,6 +118,15 @@ export default function ProductCard({
           </div>
         </div>
       </Link>
+
+      {/* Sibling of the Link, not a child, so it is a real button and not a
+          miss-tap into the product page. 30px = the card's 18px padding plus
+          the 12px inset it used to have inside the image box, which keeps it
+          exactly where it has always sat. */}
+      <WishlistButton
+        productId={p.id}
+        className="absolute top-[30px] end-[30px] p-0 w-11 h-11 rounded-full bg-white/85 backdrop-blur-sm shadow-sm flex items-center justify-center"
+      />
 
       <div className="px-0.5">
         <div className="mt-3.5 flex items-center justify-between gap-3">
