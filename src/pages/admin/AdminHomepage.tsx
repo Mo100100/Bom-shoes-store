@@ -54,21 +54,30 @@ export default function AdminHomepage() {
   async function load() {
     const id = ++loadIdRef.current
     setLoading(true)
-    const [content, catalog] = await Promise.all([
-      supabase.from('site_content').select('key, value').in('key', SITE_CONTENT_KEYS as unknown as string[]),
-      supabase.from('product_catalog').select('id, name, slug').order('name'),
-    ])
-    if (id !== loadIdRef.current) return
-    if (content.error || catalog.error) {
-      setDrafts(null)
-      setProducts([])
-    } else {
+    try {
+      const [content, catalog] = await Promise.all([
+        supabase.from('site_content').select('key, value').in('key', SITE_CONTENT_KEYS as unknown as string[]),
+        supabase.from('product_catalog').select('id, name, slug').order('name'),
+      ])
+      if (id !== loadIdRef.current) return
+      if (content.error || catalog.error) {
+        setDrafts(null)
+        setProducts([])
+        return
+      }
       const map: Record<string, any> = {}
       for (const row of content.data || []) map[row.key] = row.value
       setDrafts(map)
       setProducts(catalog.data || [])
+    } catch {
+      // postgrest-js reports a failed request as { error }, but a genuine throw
+      // (auth refresh, malformed JSON) must not leave the spinner up forever.
+      if (id !== loadIdRef.current) return
+      setDrafts(null)
+      setProducts([])
+    } finally {
+      if (id === loadIdRef.current) setLoading(false)
     }
-    setLoading(false)
   }
   useEffect(() => { load() }, [])
 

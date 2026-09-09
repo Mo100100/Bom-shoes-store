@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase, StoreSettings } from '@/lib/supabase'
 import { useCategories } from '@/contexts/CategoriesContext'
 import { useBrands } from '@/contexts/BrandsContext'
@@ -63,53 +63,84 @@ export default function AdminSettings() {
   const [savingVisibility, setSavingVisibility] = useState(false)
   const [regions, setRegions] = useState<ShippingRegion[]>([])
   const [savingShipping, setSavingShipping] = useState(false)
+  // False until the site_content read below succeeds. The five blocks it feeds
+  // (whatsapp, contact, checkout config, brands visibility, shipping regions)
+  // hold placeholder defaults until then, and writing one of those back would
+  // replace the live row -- the whole shipping price table, for instance --
+  // with defaults. Every site_content write on this screen goes through
+  // saveContent, which refuses while this is false.
+  const [contentLoaded, setContentLoaded] = useState(false)
   const t = useT()
 
-  async function load() {
-    setLoading(true)
-    const { data } = await supabase
-      .from('store_settings')
-      .select('logo_url, favicon_url')
-      .eq('id', STORE_SETTINGS_ID)
-      .maybeSingle()
-    setSettings(data || { logo_url: null, favicon_url: null })
+  // Only the most recently started load may touch state (Shop.tsx's guard), so
+  // a slow failure can't land after a retry has already succeeded.
+  const loadIdRef = useRef(0)
 
-    const { data: content } = await supabase
-      .from('site_content')
-      .select('key, value')
-      .in('key', ['whatsapp', 'contact', 'checkout_config', 'shipping', 'site_visibility'])
-    for (const row of content || []) {
-      if (row.key === 'whatsapp') setWhatsapp({ ...EMPTY_WHATSAPP, ...row.value })
-      if (row.key === 'checkout_config') setCheckoutConfig({ ...DEFAULT_CHECKOUT_CONFIG, ...row.value })
-      if (row.key === 'site_visibility') setBrandsPageEnabled((row.value as { brands_page_enabled?: boolean })?.brands_page_enabled !== false)
-      if (row.key === 'shipping') {
-        const rs = (row.value as { regions?: ShippingRegion[] })?.regions
-        setRegions(Array.isArray(rs) ? rs : [])
+  async function load() {
+    const id = ++loadIdRef.current
+    setLoading(true)
+    try {
+      const { data } = await supabase
+        .from('store_settings')
+        .select('logo_url, favicon_url')
+        .eq('id', STORE_SETTINGS_ID)
+        .maybeSingle()
+      if (id !== loadIdRef.current) return
+      setSettings(data || { logo_url: null, favicon_url: null })
+
+      const { data: content, error: contentError } = await supabase
+        .from('site_content')
+        .select('key, value')
+        .in('key', ['whatsapp', 'contact', 'checkout_config', 'shipping', 'site_visibility'])
+      if (id !== loadIdRef.current) return
+      // A failed read leaves every block below on its defaults, which must not be
+      // mistaken for "the owner has not configured this yet".
+      setContentLoaded(!contentError)
+      if (contentError) return
+      for (const row of content || []) {
+        if (row.key === 'whatsapp') setWhatsapp({ ...EMPTY_WHATSAPP, ...row.value })
+        if (row.key === 'checkout_config') setCheckoutConfig({ ...DEFAULT_CHECKOUT_CONFIG, ...row.value })
+        if (row.key === 'site_visibility') setBrandsPageEnabled((row.value as { brands_page_enabled?: boolean })?.brands_page_enabled !== false)
+        if (row.key === 'shipping') {
+          const rs = (row.value as { regions?: ShippingRegion[] })?.regions
+          setRegions(Array.isArray(rs) ? rs : [])
+        }
+        if (row.key === 'contact') {
+          const v = row.value as Record<string, string | null>
+          setContact({
+            email: v.email || '', phone: v.phone || '',
+            address_en: v.address_en || '', address_ar: v.address_ar || '',
+            map_url: v.map_url || '',
+            social_instagram: v.social_instagram || '', social_facebook: v.social_facebook || '',
+            social_tiktok: v.social_tiktok || '', social_twitter: v.social_twitter || '',
+          })
+        }
       }
-      if (row.key === 'contact') {
-        const v = row.value as Record<string, string | null>
-        setContact({
-          email: v.email || '', phone: v.phone || '',
-          address_en: v.address_en || '', address_ar: v.address_ar || '',
-          map_url: v.map_url || '',
-          social_instagram: v.social_instagram || '', social_facebook: v.social_facebook || '',
-          social_tiktok: v.social_tiktok || '', social_twitter: v.social_twitter || '',
-        })
-      }
+    } catch {
+      // postgrest-js reports a failed request as { error }, but a genuine throw
+      // must not leave the spinner up with no way out.
+      if (id !== loadIdRef.current) return
+      setContentLoaded(false)
+    } finally {
+      if (id === loadIdRef.current) setLoading(false)
     }
-    setLoading(false)
   }
   useEffect(() => { load() }, [])
 
+  // Single choke point for every site_content write on this screen: there is no
+  // other path to one, so a payload built from a failed read cannot be written.
+  async function saveContent(key: string, value: unknown): Promise<boolean> {
+    if (!contentLoaded) { toast.error(t.adminSettingsContentLoadError); return false }
+    const { error } = await supabase.from('site_content').update({ value }).eq('key', key)
+    if (error) { toast.error(error.message || t.adminSaveFailed); return false }
+    toast.success(t.adminSaved)
+    return true
+  }
+
   async function handleSaveWhatsapp() {
     setSavingWhatsapp(true)
-    const { error } = await supabase
-      .from('site_content')
-      .update({ value: whatsapp })
-      .eq('key', 'whatsapp')
+    await saveContent('whatsapp', whatsapp)
     setSavingWhatsapp(false)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
-    toast.success(t.adminSaved)
   }
 
   async function handleSaveContact() {
@@ -120,13 +151,8 @@ export default function AdminSettings() {
     const value = Object.fromEntries(
       Object.entries(contact).map(([k, v]) => [k, v || null])
     )
-    const { error } = await supabase
-      .from('site_content')
-      .update({ value })
-      .eq('key', 'contact')
+    await saveContent('contact', value)
     setSavingContact(false)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
-    toast.success(t.adminSaved)
   }
 
   async function handleUpload(field: UploadField, raw: File | undefined, setUploading: (v: boolean) => void) {
@@ -169,33 +195,24 @@ export default function AdminSettings() {
     }
     setCheckoutConfig(next)
     setSavingCheckout(true)
-    const { error } = await supabase.from('site_content').update({ value: next }).eq('key', 'checkout_config')
+    await saveContent('checkout_config', next)
     setSavingCheckout(false)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
-    toast.success(t.adminSaved)
   }
 
   // ----- Brands page visibility (nav link + /brands page) -----
   async function handleToggleBrandsPage(enabled: boolean) {
     setBrandsPageEnabled(enabled)
     setSavingVisibility(true)
-    const { error } = await supabase
-      .from('site_content')
-      .update({ value: { brands_page_enabled: enabled } })
-      .eq('key', 'site_visibility')
+    await saveContent('site_visibility', { brands_page_enabled: enabled })
     setSavingVisibility(false)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
-    toast.success(t.adminSaved)
   }
 
   // ----- Shipping price per governorate -----
   async function saveRegions(next: ShippingRegion[]) {
     setRegions(next)
     setSavingShipping(true)
-    const { error } = await supabase.from('site_content').update({ value: { regions: next } }).eq('key', 'shipping')
+    await saveContent('shipping', { regions: next })
     setSavingShipping(false)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
-    toast.success(t.adminSaved)
   }
   function handleRegionPrice(code: string, price: number) {
     saveRegions(regions.map(r => r.code === code ? { ...r, price: Math.max(0, price) } : r))
@@ -342,6 +359,18 @@ export default function AdminSettings() {
 
   return (
     <div className="max-w-xl space-y-8">
+      {!contentLoaded && (
+        <div className="border border-terracotta bg-card p-6">
+          <p className="text-sm text-terracotta">{t.adminSettingsContentLoadError}</p>
+          <button
+            type="button"
+            onClick={() => load()}
+            className="mt-3 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          >
+            {t.failedTryAgain}
+          </button>
+        </div>
+      )}
       <UploadField
         label={t.adminLogo}
         currentUrl={settings?.logo_url || null}
@@ -367,7 +396,7 @@ export default function AdminSettings() {
           <input
             type="checkbox"
             checked={checkoutConfig.online_enabled}
-            disabled={savingCheckout}
+            disabled={savingCheckout || !contentLoaded}
             onChange={e => handleToggleCheckout({ online_enabled: e.target.checked })}
             className="w-4 h-4 accent-foreground cursor-pointer"
           />
@@ -377,7 +406,7 @@ export default function AdminSettings() {
           <input
             type="checkbox"
             checked={checkoutConfig.cash_enabled}
-            disabled={savingCheckout}
+            disabled={savingCheckout || !contentLoaded}
             onChange={e => handleToggleCheckout({ cash_enabled: e.target.checked })}
             className="w-4 h-4 accent-foreground cursor-pointer"
           />
@@ -400,31 +429,34 @@ export default function AdminSettings() {
                 type="number"
                 min={0}
                 defaultValue={r.price}
+                disabled={!contentLoaded}
                 onBlur={e => {
                   const v = Number(e.target.value)
                   if (!Number.isNaN(v) && v !== r.price) handleRegionPrice(r.code, v)
                 }}
-                className="w-24 bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none"
+                className="w-24 bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none disabled:opacity-40"
               />
               <span className="text-[11px] text-muted-foreground w-8">EGP</span>
               <button
                 type="button"
                 onClick={() => handleRemoveRegion(r.code)}
-                className="p-2 text-red-700 hover:bg-muted cursor-pointer flex-shrink-0"
+                disabled={!contentLoaded}
+                className="p-2 text-red-700 hover:bg-muted cursor-pointer flex-shrink-0 disabled:opacity-40"
                 aria-label={t.adminDelete}
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             </div>
           ))}
-          {regions.length === 0 && (
+          {/* Only after a successful read is an empty list actually empty. */}
+          {contentLoaded && regions.length === 0 && (
             <p className="text-[11px] text-muted-foreground py-2">{t.adminShippingEmpty}</p>
           )}
         </div>
         <button
           type="button"
           onClick={handleRestoreGovernorates}
-          disabled={savingShipping}
+          disabled={savingShipping || !contentLoaded}
           className="text-xs tracking-wide border border-border px-3 py-2 hover:bg-muted cursor-pointer disabled:opacity-50 inline-flex items-center gap-2"
         >
           <Plus className="w-3.5 h-3.5" />
@@ -523,7 +555,7 @@ export default function AdminSettings() {
             <input
               type="checkbox"
               checked={brandsPageEnabled}
-              disabled={savingVisibility}
+              disabled={savingVisibility || !contentLoaded}
               onChange={e => handleToggleBrandsPage(e.target.checked)}
               className="w-4 h-4 accent-foreground cursor-pointer"
             />
@@ -653,7 +685,7 @@ export default function AdminSettings() {
         </div>
         <button
           onClick={handleSaveWhatsapp}
-          disabled={savingWhatsapp}
+          disabled={savingWhatsapp || !contentLoaded}
           className="text-xs tracking-wider uppercase border border-foreground px-4 py-2 hover:bg-foreground hover:text-background transition-colors disabled:opacity-50 cursor-pointer"
         >
           {savingWhatsapp ? t.adminSavingBtn : t.adminSaveBtn}
@@ -748,7 +780,7 @@ export default function AdminSettings() {
         </div>
         <button
           onClick={handleSaveContact}
-          disabled={savingContact}
+          disabled={savingContact || !contentLoaded}
           className="text-xs tracking-wider uppercase border border-foreground px-4 py-2 hover:bg-foreground hover:text-background transition-colors disabled:opacity-50 cursor-pointer"
         >
           {savingContact ? t.adminSavingBtn : t.adminSaveBtn}

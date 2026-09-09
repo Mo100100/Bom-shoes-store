@@ -42,10 +42,11 @@ export default function AdminBundles() {
   const [products, setProducts] = useState<ProductOption[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<Partial<Bundle> | null>(null)
-  // `null` means this bundle's items were never read successfully. saveItems
-  // replaces the whole list, so an unloaded list must never reach it: that
-  // would delete the bundle's real products and put nothing back.
-  const [itemRows, setItemRows] = useState<ItemRow[] | null>([])
+  // `null` means this bundle's items are not in hand: never read, or the read
+  // failed. saveItems replaces the whole list, so such a list must never reach
+  // it. Starts null rather than [] because [] is the one value that would pass
+  // the guards while carrying a delete-everything payload.
+  const [itemRows, setItemRows] = useState<ItemRow[] | null>(null)
   const [itemsLoading, setItemsLoading] = useState(false)
   const itemsLoadIdRef = useRef(0)
   const [saving, setSaving] = useState(false)
@@ -78,12 +79,19 @@ export default function AdminBundles() {
     const id = ++itemsLoadIdRef.current
     setItemRows(null)
     setItemsLoading(true)
-    const { data, error } = await supabase.from('bundle_items').select('*').eq('bundle_id', bundleId)
-    if (id !== itemsLoadIdRef.current) return
-    setItemsLoading(false)
-    if (error) return
-    const rows: ItemRow[] = data.map(i => ({ id: i.id, product_id: i.product_id, quantity: i.quantity, _key: i.id }))
-    setItemRows(rows.length ? rows : [blankItemRow()])
+    try {
+      const { data, error } = await supabase.from('bundle_items').select('*').eq('bundle_id', bundleId)
+      if (id !== itemsLoadIdRef.current) return
+      if (error) return
+      const rows: ItemRow[] = data.map(i => ({ id: i.id, product_id: i.product_id, quantity: i.quantity, _key: i.id }))
+      setItemRows(rows.length ? rows : [blankItemRow()])
+    } catch {
+      // postgrest-js reports a failed request as { error }, but a genuine throw
+      // must still land on the failed-read state, not a stuck spinner.
+      setItemRows(null)
+    } finally {
+      if (id === itemsLoadIdRef.current) setItemsLoading(false)
+    }
   }
 
   function openNew() {
@@ -115,30 +123,41 @@ export default function AdminBundles() {
     load()
   }
 
-  // Full replace against the DB for this bundle: delete every existing
-  // bundle_items row, then insert the current set in one batch -- same
-  // reasoning as AdminProducts.saveVariants (a per-row update loop can race
-  // against unique/foreign-key constraints mid-loop; delete+insert sidesteps
-  // that entirely, and this is an admin-only, low-traffic screen).
+  // Full replace against the DB for this bundle -- same reasoning as
+  // AdminProducts.saveVariants (a per-row update loop can race against
+  // unique/foreign-key constraints mid-loop; replacing the set sidesteps that
+  // entirely, and this is an admin-only, low-traffic screen).
   //
-  // `current` is a parameter, not state: this function deletes every existing
-  // row for the bundle, so it must be impossible to call it with a list that
-  // came from a failed read. handleSave is the only caller and it cannot get
-  // past its own guard with a null list.
+  // INSERT first, DELETE second. The two statements are separate round trips
+  // with no transaction between them, so the order decides what a failure in
+  // the middle leaves behind: this way a rejected insert leaves the bundle's
+  // real rows untouched, and a failed delete leaves duplicates the next save
+  // clears. Delete-then-insert left the bundle EMPTY on the live storefront
+  // whenever the insert was refused (a bad quantity, a product deleted in
+  // another tab, a dropped connection). A true transaction needs an RPC.
+  //
+  // `current` is a parameter, not state, so the caller has to hold a real list
+  // to call this at all.
   async function saveItems(bundleId: string, current: ItemRow[]) {
     const rows = current
       .filter(r => r.product_id) // ponytail: skip incomplete rows, don't persist rows with no product picked
       .map(row => ({
         bundle_id: bundleId,
         product_id: row.product_id,
-        quantity: Number(row.quantity) || 1,
+        quantity: Number(row.quantity),
       }))
-    const { error: delError } = await supabase.from('bundle_items').delete().eq('bundle_id', bundleId)
-    if (delError) throw delError
+    const inserted: string[] = []
     if (rows.length) {
-      const { error: insError } = await supabase.from('bundle_items').insert(rows)
+      const { data, error: insError } = await supabase.from('bundle_items').insert(rows).select('id')
       if (insError) throw insError
+      for (const r of data) inserted.push(r.id)
     }
+    // Everything for this bundle except what was just inserted: that is exactly
+    // the old set, including rows the admin removed in the editor.
+    let del = supabase.from('bundle_items').delete().eq('bundle_id', bundleId)
+    if (inserted.length) del = del.not('id', 'in', `(${inserted.join(',')})`)
+    const { error: delError } = await del
+    if (delError) throw delError
   }
 
   async function handleSave() {
@@ -146,6 +165,14 @@ export default function AdminBundles() {
     if (!editing.name?.trim()) { toast.error(t.adminNameRequired); return }
     // The items list never loaded: saving would wipe the bundle's products.
     if (!itemRows) { toast.error(t.adminBundleItemsLoadError); return }
+    // Validate here rather than letting `check (quantity > 0)` reject the
+    // insert: the quantity input has min={1} but no <form> to enforce it, so
+    // "-1" arrives as -1, and a database refusal mid-save is the one thing
+    // saveItems cannot roll back.
+    if (itemRows.some(r => r.product_id && !(Number.isInteger(Number(r.quantity)) && Number(r.quantity) > 0))) {
+      toast.error(t.adminQuantityMustBePositive)
+      return
+    }
     setSaving(true)
     try {
       const payload = {
