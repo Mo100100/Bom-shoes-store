@@ -18,7 +18,7 @@ export default function Signup() {
 
   useSeo({
     title: 'Create Account · BOM Store',
-    description: 'Create a BOM Store account to start shopping handcrafted, built-to-last shoes.',
+    description: 'Create a BOM Store account to shop authentic luxury sneakers, delivered across Egypt.',
   })
 
   async function handleSubmit(e: React.FormEvent) {
