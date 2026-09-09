@@ -435,7 +435,7 @@ export default function Layout() {
             <button
               ref={searchBtnRef}
               onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
-              className="hidden md:flex w-11 h-11 items-center justify-center hover:text-foreground/60 transition-colors cursor-pointer"
+              className="w-11 h-11 flex items-center justify-center hover:text-foreground/60 transition-colors cursor-pointer"
               aria-label={searchOpen ? t.searchClose : t.searchLabel}
               aria-expanded={searchOpen}
             >
@@ -689,15 +689,6 @@ export default function Layout() {
             </button>
           </div>
           <nav className="flex flex-col p-6">
-            {/* The header's search button is desktop-only, so without this row
-                search is unreachable on a phone. */}
-            <button
-              onClick={() => { setMobileOpen(false); setSearchOpen(true) }}
-              className="py-4 text-2xl font-display border-b border-border/40 flex items-center justify-between text-start cursor-pointer hover:text-foreground/60 transition-colors"
-            >
-              <span>{t.searchLabel}</span>
-              <Search className="w-5 h-5" />
-            </button>
             {nav.map(n => (
               <Link
                 key={n.to}

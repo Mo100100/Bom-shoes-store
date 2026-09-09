@@ -83,9 +83,7 @@ export default function Home() {
       .then(({ data }) => setDropEndsAt(data?.[0]?.ends_at ? new Date(data[0].ends_at) : null))
   }, [content.limited_drop])
 
-  async function quickAdd(p: ProductCatalogEntry, e: React.MouseEvent) {
-    e.preventDefault()
-    e.stopPropagation()
+  async function quickAdd(p: ProductCatalogEntry) {
     setQuickAddingId(p.id)
     const { data: variants, error } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size').order('color')
     setQuickAddingId(null)
