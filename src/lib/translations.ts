@@ -426,6 +426,7 @@ export const translations = {
     orderLookupPending: 'This order is waiting for its payment to be confirmed.',
     orderLookupFailed: 'This order did not go through, and nothing was charged.',
     orderLookupTrack: 'Check this order later',
+    orderLookupTooMany: 'Too many checks from here just now. Please wait a minute, then try again.',
 
     // Auth
     authProfileLoadError: 'Could not load your account, so this page cannot check your access. You are still signed in.',
@@ -1291,7 +1292,8 @@ export const translations = {
     orderLookupConfirmed: 'هذا الطلب مؤكد.',
     orderLookupPending: 'ما زال هذا الطلب في انتظار تأكيد الدفع.',
     orderLookupFailed: 'لم يكتمل هذا الطلب، ولم يخصم أي مبلغ.',
-    orderLookupTrack: 'تابع هذا الطلب لاحقا',
+    orderLookupTrack: 'تابع هذا الطلب لاحقًا',
+    orderLookupTooMany: 'محاولات كثيرة من هنا الآن. يرجى الانتظار دقيقة ثم المحاولة مرة أخرى.',
 
     // Auth
     authProfileLoadError: 'تعذر تحميل حسابك، لذا لا تستطيع هذه الصفحة التحقق من صلاحيتك. ما زلت مسجل الدخول.',

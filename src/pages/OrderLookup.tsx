@@ -137,7 +137,7 @@ export default function OrderLookup() {
           worse. Waiting is the whole instruction. */}
       {!loading && result?.kind === 'rate_limited' && (
         <div className="border border-border p-6">
-          <p className="text-muted-foreground font-light">{t.cartCouponTooMany}</p>
+          <p className="text-muted-foreground font-light">{t.orderLookupTooMany}</p>
         </div>
       )}
 
