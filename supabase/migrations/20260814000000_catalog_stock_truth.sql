@@ -24,6 +24,15 @@
 --    fixes it once, in the one place all three of them read from. Zero of the
 --    118 live products have no variants today, so this is prevention.
 --
+--    Behaviour change this carries: a variant-less product with products.stock
+--    > 0 now reads as in stock on the grid card as well, where it used to read
+--    as sold out. That is the honest answer for the detail page, but the card
+--    also had a quick-add "+" keyed off this column, and quick-add needs a
+--    variant row to put in the cart. ProductCard therefore gates the "+" on
+--    available_sizes as well, which is aggregated over stock > 0 variants and
+--    so is empty exactly when there is nothing to add. Without that gate the
+--    card would offer a "+" that can only ever answer "out of stock".
+--
 -- CREATE OR REPLACE, not DROP + CREATE: the column names, types and order are
 -- unchanged (only the expressions behind three of them move), so REPLACE is
 -- legal, and it is what keeps the view's grants and its dependents intact.
@@ -37,6 +46,7 @@
 -- REPLACE takes an ACCESS EXCLUSIVE lock on the view, so every storefront read
 -- of product_catalog queues behind it. With the default lock_timeout of 0 that
 -- wait is unbounded. Fail fast and re-run in a quieter minute instead.
+
 set local lock_timeout = '3s';
 
 create or replace view public.product_catalog

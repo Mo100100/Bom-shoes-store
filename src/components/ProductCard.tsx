@@ -154,7 +154,14 @@ export default function ProductCard({
                 <Eye className="w-4 h-4" />
               </button>
             )}
-            {p.total_stock > 0 && (
+            {/* Quick-add needs a variant to put in the cart, so a product with
+                no in-stock variant row cannot be quick-added however much
+                products.stock claims. total_stock now falls back to
+                products.stock for legacy variant-less products, which would
+                otherwise render a "+" that can only ever answer "out of
+                stock". available_sizes is aggregated over stock > 0 variants
+                only, so an empty one means there is nothing to add. */}
+            {p.total_stock > 0 && p.available_sizes.length > 0 && (
               <button
                 onClick={() => onQuickAdd(p)}
                 disabled={quickAdding}
