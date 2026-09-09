@@ -216,7 +216,10 @@ export default function Home() {
                 </div>
                 <div>
                   <h3 className="font-sans text-sm font-bold tracking-[0.04em] uppercase leading-tight">{heroProduct.name}</h3>
-                  <p className="text-xs text-muted-foreground uppercase tracking-[0.06em] mt-0.5 mb-2.5">
+                  {/* latin-text: brand names and the BOM Store fallback are
+                      Latin in both locales, so this run keeps its tracking
+                      instead of being zeroed by the Arabic rule in index.css. */}
+                  <p className="latin-text text-xs text-muted-foreground uppercase tracking-[0.06em] mt-0.5 mb-2.5">
                     {/* products.brand holds brands.value, an immutable key
                         that is not the display name, so it goes through the
                         same lookup every other brand render uses. */}
