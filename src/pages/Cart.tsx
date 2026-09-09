@@ -289,6 +289,10 @@ export default function Cart() {
                   <div className="flex gap-2">
                     <input
                       type="text"
+                      name="coupon"
+                      // A one-off code, never a saved value: without this the
+                      // browser offers the customer's name or email here.
+                      autoComplete="off"
                       value={couponInput}
                       onChange={e => setCouponInput(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleApplyClick() } }}

@@ -50,8 +50,14 @@ export default function Login() {
                 still sits on the start edge of an Arabic form. */}
           <label className="block">
             <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{t.loginEmail}</span>
+            {/* name + autoComplete: a returning customer signs in from the
+                browser's saved credentials in one tap, and the password
+                manager knows to offer the stored one rather than a new one. */}
             <input
               type="email"
+              name="email"
+              autoComplete="email"
+              inputMode="email"
               required
               value={email}
               onChange={e => setEmail(e.target.value)}
@@ -64,6 +70,8 @@ export default function Login() {
             <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{t.loginPassword}</span>
             <input
               type="password"
+              name="password"
+              autoComplete="current-password"
               required
               value={password}
               onChange={e => setPassword(e.target.value)}
