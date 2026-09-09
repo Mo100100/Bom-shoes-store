@@ -4,6 +4,7 @@ import { ArrowRight } from 'lucide-react'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { supabase, ProductCatalogEntry } from '@/lib/supabase'
+import { showcasePosition, showcaseProgressFor } from '@/lib/showcaseIndex'
 
 /**
  * Sticky scroll showcase with transparent-background shoes. As the user
@@ -16,7 +17,7 @@ import { supabase, ProductCatalogEntry } from '@/lib/supabase'
  * featured-then-recent ordering, so with no admin pick they drew the same five
  * shoes twice.
  */
-export type ShowcaseConfig = {
+type ShowcaseConfig = {
   product_ids?: string[]
   label_en?: string
   label_ar?: string
@@ -29,10 +30,13 @@ type ShowcaseProps = {
   fallback: ProductCatalogEntry[]
 }
 
-// Scroll cost per slide, in vh, on top of the one sticky viewport the section
-// pins for. At 100vh a five-shoe showcase was six full screens of scrolling
-// before the first buyable product; the transition still reads at 45.
-const SCROLL_VH_PER_ITEM = 45
+// Scroll cost of one slide-to-slide transition, in vh, on top of the one
+// sticky viewport the section pins for. At 100vh a five-shoe showcase was six
+// full screens of scrolling before the first buyable product; the transition
+// still reads at 45. There are itemCount - 1 transitions, not itemCount: the
+// first slide is already centred when the section pins and the last one is
+// centred when it unpins.
+const SCROLL_VH_PER_TRANSITION = 45
 
 // How far a slide travels vertically between one slide and the next. Has to
 // stay large enough that the outgoing shoe is off the frame by the time the
@@ -48,9 +52,13 @@ export default function ShoeShowcase3D({ config, fallback }: ShowcaseProps) {
   const { lang } = useLanguage()
   const catalogPrice = useCatalogPrice()
   const sectionRef = useRef<HTMLDivElement>(null)
-  const [active, setActive] = useState(0)
   const [scrollProgress, setScrollProgress] = useState(0)
   const [picked, setPicked] = useState<ProductCatalogEntry[] | null>(null)
+  // State, not a ref: read from a ref the first paint used the initial `false`
+  // and never re-rendered, so a reduced-motion visitor got the full parallax.
+  const [reducedMotion, setReducedMotion] = useState(
+    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  )
 
   const ids = config?.product_ids
 
@@ -80,19 +88,28 @@ export default function ShoeShowcase3D({ config, fallback }: ShowcaseProps) {
     slug: p.slug,
   })), [products])
 
-  // Section top offset + scrollable height, read from the DOM once (mount + resize)
-  // instead of on every scroll tick: keeps the scroll handler free of layout reads.
+  // Section top offset + scrollable height, cached instead of read on every
+  // scroll tick: keeps the scroll handler free of layout reads. Re-measured
+  // whenever the page reflows, not only on resize -- see the observer below.
   const metricsRef = useRef({ sectionTop: 0, sectionHeight: 1 })
   const tickingRef = useRef(false)
   const resizeTickingRef = useRef(false)
-  const reducedMotionRef = useRef(false)
 
   const itemCount = items.length
 
+  // The query can change while the page is open (a phone rotated into a
+  // desktop-class layout keeps the setting, but the OS toggle does not fire a
+  // reload), so listen rather than sample once.
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const onChange = () => setReducedMotion(mq.matches)
+    onChange()
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+
   useEffect(() => {
     if (itemCount === 0) return
-
-    reducedMotionRef.current = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
     function measure() {
       const el = sectionRef.current
@@ -100,16 +117,16 @@ export default function ShoeShowcase3D({ config, fallback }: ShowcaseProps) {
       const rect = el.getBoundingClientRect()
       metricsRef.current = {
         sectionTop: window.scrollY + rect.top,
-        sectionHeight: el.offsetHeight - window.innerHeight,
+        // A one-slide showcase has no scrollable height at all, and dividing
+        // the scroll offset by it would give NaN rather than progress 0.
+        sectionHeight: Math.max(1, el.offsetHeight - window.innerHeight),
       }
     }
 
     function applyScroll() {
       const { sectionTop, sectionHeight } = metricsRef.current
       const scrolled = window.scrollY - sectionTop
-      const progress = Math.max(0, Math.min(1, scrolled / sectionHeight))
-      setScrollProgress(progress)
-      setActive(Math.min(itemCount - 1, Math.floor(progress * itemCount)))
+      setScrollProgress(Math.max(0, Math.min(1, scrolled / sectionHeight)))
     }
 
     // Batch to one update per animation frame no matter how many scroll events fire.
@@ -136,9 +153,16 @@ export default function ShoeShowcase3D({ config, fallback }: ShowcaseProps) {
     applyScroll()
     window.addEventListener('scroll', onScroll, { passive: true })
     window.addEventListener('resize', onResize, { passive: true })
+    // `resize` alone was not enough: the curated grid above this section grows
+    // as its product images decode, which moves `sectionTop` after the single
+    // measurement and offsets the whole scroll mapping without ever firing a
+    // resize. Watching the document height catches every such reflow.
+    const observer = new ResizeObserver(onResize)
+    observer.observe(document.documentElement)
     return () => {
       window.removeEventListener('scroll', onScroll)
       window.removeEventListener('resize', onResize)
+      observer.disconnect()
     }
   }, [itemCount])
 
@@ -147,21 +171,22 @@ export default function ShoeShowcase3D({ config, fallback }: ShowcaseProps) {
   // homepage's hero banners.
   if (itemCount === 0) return null
 
+  // One mapping for the whole section: the copy, the tappable slide, the
+  // opacity and the dots all read `active` and `rawPos` from here, so they
+  // cannot drift half a slide apart again. See src/lib/showcaseIndex.ts.
+  const { rawPos, active } = showcasePosition(scrollProgress, itemCount)
   const current = items[active]
   const label = lang === 'ar'
     ? (config?.label_ar || config?.label_en)
     : (config?.label_en || config?.label_ar)
   const eyebrow = label || t.showcaseEyebrow
-  const reducedMotion = reducedMotionRef.current
-  // Continuous scroll position (0..N) used to drive the bottom-to-top slide
-  const rawPos = scrollProgress * itemCount
   const floatY = reducedMotion ? 0 : Math.sin(scrollProgress * Math.PI * 3) * 24
 
   return (
     <section
       ref={sectionRef}
       className="relative bg-[#0A0907] text-white"
-      style={{ height: `${100 + itemCount * SCROLL_VH_PER_ITEM}vh` }}
+      style={{ height: `${100 + (itemCount - 1) * SCROLL_VH_PER_TRANSITION}vh` }}
     >
       <div className="sticky top-0 h-screen flex items-end lg:items-center justify-center overflow-hidden">
         {/* Subtle background gradient that shifts */}
@@ -174,7 +199,7 @@ export default function ShoeShowcase3D({ config, fallback }: ShowcaseProps) {
 
         {/* Decorative index counter */}
         <div className="absolute top-10 left-10 right-10 flex items-center justify-between text-xs tracking-[0.3em] uppercase font-light opacity-80 text-shadow-sm">
-          <span>0{active + 1} / 0{itemCount}</span>
+          <span>{String(active + 1).padStart(2, '0')} / {String(itemCount).padStart(2, '0')}</span>
           <span>{t.showcaseLabel}</span>
         </div>
 
@@ -194,7 +219,10 @@ export default function ShoeShowcase3D({ config, fallback }: ShowcaseProps) {
             // diff > 0 → this shoe has already scrolled past (move it upward / off the top)
             // diff < 0 → this shoe hasn't appeared yet (park it below)
             const diff = rawPos - i
-            const isActive = Math.abs(diff) < 0.5
+            // The visible slide is the selected one, by definition. It used to
+            // be a separate `|diff| < 0.5` test, which is why the shoe at full
+            // opacity could be the one that took no taps.
+            const isActive = i === active
             const baseTranslateY = -diff * TRAVEL_VH // vh
             // Fade out as it leaves the centred band
             const opacity = isActive ? 1 : Math.max(0, 1 - (Math.abs(diff) - 0.5) * 1.4)
@@ -313,7 +341,10 @@ export default function ShoeShowcase3D({ config, fallback }: ShowcaseProps) {
                 const rect = el.getBoundingClientRect()
                 const sectionTop = window.scrollY + rect.top
                 const sectionHeight = el.offsetHeight - window.innerHeight
-                const target = sectionTop + (i / itemCount) * sectionHeight + 50
+                // Same mapping the slides use, inverted: land exactly where
+                // slide `i` is centred instead of `i / itemCount` plus a 50px
+                // nudge, which stopped short of the slide it was labelled for.
+                const target = sectionTop + showcaseProgressFor(i, itemCount) * sectionHeight
                 window.scrollTo({ top: target, behavior: 'smooth' })
               }}
               aria-label={t.showcaseSlideLabel(i + 1)}
