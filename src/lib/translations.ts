@@ -83,11 +83,6 @@ export const translations = {
     homeFeaturedEyebrow: 'The Collection',
     homeFeaturedTitle: 'Featured pieces',
     homeFeaturedViewAll: 'View all',
-    homeAtelierEyebrow: 'About the store',
-    homeAtelierTitle: 'We do not make shoes. We choose them.',
-    homeAtelierP1: 'BOM Store is a multi-brand shop, not a factory. A short list from the brands people actually ask for, each pair listed with its own photos, its own sizes and its price in Egyptian pounds.',
-    homeAtelierP2: 'What you see is what is in stock. When a size runs out, the page says so.',
-    homeAtelierCta: 'Browse the brands',
     homePromiseEyebrow: 'Our Promise',
     homePromise1Title: 'Authentic brands',
     homePromise1Desc: 'We stock the brands themselves, never a lookalike.',
@@ -129,11 +124,6 @@ export const translations = {
     homeBestEyebrow: 'The favourites',
     homeBestTitle: 'Best sellers',
     homeBestViewAll: 'View all bestsellers',
-
-    // New: about-the-store split
-    homeAtelierEyebrowNew: 'About the store',
-    homeAtelierTitleNew: 'A shop, not a warehouse.',
-    homeAtelierSubtitle: 'A short list, chosen pair by pair. No filler, no lookalikes.',
 
     // New: testimonials. The quotes themselves live in the `testimonials`
     // table, so only the section headings are translated here.
@@ -940,11 +930,6 @@ export const translations = {
     homeFeaturedEyebrow: 'المجموعة',
     homeFeaturedTitle: 'قطع مختارة',
     homeFeaturedViewAll: 'عرض الكل',
-    homeAtelierEyebrow: 'عن المتجر',
-    homeAtelierTitle: 'إحنا مش بنصنع أحذية. إحنا بنختارها.',
-    homeAtelierP1: 'BOM Store متجر متعدد الماركات، مش مصنع. قايمة مختارة من الماركات اللي الناس بتسأل عليها، وكل زوج معروض بصوره ومقاساته وسعره بالجنيه المصري.',
-    homeAtelierP2: 'اللي بتشوفه هو اللي متوفر فعلا. ولما المقاس يخلص، الصفحة بتقولك.',
-    homeAtelierCta: 'تصفح الماركات',
     homePromiseEyebrow: 'وعدنا',
     homePromise1Title: 'ماركات أصلية',
     homePromise1Desc: 'بنبيع الماركات نفسها، مش تقليد.',
@@ -986,11 +971,6 @@ export const translations = {
     homeBestEyebrow: 'المفضلة',
     homeBestTitle: 'الأكثر مبيعا',
     homeBestViewAll: 'اطلع على الأكثر مبيعا',
-
-    // New: about-the-store split
-    homeAtelierEyebrowNew: 'عن المتجر',
-    homeAtelierTitleNew: 'متجر مختار، مش مخزن.',
-    homeAtelierSubtitle: 'قايمة قصيرة، مختارة زوج ورا زوج. لا حشو، ولا تقليد.',
 
     // New: testimonials. The quotes themselves live in the `testimonials`
     // table, so only the section headings are translated here.
