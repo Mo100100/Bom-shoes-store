@@ -1,51 +1,25 @@
-import { useEffect, useState } from 'react'
-import { MessageCircle, X } from 'lucide-react'
-import { useLanguage } from '@/contexts/LanguageContext'
-import { supabase } from '@/lib/supabase'
+import { useState } from 'react'
+import { useLanguage, useT } from '@/contexts/LanguageContext'
+import { useWhatsApp, whatsappUrl } from '@/hooks/useWhatsApp'
 
 /**
  * Floating WhatsApp button that opens a chat with the store.
- * These are fallbacks only -- the real values come from the admin-editable
- * `site_content` row (key = 'whatsapp'); see the fetch below.
+ * The number and the prefilled message come from the admin-editable
+ * `site_content` row (key = 'whatsapp'); see useWhatsApp.
  */
-const WHATSAPP_NUMBER = '+201234567890'
-const WHATSAPP_MESSAGE_EN = 'Hello BOM Store, I would like to ask about your shoes.'
-const WHATSAPP_MESSAGE_AR = 'مرحبا BOM Store، أرغب في الاستفسار عن أحذيتكم.'
-
-type WhatsAppContent = { phone: string; message_en: string; message_ar: string }
-
 export default function WhatsAppButton() {
   const { lang } = useLanguage()
+  const t = useT()
   const [showTooltip, setShowTooltip] = useState(false)
-  const [content, setContent] = useState<WhatsAppContent>({
-    phone: WHATSAPP_NUMBER,
-    message_en: WHATSAPP_MESSAGE_EN,
-    message_ar: WHATSAPP_MESSAGE_AR,
-  })
+  const { phone, messageEn, messageAr } = useWhatsApp()
 
-  useEffect(() => {
-    supabase
-      .from('site_content')
-      .select('value')
-      .eq('key', 'whatsapp')
-      .maybeSingle()
-      .then(
-        ({ data }) => {
-          const value = data?.value as Partial<WhatsAppContent> | undefined
-          if (!value) return
-          setContent({
-            phone: value.phone || WHATSAPP_NUMBER,
-            message_en: value.message_en || WHATSAPP_MESSAGE_EN,
-            message_ar: value.message_ar || WHATSAPP_MESSAGE_AR,
-          })
-        },
-        () => { /* keep fallback values */ }
-      )
-  }, [])
+  // No usable number (unset, or still the seeded placeholder) means no
+  // button. A green button that opens a chat with a stranger looks like a
+  // working support channel and is not one.
+  if (!phone) return null
 
-  const message = lang === 'ar' ? content.message_ar : content.message_en
-  const url = `https://wa.me/${content.phone.replace(/[^\d]/g, '')}?text=${encodeURIComponent(message)}`
-  const label = lang === 'ar' ? 'تواصل عبر واتساب' : 'Chat with us on WhatsApp'
+  const url = whatsappUrl(phone, lang === 'ar' ? messageAr : messageEn)
+  const label = t.whatsappChat
 
   return (
     <div className="fixed bottom-6 end-6 z-40 flex flex-col items-end gap-3" dir="ltr">

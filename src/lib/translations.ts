@@ -349,6 +349,8 @@ export const translations = {
     failedReference: (id: string) => `Reference, ${id}`,
     failedTryAgain: 'Try again',
     failedBack: 'Back to basket',
+    orderWhatsAppCta: 'Ask about this order on WhatsApp',
+    orderWhatsAppMessage: (id: string) => `Hello BOM Store, I would like to ask about my order ${id}.`,
 
     // Auth
     authProfileLoadError: 'Could not load your account, so this page cannot check your access. You are still signed in.',
@@ -828,6 +830,7 @@ export const translations = {
     close: 'Close',
     loading: 'Loading',
     guest: 'Guest',
+    whatsappChat: 'Chat with us on WhatsApp',
     piece: 'piece',
     pieces: 'pieces',
     yes: 'Yes',
@@ -1151,6 +1154,8 @@ export const translations = {
     failedReference: (id: string) => `المرجع، ${id}`,
     failedTryAgain: 'حاول مرة أخرى',
     failedBack: 'العودة إلى السلة',
+    orderWhatsAppCta: 'استفسر عن هذا الطلب عبر واتساب',
+    orderWhatsAppMessage: (id: string) => `مرحبا BOM Store، أود الاستفسار عن طلبي ${id}.`,
 
     // Auth
     authProfileLoadError: 'تعذر تحميل حسابك، لذا لا تستطيع هذه الصفحة التحقق من صلاحيتك. ما زلت مسجل الدخول.',
@@ -1619,6 +1624,7 @@ export const translations = {
     close: 'إغلاق',
     loading: 'جار التحميل',
     guest: 'زائر',
+    whatsappChat: 'تواصل عبر واتساب',
     piece: 'قطعة',
     pieces: 'قطع',
     yes: 'نعم',
