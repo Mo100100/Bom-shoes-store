@@ -38,7 +38,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function loadProfile(userId: string): Promise<void> {
     const inFlight = profileLoadRef.current
     if (inFlight && inFlight.userId === userId) return inFlight.promise
-    const promise = readProfile(userId)
+    // Cached BEFORE the read starts. readProfile runs synchronously up to its
+    // first await, and its catch clears this ref, so calling it first would
+    // let the line below re-cache a finished no-op on top of that clear and
+    // the next auth event for this user would await the no-op instead of
+    // re-reading. The microtask hop is what keeps the two in order.
+    const promise = Promise.resolve().then(() => readProfile(userId))
     profileLoadRef.current = { userId, promise }
     return promise
   }
@@ -118,12 +123,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     async function loadUser() {
-      const { data: { user } } = await supabase.auth.getUser()
-      setUser(user)
-      if (user) {
-        await loadProfile(user.id)
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        setUser(user)
+        if (user) {
+          await loadProfile(user.id)
+        }
+      } catch {
+        // The last route to a permanent spinner: a throw out of getUser used
+        // to skip setLoading(false) entirely, leaving the owner watching a
+        // spinner with no error and no way to retry.
+        failProfile()
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
     }
     loadUser()
 
