@@ -46,7 +46,7 @@ export const translations = {
 
     // Footer
     footerShop: 'Shop',
-    footerAtelier: 'Explore',
+    footerLinksTitle: 'Links',
     footerContact: 'Contact',
     footerCopyright: '© 2026 BOM Store. All rights reserved.',
     // Renders on every page, and on the cart, whatever the owner has enabled
@@ -865,11 +865,11 @@ export const translations = {
 
     // Footer
     footerShop: 'المتجر',
-    footerAtelier: 'روابط',
+    footerLinksTitle: 'روابط',
     footerContact: 'تواصل',
     footerCopyright: '© 2026 BOM Store. كل الحقوق محفوظة.',
     footerSecure: 'دفع آمن',
-    footerReturns: 'إرجاع خلال 14 يوم',
+    footerReturns: 'إرجاع خلال 14 يومًا',
     footerQuote: 'أصلي، زوج بعد زوج.',
     footerViewOnMap: 'عرض على الخريطة',
 
@@ -886,7 +886,7 @@ export const translations = {
     homeFeaturedTitle: 'قطع مختارة',
     homeFeaturedViewAll: 'عرض الكل',
     homeNewsletterTitle: 'الجديد يوصلك الأول',
-    homeNewsletterDesc: 'الوصلات الجديدة والمقاسات اللي بترجع، على بريدك مباشرة. ولا حاجة تانية.',
+    homeNewsletterDesc: 'المنتجات الجديدة والمقاسات اللي بترجع، على بريدك مباشرة. ولا حاجة تانية.',
     homeNewsletterPlaceholder: 'البريد@الإلكتروني.com',
     homeNewsletterCta: 'اشتراك',
     homeNewsletterToast: 'شكرا لك. تم تسجيلك في القائمة.',
@@ -905,7 +905,7 @@ export const translations = {
     marqueeLine1: 'أصلي 100%',
     marqueeLine2: 'سعر التوصيل حسب المحافظة',
     marqueeLine3: 'الدفع عند الاستلام',
-    marqueeLine4: 'إرجاع خلال 14 يوم',
+    marqueeLine4: 'إرجاع خلال 14 يومًا',
     marqueeLine5: 'توصيل لكل محافظات مصر الـ27',
     marqueeLine6: 'اسألنا على واتساب',
 
@@ -935,7 +935,7 @@ export const translations = {
     homeTrust2Title: 'ماركات أصلية',
     homeTrust2Desc: 'كل زوج بيتباع باسم الماركة اللي صنعته، مش تقليد.',
     homeTrust3Title: 'إرجاع سهل',
-    homeTrust3Desc: '14 يوم للإرجاع أو الاستبدال، بشرط إنه ملبسش وفي علبته.',
+    homeTrust3Desc: '14 يوم للإرجاع أو الاستبدال، بشرط إنه ما اتلبسش وفي علبته.',
     homeTrust4Title: 'دفع آمن',
     homeTrust4Desc: 'طلبك وبياناتك محمية من أول خطوة لآخرها.',
 
@@ -995,7 +995,7 @@ export const translations = {
     productStockMaxed: 'سلتك تحتوي بالفعل على كل ما تبقى لدينا',
     productChooseSize: 'يرجى اختيار مقاس',
     productShip1: 'سعر التوصيل حسب محافظتك',
-    productShip2: 'إرجاع خلال 14 يوم',
+    productShip2: 'إرجاع خلال 14 يومًا',
     productShip3: 'اسألنا في أي حاجة على واتساب',
     productAccordion1: 'التفاصيل',
     productAccordion1Text: 'الماركة واللون وكل المقاسات المتوفرة موضحة فوق. لو محتاج قياس أو صورة مش معروضة، كلمنا على واتساب قبل ما تطلب.',
@@ -1109,7 +1109,7 @@ export const translations = {
     checkoutCashDesc: 'ادفع نقدًا عند وصول طلبك. سنؤكد الطلب ونجهّزه للتوصيل فورًا.',
     checkoutPlaceOrder: (amount: string) => `تأكيد الطلب، ${amount}`,
     checkoutPreparing: 'جار تجهيز طلبك…',
-    checkoutTerms: 'بتأكيد الطلب ده فأنت موافق على شروط الخدمة وسياسة الإرجاع.',
+    checkoutTerms: 'بتأكيدك لهذا الطلب فإنك توافق على شروط الخدمة وسياسة الإرجاع.',
     checkoutYourOrder: 'طلبك',
     fieldFullName: 'الاسم الكامل',
     fieldEmail: 'البريد الإلكتروني',
@@ -1124,7 +1124,7 @@ export const translations = {
     checkoutRegionsLoading: 'جار تحميل المحافظات…',
     checkoutRegionsError: 'تعذر تحميل المحافظات.',
     checkoutRequired: 'يرجى إكمال كافة الحقول المطلوبة',
-    checkoutFailed: 'حصل خطأ عندنا. يرجى المحاولة مرة أخرى.',
+    checkoutFailed: 'حدث خطأ ما من جانبنا. يرجى المحاولة مرة أخرى.',
     checkoutUnavailable: 'نفدت بعض القطع أثناء وجودك هنا. عد إلى سلتك لإزالتها.',
     checkoutBackToBasket: 'العودة إلى سلتك',
     checkoutTooManyOrders: 'طلبات كثيرة من هنا خلال وقت قصير. يرجى الانتظار قليلاً ثم المحاولة مرة أخرى.',

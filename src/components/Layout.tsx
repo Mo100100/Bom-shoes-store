@@ -797,7 +797,7 @@ export default function Layout() {
               </ul>
             </div>
             <div className="md:col-span-2">
-              <h4 className="text-[11px] tracking-[0.25em] uppercase font-medium mb-6 text-background/90">{t.footerAtelier}</h4>
+              <h4 className="text-[11px] tracking-[0.25em] uppercase font-medium mb-6 text-background/90">{t.footerLinksTitle}</h4>
               <ul className="space-y-3 text-sm font-light text-background/70">
                 {footerLinks?.items?.map((link, i) => (
                   <li key={i}>
