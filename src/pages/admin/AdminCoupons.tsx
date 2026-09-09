@@ -115,8 +115,11 @@ export default function AdminCoupons() {
   }
 
   async function toggleActive(c: Coupon) {
-    const { error } = await supabase.from('coupons').update({ active: !c.active }).eq('id', c.id)
+    const { data, error } = await supabase.from('coupons').update({ active: !c.active }).eq('id', c.id).select('id')
     if (error) { toast.error(error.message); return }
+    // A zero-row update returns no error: the checkbox would flip to off while
+    // the coupon carried on discounting every order.
+    if (!data.length) { toast.error(t.adminSaveNotApplied); return }
     load()
   }
 

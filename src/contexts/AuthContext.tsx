@@ -10,7 +10,9 @@ type AuthContextType = {
   profileError: boolean
   reloadProfile: () => Promise<void>
   signIn: (email: string, password: string) => Promise<{ error: any }>
-  signUp: (email: string, password: string, fullName: string) => Promise<{ error: any }>
+  // profileFailed: the auth account WAS created but its profile row was not, so
+  // this is a warning to show over a successful signup, never a signup error.
+  signUp: (email: string, password: string, fullName: string) => Promise<{ error: any; profileFailed?: boolean }>
   signOut: () => Promise<void>
 }
 
@@ -172,16 +174,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       password,
       options: { data: { full_name: fullName } }
     })
-    if (!error && data.user) {
-      // Create profile. Role is never sent from the browser: the server-side
-      // default plus the prevent_self_role_change INSERT trigger own it.
-      await supabase.from('profiles').insert({
+    if (error || !data.user) return { error }
+    // Create profile. Role is never sent from the browser: the server-side
+    // default plus the prevent_self_role_change INSERT trigger own it.
+    const { data: created, error: insertError } = await supabase
+      .from('profiles')
+      .insert({
         id: data.user.id,
         email,
         full_name: fullName,
       })
+      .select()
+      .single()
+    // Same check readProfile's insert gets: the INSERT policy rewritten by
+    // 20260809000000 can refuse this, and a refused write returns no error and
+    // no row -- the customer would see a clean signup and own no profile.
+    // readProfile retries the insert on the next load, so this is recoverable,
+    // but it must be said out loud rather than discovered by a complaint.
+    if (insertError || !created) {
+      console.error('signup profile insert failed', insertError?.message)
+      return { error: null, profileFailed: true }
     }
-    return { error }
+    return { error: null }
   }
 
   async function signOut() {

@@ -284,7 +284,11 @@ export default function AdminSettings() {
     }
     setCheckoutConfig(next)
     setSavingCheckout(true)
-    await saveContent('checkout_config', next)
+    // Put the switch back when the write did not land, the way the brands-page
+    // toggle below does: a switch left showing "card payments off" over a row
+    // that still says on is the owner trusting the wrong answer.
+    const saved = await saveContent('checkout_config', next)
+    if (!saved) setCheckoutConfig(checkoutConfig)
     setSavingCheckout(false)
   }
 
