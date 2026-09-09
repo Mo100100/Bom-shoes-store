@@ -46,6 +46,13 @@
 -- REPLACE takes an ACCESS EXCLUSIVE lock on the view, so every storefront read
 -- of product_catalog queues behind it. With the default lock_timeout of 0 that
 -- wait is unbounded. Fail fast and re-run in a quieter minute instead.
+--
+-- SET LOCAL only holds inside a transaction: outside one it raises a WARNING
+-- and does nothing. `supabase db push` wraps each migration file in its own
+-- transaction, so this line does its job on the path this file is meant to
+-- take (20260813000000 relies on the same thing). Running it by hand in the
+-- SQL editor does NOT: wrap it in begin/commit there, or the storefront queues
+-- behind an unbounded ACCESS EXCLUSIVE wait.
 
 set local lock_timeout = '3s';
 
