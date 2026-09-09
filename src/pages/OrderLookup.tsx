@@ -9,17 +9,6 @@ import OrderReference from '@/components/OrderReference'
 import OrderWhatsAppLink from '@/components/OrderWhatsAppLink'
 import { awaitingCash, fetchOrderStatus, orderStatusLabel, outcomeOf, OrderStatus, OrderStatusResult } from '@/lib/orderStatus'
 
-// Where a GUEST checks an order. Checkout does not require an account, so
-// /account (behind ProtectedRoute) is not an answer for most buyers: it
-// bounces them to /login for an order that has no user_id to find anyway.
-//
-// The order reference is the only capability here, exactly as it already is
-// on the checkout return page: this page calls the same read-only
-// order-status function, which is rate limited per IP and answers with the
-// state of one order and nothing that identifies a person. Enumeration is not
-// the risk the page adds: a reference is a millisecond timestamp plus 32 bits
-// of entropy, so even pinning the day of purchase leaves roughly 10^17
-// candidates against a ceiling of 120 attempts per 10 minutes per IP.
 // The 8-hex suffix is generated UPPERCASE (create-order) and
 // kashier_order_id is plain text, so the function's `eq` is case sensitive.
 // autoCapitalize="characters" only reaches virtual keyboards: a customer
@@ -32,6 +21,17 @@ function canonical(raw: string): string {
   return raw.trim().toUpperCase()
 }
 
+// Where a GUEST checks an order. Checkout does not require an account, so
+// /account (behind ProtectedRoute) is not an answer for most buyers: it
+// bounces them to /login for an order that has no user_id to find anyway.
+//
+// The order reference is the only capability here, exactly as it already is
+// on the checkout return page: this page calls the same read-only
+// order-status function, which is rate limited per IP and answers with the
+// state of one order and nothing that identifies a person. Enumeration is not
+// the risk the page adds: a reference is a millisecond timestamp plus 32 bits
+// of entropy, so even pinning the day of purchase leaves roughly 10^17
+// candidates against a ceiling of 120 attempts per 10 minutes per IP.
 export default function OrderLookup() {
   const t = useT()
   const [params, setParams] = useSearchParams()
