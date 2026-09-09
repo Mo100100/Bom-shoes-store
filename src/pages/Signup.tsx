@@ -28,14 +28,19 @@ export default function Signup() {
       return
     }
     setLoading(true)
-    const { error } = await signUp(email, password, fullName)
+    const { error, profileFailed } = await signUp(email, password, fullName)
     setLoading(false)
     if (error) {
       toast.error(error.message || t.signupError)
-    } else {
-      toast.success(t.signupSuccess)
-      navigate('/account')
+      return
     }
+    // The auth account exists at this point even when its profile row does not,
+    // so "signup failed" would be a lie that sends them back to a form which
+    // now rejects their email as taken. Say what is true and what to do next,
+    // and still let them in: readProfile retries the insert on every load.
+    if (profileFailed) toast.warning(t.signupProfileFailed, { duration: 12000 })
+    else toast.success(t.signupSuccess)
+    navigate('/account')
   }
 
   return (

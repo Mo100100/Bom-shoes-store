@@ -8,14 +8,25 @@ import { useBrands } from '@/contexts/BrandsContext'
 import { compressImage } from '@/lib/compressImage'
 import { diffVariants, DesiredVariant } from '@/lib/variantDiff'
 import { splitSizes } from '@/lib/sizes'
+import { slugify, nextFreeSlug, FALLBACK_SLUG } from '@/lib/slug'
 import { Loader2, Plus, X, Edit2, Trash2, Star, Search, ChevronUp, ChevronDown } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
 
 type SortKey = 'name' | 'price'
 type SortDir = 'asc' | 'desc'
 
+// PostgREST caps every response at max_rows (supabase/config.toml) whatever
+// the client asks for, and returns no error when it truncates. 118 products
+// today, so this is latent, but this is the screen the 1001st is added from.
+const MAX_ROWS = 1000
+
+// No hardcoded category: 'Sneakers' was the default in three places here, and
+// it is an ordinary row the owner can delete from Settings, after which every
+// new product pointed at a category that no longer existed. openNew() seeds
+// the first real category instead, and handleSave refuses to write none.
 const EMPTY: Partial<Product> = {
-  name: '', slug: '', description: '', price: 0, category: 'Sneakers',
+  name: '', slug: '', description: '', price: 0, category: '',
   brand: null, featured: false, materials: '', weight_grams: null, tags: [],
 }
 
@@ -84,7 +95,9 @@ async function syncFeaturedImage(productId: string) {
 
 export default function AdminProducts() {
   const [products, setProducts] = useState<ProductCatalogEntry[]>([])
+  const [totalProducts, setTotalProducts] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [editing, setEditing] = useState<Partial<Product> | null>(null)
   const [saving, setSaving] = useState(false)
   const [images, setImages] = useState<ProductImage[]>([])
@@ -105,9 +118,20 @@ export default function AdminProducts() {
   const { isAdmin } = useAuth()
   const t = useT()
   const { formatPrice, currency } = useCurrency()
-  const { categories, categoryLabel } = useCategories()
-  const { brands } = useBrands()
+  const { categories, categoryLabel, loadError: categoriesLoadError } = useCategories()
+  const { brands, brandLabel, loadError: brandsLoadError } = useBrands()
   const CATEGORY_VALUES = categories.map(c => c.value)
+  // What the two selects in the editor are actually bound to. A product can
+  // hold a category or brand that is no longer in its list (renamed, deleted,
+  // or seeded before the table existed); a <select> whose value matches no
+  // <option> renders the FIRST option instead, so the control claimed the
+  // product was a Sneaker while `editing.category` still held the old value
+  // and the save wrote the old value back. Both now render the stored value as
+  // an explicit "not in list" option, so the screen cannot disagree with the
+  // payload.
+  const defaultCategory = categories[0]?.value || ''
+  const editingCategory = editing?.category || defaultCategory
+  const editingBrand = editing?.brand ?? ''
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -138,8 +162,22 @@ export default function AdminProducts() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('product_catalog').select('*').order('created_at', { ascending: false })
-    setProducts(data || [])
+    // Bounded at max_rows (supabase/config.toml), which PostgREST enforces
+    // whatever the client asks for, and asked with an exact count so a
+    // truncated catalog can say so. Not paginated: the search, the category
+    // filter and the sort all run over the loaded array, so a page would
+    // silently turn "no results" into "no results on this page".
+    const { data, error, count } = await supabase
+      .from('product_catalog')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .limit(MAX_ROWS)
+    // A failed read is not an empty catalog: "No products yet" over 118 live
+    // products is exactly the kind of thing that sends an owner looking for a
+    // backup that was never needed.
+    setLoadError(!!error)
+    setProducts(error ? [] : data || [])
+    setTotalProducts(error ? 0 : count || 0)
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -149,8 +187,13 @@ export default function AdminProducts() {
     setImages(data || [])
   }
 
-  async function loadVariants(productId: string) {
-    const { data } = await supabase.from('product_variants').select('*').eq('product_id', productId).order('created_at')
+  // Returns whether the rows in the grid are the ones the database holds.
+  // handleSave replaces the whole variant set from this grid, so an empty grid
+  // built from a FAILED read would delete every size the product has, with its
+  // stock. openEdit refuses to open the editor at all in that case.
+  async function loadVariants(productId: string): Promise<boolean> {
+    const { data, error } = await supabase.from('product_variants').select('*').eq('product_id', productId).order('created_at')
+    if (error) return false
     const rows: VariantRow[] = (data || []).map(v => ({
       id: v.id,
       size: v.size,
@@ -163,15 +206,21 @@ export default function AdminProducts() {
     }))
     setVariantRows(rows)
     setVariantErrors({})
+    return true
   }
 
-  async function loadCostPrice(productId: string) {
-    const { data } = await supabase.from('product_costs').select('cost_price').eq('product_id', productId).maybeSingle()
+  // Same contract as loadVariants, and for the same reason: handleSave upserts
+  // whatever is in the box, so a failed read would write null over the real
+  // cost price and every profit figure on the dashboard with it.
+  async function loadCostPrice(productId: string): Promise<boolean> {
+    const { data, error } = await supabase.from('product_costs').select('cost_price').eq('product_id', productId).maybeSingle()
+    if (error) return false
     setCostPrice(data?.cost_price ?? null)
+    return true
   }
 
   function openNew() {
-    setEditing({ ...EMPTY })
+    setEditing({ ...EMPTY, category: defaultCategory })
     setImages([])
     setVariantRows([blankVariantRow()])
     setVariantErrors({})
@@ -179,9 +228,12 @@ export default function AdminProducts() {
     setDragIndex(null)
   }
   async function openEdit(p: ProductCatalogEntry) {
-    setEditing({ ...p })
     setDragIndex(null)
-    await Promise.all([loadImages(p.id), loadVariants(p.id), loadCostPrice(p.id)])
+    const [, variantsLoaded, costLoaded] = await Promise.all([loadImages(p.id), loadVariants(p.id), loadCostPrice(p.id)])
+    // Opened only once its sizes and its cost are really in hand, so Save can
+    // never write an emptiness that came from a dropped read.
+    if (!variantsLoaded || !costLoaded) { toast.error(t.adminLoadError); return }
+    setEditing({ ...p })
   }
 
   function updateVariantRow(key: string, field: keyof VariantRow, value: string | number) {
@@ -281,7 +333,10 @@ export default function AdminProducts() {
     // unique in this project) rather than stored separately.
     const path = img.url.split('/product-images/')[1]
     if (path) await supabase.storage.from('product-images').remove([decodeURIComponent(path)])
-    await supabase.from('product_images').delete().eq('id', img.id)
+    // The file is already gone by here, so a row that survives leaves a broken
+    // image in the gallery. Silence was the worst of the three outcomes.
+    const { data, error } = await supabase.from('product_images').delete().eq('id', img.id).select('id')
+    if (error || !data?.length) toast.error(error?.message || t.adminDeleteFailed)
     await loadImages(editing.id)
     await syncFeaturedImage(editing.id)
   }
@@ -296,17 +351,57 @@ export default function AdminProducts() {
 
   async function handleDropImage(dropIndex: number) {
     if (dragIndex === null || dragIndex === dropIndex || !editing?.id) { setDragIndex(null); return }
+    const productId = editing.id
     const reordered = [...images]
     const [moved] = reordered.splice(dragIndex, 1)
     reordered.splice(dropIndex, 0, moved)
     setImages(reordered)
     setDragIndex(null)
-    await Promise.all(reordered.map((img, idx) => supabase.from('product_images').update({ position: idx }).eq('id', img.id)))
+    // One RPC, one UPDATE statement. Dropping an image used to fire one UPDATE
+    // per image with every result discarded, so a refused write left the
+    // gallery showing an order the database never took.
+    const { data, error } = await supabase.rpc('admin_reorder_positions', {
+      p_table: 'product_images',
+      p_ids: reordered.map(img => img.id),
+    })
+    // The RPC applies the whole list or none of it, so every failure here --
+    // refused, incomplete, or never sent -- means nothing was written.
+    if (error || !Number(data)) toast.error(t.adminSaveNotApplied)
+    await loadImages(productId)
+  }
+
+  // The slug is the product's only URL and a UNIQUE column. slugify() keeps
+  // Arabic (see src/lib/slug.ts), and this makes the result unique BEFORE the
+  // write instead of letting the constraint raise a raw Postgres message at
+  // the owner. Prefix-matched in one query, so the cost does not grow with the
+  // catalog and no query runs per candidate.
+  async function buildSlug(name: string, typed: string, id?: string): Promise<string> {
+    const base = slugify(typed) || slugify(name)
+    const { data, error } = await supabase
+      .from('products').select('id, slug').ilike('slug', `${base || FALLBACK_SLUG}%`)
+    // Guessing "nothing matched" from a failed read is how a duplicate slug
+    // gets written. The save stops instead.
+    if (error) throw new Error(t.adminLoadError)
+    const taken = (data || []).filter(r => r.id !== id).map(r => r.slug.toLowerCase())
+    return nextFreeSlug(base, taken)
   }
 
   async function handleSave() {
     if (!editing) return
     if (!editing.name || !editing.price) { toast.error(t.adminRequired); return }
+    // `!editing.price` already rejects 0, but a negative price passed straight
+    // through to a live product page and to every order placed from it.
+    const price = Number(editing.price)
+    if (!Number.isFinite(price) || price <= 0) { toast.error(t.adminPriceInvalid); return }
+    // Unvalidated until now, and it is what every profit figure on the
+    // dashboard is computed from.
+    if (costPrice !== null && (!Number.isFinite(costPrice) || costPrice < 0)) {
+      toast.error(t.adminCostPriceInvalid); return
+    }
+    // Only when the category list itself is empty or failed to load. Writing
+    // no category would put the product in a section nothing lists.
+    const category = editing.category || defaultCategory
+    if (!category) { toast.error(t.adminCategoryRequired); return }
 
     // Reject half-filled rows and size boxes holding nothing usable, inline on
     // the offending row. Dropping them silently is how a product could be saved
@@ -324,13 +419,23 @@ export default function AdminProducts() {
     setSaving(true)
     try {
       const isNew = !editing.id
-      const slug = editing.slug || editing.name!.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+      // An existing product keeps the exact slug it is reachable by unless the
+      // admin edits the box. 117 of the 118 live products carry a single emoji
+      // or Arabic letter typed by hand to get around the old generator, and
+      // rewriting one of those URLs as a side effect of a price edit is the
+      // owner's decision, not this screen's -- see the 20260813000000
+      // migration. Clearing the box regenerates the slug from the name.
+      const storedSlug = products.find(p => p.id === editing.id)?.slug || ''
+      const typedSlug = editing.slug || ''
+      const slug = !isNew && typedSlug === storedSlug
+        ? storedSlug
+        : await buildSlug(editing.name!, typedSlug, editing.id)
       const payload = {
         name: editing.name,
         slug,
         description: editing.description || '',
-        price: Number(editing.price),
-        category: editing.category || 'Sneakers',
+        price,
+        category,
         brand: editing.brand?.trim() ? editing.brand.trim() : null,
         featured: !!editing.featured,
         materials: editing.materials?.trim() ? editing.materials.trim() : null,
@@ -340,8 +445,17 @@ export default function AdminProducts() {
 
       let productId = editing.id
       if (productId) {
-        const { error } = await supabase.from('products').update(payload).eq('id', productId)
+        const { data, error } = await supabase.from('products').update(payload).eq('id', productId).select('id')
+        // buildSlug already made the slug free, but another admin could have
+        // taken it in between. products.slug is the only unique column on the
+        // table, so 23505 here can only be that.
+        if (error?.code === '23505') throw new Error(t.adminSlugTaken)
         if (error) throw error
+        // A zero-row match returns no error: an RLS denial, or a product
+        // deleted in another tab, would otherwise toast "Product updated"
+        // over a row that never changed. The variant writes below would then
+        // be attached to a product the owner thinks holds the new price.
+        if (!data.length) throw new Error(t.adminSaveNotApplied)
       } else {
         // stock/sizes/colors/image_url are legacy columns this form no longer
         // edits directly; seed them so NOT NULL constraints are satisfied,
@@ -351,29 +465,41 @@ export default function AdminProducts() {
           .insert({ ...payload, stock: 0, sizes: [], colors: [], image_url: '' })
           .select()
           .single()
+        if (error?.code === '23505') throw new Error(t.adminSlugTaken)
         if (error) throw error
         productId = data.id
       }
 
       await saveVariants(productId!, desiredVariants)
-      await supabase.from('product_costs').upsert({ product_id: productId, cost_price: costPrice })
+      // The cost price is what every profit figure on the dashboard is built
+      // from, so a rejected write here must not pass as a saved product.
+      const { error: costError } = await supabase
+        .from('product_costs').upsert({ product_id: productId, cost_price: costPrice })
+      if (costError) throw costError
 
       // Keep legacy products.stock/sizes/colors in sync from the variants we
       // just wrote, so pages that still read those flat columns directly
       // (Shop, ProductDetail, Cart) don't go stale now that variants are the
       // real source of truth. Same `desiredVariants` list the variant rows came
       // from, so the legacy columns can't reintroduce a crammed size.
-      await supabase.from('products').update({
+      const { error: legacyError } = await supabase.from('products').update({
         stock: desiredVariants.reduce((sum, v) => sum + v.stock, 0),
         sizes: Array.from(new Set(desiredVariants.map(v => v.size))),
         colors: Array.from(new Set(desiredVariants.map(v => v.color))),
       }).eq('id', productId)
+      // The zero-row case is already covered by the UPDATE above (same row,
+      // same id), but a rejected write is not: Shop, ProductDetail and Cart
+      // still read these flat columns, so a silent failure here sells a size
+      // that no longer exists.
+      if (legacyError) throw legacyError
 
       toast.success(isNew ? t.adminCreateSuccess : t.adminUpdateSuccess)
       if (isNew) {
         // Keep the modal open so photos can be added right away, now that
-        // the product has an id to attach them to.
-        setEditing(prev => (prev ? { ...prev, id: productId } : prev))
+        // the product has an id to attach them to. The slug comes back too:
+        // it was generated here, and leaving the box showing what was typed
+        // would hide the number a collision added.
+        setEditing(prev => (prev ? { ...prev, id: productId, slug } : prev))
         await Promise.all([loadImages(productId!), loadVariants(productId!)])
       } else {
         setEditing(null)
@@ -401,7 +527,11 @@ export default function AdminProducts() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">{t.adminPieces(visibleProducts.length)}</p>
+        {/* A count over a failed read would read as "you have no products". */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminPieces(visibleProducts.length)}</p>}
+        {!loadError && totalProducts > products.length && (
+          <p className="text-sm text-terracotta">{t.adminListTruncated(products.length, totalProducts)}</p>
+        )}
         {isAdmin && (
           <button
             onClick={openNew}
@@ -440,6 +570,8 @@ export default function AdminProducts() {
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
+      ) : loadError ? (
+        <LoadErrorPanel onRetry={load} />
       ) : visibleProducts.length === 0 ? (
         <div className="border border-border bg-card p-12 text-center">
           <p className="text-muted-foreground">{t.adminNoProducts}</p>
@@ -461,6 +593,7 @@ export default function AdminProducts() {
                     </button>
                   </th>
                   <th className="text-start px-4 py-3">{t.adminCategory}</th>
+                  <th className="text-start px-4 py-3">{t.adminBrandField}</th>
                   <th className="text-start px-4 py-3">
                     <button
                       type="button"
@@ -491,6 +624,12 @@ export default function AdminProducts() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{categoryLabel(p.category)}</td>
+                    {/* Brands were invisible here, which is why 116 of 118
+                        products silently have none. An unset brand reads as a
+                        gap, not as a blank cell. */}
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {p.brand ? brandLabel(p.brand) : <span className="opacity-50">{t.dash}</span>}
+                    </td>
                     <td className="px-4 py-3">{formatPrice(Number(p.price))}</td>
                     <td className="px-4 py-3">
                       <span className={p.total_stock < 10 ? 'text-red-700' : ''}>{p.total_stock}</span>
@@ -548,10 +687,18 @@ export default function AdminProducts() {
                 <div>
                   <label className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{t.adminCategory}</label>
                   <select
-                    value={editing.category || 'Sneakers'}
+                    value={editingCategory}
                     onChange={e => setEditing({ ...editing, category: e.target.value })}
                     className="w-full bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none cursor-pointer"
                   >
+                    {/* Same reasoning as the brand select below: when the
+                        LIST failed to load, "no longer in the list" would be a
+                        guess, so show the stored value plainly instead. */}
+                    {!CATEGORY_VALUES.includes(editingCategory) && (
+                      <option value={editingCategory}>
+                        {categoriesLoadError ? editingCategory : t.adminOptionNotInList(editingCategory)}
+                      </option>
+                    )}
                     {CATEGORY_VALUES.map(c => (
                       <option key={c} value={c}>{categoryLabel(c)}</option>
                     ))}
@@ -562,11 +709,21 @@ export default function AdminProducts() {
                 <div>
                   <label className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{t.adminBrandField}</label>
                   <select
-                    value={editing.brand ?? ''}
+                    value={editingBrand}
                     onChange={e => setEditing({ ...editing, brand: e.target.value || null })}
                     className="w-full bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none cursor-pointer"
                   >
                     <option value="">{t.adminBrandNoneOption}</option>
+                    {/* An unmatched value still has to be shown, or the
+                        control would display "None" over a product that has a
+                        brand. But when the brand LIST failed to load, "no
+                        longer in the list" would be a guess: show the stored
+                        value plainly instead. */}
+                    {editingBrand && !brands.some(b => b.value === editingBrand) && (
+                      <option value={editingBrand}>
+                        {brandsLoadError ? editingBrand : t.adminOptionNotInList(editingBrand)}
+                      </option>
+                    )}
                     {brands.map(b => (
                       <option key={b.value} value={b.value}>{b.name}</option>
                     ))}

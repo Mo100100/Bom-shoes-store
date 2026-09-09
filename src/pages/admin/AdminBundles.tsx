@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase, Bundle } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
@@ -41,36 +41,89 @@ export default function AdminBundles() {
   const [itemCounts, setItemCounts] = useState<Record<string, number>>({})
   const [products, setProducts] = useState<ProductOption[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const loadIdRef = useRef(0)
   const [editing, setEditing] = useState<Partial<Bundle> | null>(null)
-  const [itemRows, setItemRows] = useState<ItemRow[]>([])
+  // `null` means this bundle's items are not in hand: never read, or the read
+  // failed. saveItems replaces the whole list, so such a list must never reach
+  // it. Starts null rather than [] because [] is the one value that would pass
+  // the guards while carrying a delete-everything payload.
+  const [itemRows, setItemRows] = useState<ItemRow[] | null>(null)
+  const [itemsLoading, setItemsLoading] = useState(false)
+  const itemsLoadIdRef = useRef(0)
   const [saving, setSaving] = useState(false)
   const { isAdmin } = useAuth()
   const { formatPrice, currency } = useCurrency()
   const t = useT()
 
   async function load() {
+    const id = ++loadIdRef.current
     setLoading(true)
-    const [{ data: bundleRows }, { data: itemRowsData }, { data: productRows }] = await Promise.all([
-      supabase.from('bundles').select('*').order('created_at', { ascending: false }),
-      supabase.from('bundle_items').select('bundle_id'),
-      supabase.from('products').select('id, name').order('name'),
-    ])
-    setBundles(bundleRows || [])
-    setProducts(productRows || [])
-    const counts: Record<string, number> = {}
-    for (const r of itemRowsData || []) counts[r.bundle_id] = (counts[r.bundle_id] || 0) + 1
-    setItemCounts(counts)
-    setLoading(false)
+    try {
+      const [bundleRes, itemRes, productRes] = await Promise.all([
+        supabase.from('bundles').select('*').order('created_at', { ascending: false }),
+        // Grouped in SQL, one row per non-empty bundle, instead of pulling
+        // every bundle_items row in the shop to count them in a loop.
+        supabase.from('bundle_item_counts').select('bundle_id, item_count'),
+        supabase.from('products').select('id, name').order('name'),
+      ])
+      if (id !== loadIdRef.current) return
+      // A failed read must not render as "No bundles yet".
+      if (bundleRes.error || itemRes.error || productRes.error) {
+        setLoadError(true)
+        setBundles([])
+        setProducts([])
+        setItemCounts({})
+        return
+      }
+      setLoadError(false)
+      setBundles(bundleRes.data || [])
+      setProducts(productRes.data || [])
+      const counts: Record<string, number> = {}
+      for (const r of itemRes.data || []) counts[r.bundle_id] = Number(r.item_count) || 0
+      setItemCounts(counts)
+    } catch {
+      if (id !== loadIdRef.current) return
+      setLoadError(true)
+      setBundles([])
+      setProducts([])
+      setItemCounts({})
+    } finally {
+      if (id === loadIdRef.current) setLoading(false)
+    }
   }
   useEffect(() => { load() }, [])
 
   async function loadItems(bundleId: string) {
-    const { data } = await supabase.from('bundle_items').select('*').eq('bundle_id', bundleId)
-    const rows: ItemRow[] = (data || []).map(i => ({ id: i.id, product_id: i.product_id, quantity: i.quantity, _key: i.id }))
-    setItemRows(rows.length ? rows : [blankItemRow()])
+    // Held as null for the whole round trip, so the rows on screen always
+    // belong to the bundle being edited: reopening a different bundle can
+    // never leave the previous one's items sitting in the editor, ready to be
+    // saved over the new bundle. The id guard is Shop.tsx's: only the most
+    // recent call may land, so a slow response can't overwrite a newer one.
+    const id = ++itemsLoadIdRef.current
+    setItemRows(null)
+    setItemsLoading(true)
+    try {
+      const { data, error } = await supabase.from('bundle_items').select('*').eq('bundle_id', bundleId)
+      if (id !== itemsLoadIdRef.current) return
+      if (error) return
+      const rows: ItemRow[] = data.map(i => ({ id: i.id, product_id: i.product_id, quantity: i.quantity, _key: i.id }))
+      setItemRows(rows.length ? rows : [blankItemRow()])
+    } catch {
+      // postgrest-js reports a failed request as { error }, but a genuine throw
+      // must still land on the failed-read state, not a stuck spinner.
+      if (id !== itemsLoadIdRef.current) return
+      setItemRows(null)
+    } finally {
+      if (id === itemsLoadIdRef.current) setItemsLoading(false)
+    }
   }
 
   function openNew() {
+    // Drop any bundle-items read still in flight from a bundle opened before
+    // this one, so its rows can't land in the new bundle's editor.
+    itemsLoadIdRef.current++
+    setItemsLoading(false)
     setEditing({ ...EMPTY })
     setItemRows([blankItemRow()])
   }
@@ -80,13 +133,16 @@ export default function AdminBundles() {
   }
 
   function updateItemRow(key: string, field: keyof ItemRow, value: string | number) {
-    setItemRows(rows => rows.map(r => (r._key === key ? { ...r, [field]: value } : r)))
+    setItemRows(rows => rows && rows.map(r => (r._key === key ? { ...r, [field]: value } : r)))
   }
   function addItemRow() {
-    setItemRows(rows => [...rows, blankItemRow()])
+    setItemRows(rows => rows && [...rows, blankItemRow()])
   }
   function removeItemRow(key: string) {
-    setItemRows(rows => rows.filter(r => r._key !== key))
+    // Nothing is written until Save, but there is no undo and a bundle's rows
+    // are the bundle: same confirm() every other destructive control here has.
+    if (!confirm(t.adminRemoveConfirm)) return
+    setItemRows(rows => rows && rows.filter(r => r._key !== key))
   }
 
   async function toggleActive(b: Bundle) {
@@ -95,30 +151,63 @@ export default function AdminBundles() {
     load()
   }
 
-  // Full replace against the DB for this bundle: delete every existing
-  // bundle_items row, then insert the current set in one batch -- same
-  // reasoning as AdminProducts.saveVariants (a per-row update loop can race
-  // against unique/foreign-key constraints mid-loop; delete+insert sidesteps
-  // that entirely, and this is an admin-only, low-traffic screen).
-  async function saveItems(bundleId: string) {
-    const rows = itemRows
+  // Full replace against the DB for this bundle -- same reasoning as
+  // AdminProducts.saveVariants (a per-row update loop can race against
+  // unique/foreign-key constraints mid-loop; replacing the set sidesteps that
+  // entirely, and this is an admin-only, low-traffic screen).
+  //
+  // INSERT first, DELETE second. The two statements are separate round trips
+  // with no transaction between them, so the order decides what a failure in
+  // the middle leaves behind: this way a rejected insert leaves the bundle's
+  // real rows untouched, and a failed delete leaves duplicates the next save
+  // clears. Delete-then-insert left the bundle EMPTY on the live storefront
+  // whenever the insert was refused (a bad quantity, a product deleted in
+  // another tab, a dropped connection). A true transaction needs an RPC.
+  //
+  // `current` is a parameter, not state, so the caller has to hold a real list
+  // to call this at all.
+  async function saveItems(bundleId: string, current: ItemRow[]) {
+    const rows = current
       .filter(r => r.product_id) // ponytail: skip incomplete rows, don't persist rows with no product picked
       .map(row => ({
         bundle_id: bundleId,
         product_id: row.product_id,
-        quantity: Number(row.quantity) || 1,
+        quantity: Number(row.quantity),
       }))
-    const { error: delError } = await supabase.from('bundle_items').delete().eq('bundle_id', bundleId)
-    if (delError) throw delError
+    const inserted: string[] = []
     if (rows.length) {
-      const { error: insError } = await supabase.from('bundle_items').insert(rows)
+      const { data, error: insError } = await supabase.from('bundle_items').insert(rows).select('id')
       if (insError) throw insError
+      for (const r of data) inserted.push(r.id)
+      // The delete below is filtered by these ids, so an insert that reports
+      // success but returns no rows would turn it into a delete-everything and
+      // re-arm the empty-bundle bug. Today it always returns them, because
+      // bundle_items has `create policy "Public can view bundle items" ...
+      // using (true)` (20260704009000:79-81); if a future migration narrows
+      // that SELECT policy, this refuses instead of wiping the bundle.
+      if (!inserted.length) throw new Error(t.adminSaveNotApplied)
     }
+    // Everything for this bundle except what was just inserted: that is exactly
+    // the old set, including rows the admin removed in the editor.
+    let del = supabase.from('bundle_items').delete().eq('bundle_id', bundleId)
+    if (inserted.length) del = del.not('id', 'in', `(${inserted.join(',')})`)
+    const { error: delError } = await del
+    if (delError) throw delError
   }
 
   async function handleSave() {
     if (!editing) return
     if (!editing.name?.trim()) { toast.error(t.adminNameRequired); return }
+    // The items list never loaded: saving would wipe the bundle's products.
+    if (!itemRows) { toast.error(t.adminBundleItemsLoadError); return }
+    // Validate here rather than letting `check (quantity > 0)` reject the
+    // insert: the quantity input has min={1} but no <form> to enforce it, so
+    // "-1" arrives as -1, and a database refusal mid-save is the one thing
+    // saveItems cannot roll back.
+    if (itemRows.some(r => r.product_id && !(Number.isInteger(Number(r.quantity)) && Number(r.quantity) > 0))) {
+      toast.error(t.adminQuantityMustBePositive)
+      return
+    }
     setSaving(true)
     try {
       const payload = {
@@ -131,15 +220,18 @@ export default function AdminBundles() {
 
       let bundleId = editing.id
       if (bundleId) {
-        const { error } = await supabase.from('bundles').update(payload).eq('id', bundleId)
+        const { data, error } = await supabase.from('bundles').update(payload).eq('id', bundleId).select('id')
         if (error) throw error
+        // A zero-row match returns no error, so without this an RLS denial or
+        // a bundle deleted in another tab would report success.
+        if (!data.length) throw new Error(t.adminSaveNotApplied)
       } else {
         const { data, error } = await supabase.from('bundles').insert(payload).select().single()
         if (error) throw error
         bundleId = data.id
       }
 
-      await saveItems(bundleId!)
+      await saveItems(bundleId!, itemRows)
 
       toast.success(editing.id ? t.adminBundleUpdated : t.adminBundleCreated)
       setEditing(null)
@@ -162,8 +254,9 @@ export default function AdminBundles() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">{t.adminBundleCount(bundles.length)}</p>
-        {isAdmin && (
+        {/* A count and an Add button over a failed read would both be lies. */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminBundleCount(bundles.length)}</p>}
+        {isAdmin && !loadError && (
           <button
             onClick={openNew}
             className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 text-sm tracking-wider hover:bg-primary/90 cursor-pointer"
@@ -177,6 +270,17 @@ export default function AdminBundles() {
       {loading ? (
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : loadError ? (
+        <div className="py-24 text-center">
+          <p className="text-terracotta">{t.adminBundlesLoadError}</p>
+          <button
+            type="button"
+            onClick={() => load()}
+            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          >
+            {t.failedTryAgain}
+          </button>
         </div>
       ) : (
         <div className="border border-border bg-card overflow-hidden">
@@ -286,34 +390,53 @@ export default function AdminBundles() {
               <div className="pt-2 border-t border-border">
                 <div className="flex items-center justify-between mb-2 mt-4">
                   <span className="block text-xs tracking-widest uppercase text-muted-foreground">{t.adminRequiredProducts}</span>
-                  <button type="button" onClick={addItemRow} className="text-xs underline cursor-pointer">{t.adminAddRow}</button>
+                  {itemRows && <button type="button" onClick={addItemRow} className="text-xs underline cursor-pointer">{t.adminAddRow}</button>}
                 </div>
-                <div className="space-y-2">
-                  {itemRows.map(row => (
-                    <div key={row._key} className="grid grid-cols-[1fr_5rem_1.5rem] gap-2 items-center">
-                      <select
-                        value={row.product_id}
-                        onChange={e => updateItemRow(row._key, 'product_id', e.target.value)}
-                        className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none cursor-pointer"
-                      >
-                        <option value="" disabled>{t.adminSelectProduct}</option>
-                        {products.map(p => (
-                          <option key={p.id} value={p.id}>{p.name}</option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        min={1}
-                        value={row.quantity}
-                        onChange={e => updateItemRow(row._key, 'quantity', Number(e.target.value) || 1)}
-                        className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none"
-                      />
-                      <button type="button" onClick={() => removeItemRow(row._key)} className="p-1 text-red-700 cursor-pointer" aria-label={t.adminRemoveRow}>
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                {itemsLoading ? (
+                  <div className="py-6 flex justify-center">
+                    <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : itemRows === null ? (
+                  // A failed read is never shown as "no products yet": the rows
+                  // editor is replaced outright and Save stays disabled.
+                  <div className="py-6 text-center">
+                    <p className="text-sm text-terracotta">{t.adminBundleItemsLoadError}</p>
+                    <button
+                      type="button"
+                      onClick={() => editing.id && loadItems(editing.id)}
+                      className="mt-3 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+                    >
+                      {t.failedTryAgain}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {itemRows.map(row => (
+                      <div key={row._key} className="grid grid-cols-[1fr_5rem_1.5rem] gap-2 items-center">
+                        <select
+                          value={row.product_id}
+                          onChange={e => updateItemRow(row._key, 'product_id', e.target.value)}
+                          className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none cursor-pointer"
+                        >
+                          <option value="" disabled>{t.adminSelectProduct}</option>
+                          {products.map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          min={1}
+                          value={row.quantity}
+                          onChange={e => updateItemRow(row._key, 'quantity', Number(e.target.value) || 1)}
+                          className="w-full bg-transparent border border-border px-2 py-1.5 text-sm focus:border-foreground outline-none"
+                        />
+                        <button type="button" onClick={() => removeItemRow(row._key)} className="p-1 text-red-700 cursor-pointer" aria-label={t.adminRemoveRow}>
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             <div className="p-6 border-t border-border flex items-center justify-end gap-3 sticky bottom-0 bg-background">
@@ -322,7 +445,7 @@ export default function AdminBundles() {
               </button>
               <button
                 onClick={handleSave}
-                disabled={saving}
+                disabled={saving || !itemRows}
                 className="px-5 py-2.5 text-sm bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 cursor-pointer flex items-center gap-2"
               >
                 {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}

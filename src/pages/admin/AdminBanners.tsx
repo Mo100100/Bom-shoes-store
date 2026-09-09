@@ -3,6 +3,7 @@ import { supabase, HeroBanner } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useT } from '@/contexts/LanguageContext'
 import { Loader2, Plus, X, Edit2, Trash2, ArrowUp, ArrowDown } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
 
 const EMPTY: Partial<HeroBanner> = {
@@ -12,6 +13,7 @@ const EMPTY: Partial<HeroBanner> = {
 export default function AdminBanners() {
   const [banners, setBanners] = useState<HeroBanner[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [editing, setEditing] = useState<Partial<HeroBanner> | null>(null)
   const [saving, setSaving] = useState(false)
   const { isAdmin } = useAuth()
@@ -19,8 +21,11 @@ export default function AdminBanners() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('hero_banners').select('*').order('position')
-    setBanners(data || [])
+    const { data, error } = await supabase.from('hero_banners').select('*').order('position')
+    // An empty table and a failed read looked identical here, and the empty
+    // one invites the owner to re-create banners the storefront still shows.
+    setLoadError(!!error)
+    setBanners(error ? [] : data || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -44,8 +49,12 @@ export default function AdminBanners() {
   // Swaps this row with its neighbor in the currently-ordered list, then
   // reassigns 0..n-1 positions across the whole list -- simpler and more
   // robust than juggling raw position values, which can collide if rows were
-  // ever saved with duplicate/default positions. List is short and
-  // low-frequency to reorder, so re-writing every row is cheap.
+  // ever saved with duplicate/default positions.
+  //
+  // One RPC, one UPDATE statement. This used to be one UPDATE per row per
+  // arrow click inside a Promise.all over a .map (the N+1 write this project
+  // forbids), with every result discarded while the list on screen had already
+  // been redrawn in the new order.
   async function move(banner: HeroBanner, direction: -1 | 1) {
     const idx = banners.findIndex(b => b.id === banner.id)
     const swapIdx = idx + direction
@@ -53,7 +62,13 @@ export default function AdminBanners() {
     const reordered = [...banners]
     ;[reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]]
     setBanners(reordered)
-    await Promise.all(reordered.map((b, i) => supabase.from('hero_banners').update({ position: i }).eq('id', b.id)))
+    const { data, error } = await supabase.rpc('admin_reorder_positions', {
+      p_table: 'hero_banners',
+      p_ids: reordered.map(b => b.id),
+    })
+    // The RPC applies the whole list or none of it, so every failure here --
+    // refused, incomplete, or never sent -- means nothing was written.
+    if (error || !Number(data)) toast.error(t.adminSaveNotApplied)
     load()
   }
 
@@ -73,8 +88,11 @@ export default function AdminBanners() {
       }
 
       if (editing.id) {
-        const { error } = await supabase.from('hero_banners').update(payload).eq('id', editing.id)
+        const { data, error } = await supabase.from('hero_banners').update(payload).eq('id', editing.id).select('id')
         if (error) throw error
+        // A zero-row match returns no error, so without this an RLS denial or
+        // a banner deleted in another tab would report "Banner updated".
+        if (!data.length) throw new Error(t.adminSaveNotApplied)
       } else {
         const { error } = await supabase.from('hero_banners').insert(payload)
         if (error) throw error
@@ -101,7 +119,8 @@ export default function AdminBanners() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">{t.adminBannerCount(banners.length)}</p>
+        {/* A count over a failed read would read as "you have no banners". */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminBannerCount(banners.length)}</p>}
         {isAdmin && (
           <button
             onClick={openNew}
@@ -117,6 +136,8 @@ export default function AdminBanners() {
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
+      ) : loadError ? (
+        <LoadErrorPanel onRetry={load} />
       ) : (
         <div className="border border-border bg-card overflow-hidden">
           <div className="overflow-x-auto">

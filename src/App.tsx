@@ -1,6 +1,4 @@
-import { useEffect } from 'react'
 import { Routes, Route } from 'react-router-dom'
-import { supabase } from './lib/supabase'
 import Layout from './components/Layout'
 import Home from './pages/Home'
 import Shop from './pages/Shop'
@@ -28,29 +26,7 @@ import AdminSettings from './pages/admin/AdminSettings'
 import ProtectedRoute from './components/ProtectedRoute'
 import { useT } from './contexts/LanguageContext'
 
-// Singleton row id -- see supabase/migrations/20260704008000_store_settings_realtime.sql.
-const STORE_SETTINGS_ID = '00000000-0000-0000-0000-000000000001'
-
 function App() {
-  // One-time check for an admin-uploaded favicon. Leaves index.html's static
-  // /favicon.svg <link> completely untouched when there's no favicon_url set,
-  // the row is missing, or the table is unreachable.
-  useEffect(() => {
-    supabase
-      .from('store_settings')
-      .select('favicon_url')
-      .eq('id', STORE_SETTINGS_ID)
-      .maybeSingle()
-      .then(
-        ({ data }) => {
-          if (!data?.favicon_url) return
-          const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
-          if (link) link.href = data.favicon_url
-        },
-        () => {} // ponytail: unreachable table -> static favicon stays as-is
-      )
-  }, [])
-
   return (
     <Routes>
       <Route element={<Layout />}>

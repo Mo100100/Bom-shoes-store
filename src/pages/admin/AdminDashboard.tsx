@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase, Order, ProductCatalogEntry } from '@/lib/supabase'
-import { useT } from '@/contexts/LanguageContext'
+import { useLanguage, useT } from '@/contexts/LanguageContext'
+import { Lang } from '@/lib/translations'
 import { useCurrency } from '@/contexts/CurrencyContext'
+import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { Package, ShoppingBag, TrendingUp, ListOrdered, Loader2 } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
@@ -19,45 +22,38 @@ const STATUS_LABEL_MAP: Record<string, string> = {
   failed: 'statusFailed',
 }
 
-const DAY_MS = 86400000
+const CHART_DAYS = 30
+const LOW_STOCK_BELOW = 10
+const PANEL_ROWS = 5
 
-// Sum of total_amount per day for the last 30 days (UTC day buckets) -- days
-// with no orders are kept at 0 so the x-axis stays continuous. Parses via
-// Date rather than slicing the raw string so this stays correct regardless
-// of what offset Postgres happens to serialize created_at with.
-function revenueByDay(orders: Order[]): { date: string; revenue: number }[] {
-  const totals = new Map<string, number>()
-  for (const o of orders) {
-    const day = new Date(o.created_at).toISOString().slice(0, 10)
-    totals.set(day, (totals.get(day) || 0) + (Number(o.total_amount) || 0))
-  }
-  const todayUTC = Math.floor(Date.now() / DAY_MS) * DAY_MS
-  const days: { date: string; revenue: number }[] = []
-  for (let i = 29; i >= 0; i--) {
-    const key = new Date(todayUTC - i * DAY_MS).toISOString().slice(0, 10)
-    days.push({
-      date: new Date(`${key}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      revenue: totals.get(key) || 0,
-    })
-  }
-  return days
+// What admin_dashboard_summary() returns. Every figure on this screen is
+// computed in SQL now: `select('*')` on orders was capped at max_rows = 1000
+// (supabase/config.toml), so revenue, the order count, the chart and the best
+// sellers all silently stopped growing at the thousandth order, and drawing a
+// five-bar chart meant downloading every order's full `items` jsonb.
+type DashboardSummary = {
+  revenue: number
+  orders: number
+  pending: number
+  products: number
+  revenue_by_day: { date: string; revenue: number }[]
+  best_sellers: { name: string; units: number }[]
 }
 
-// Units sold per product, summed across every order's `items` jsonb array, top 5.
-function bestSellers(orders: Order[]): { name: string; units: number }[] {
-  const totals = new Map<string, { name: string; units: number }>()
-  for (const o of orders) {
-    const items = Array.isArray(o.items) ? o.items : []
-    for (const item of items) {
-      const key = item?.product_id || item?.name
-      if (!key) continue
-      const qty = Number(item.quantity) || 0
-      const existing = totals.get(key)
-      if (existing) existing.units += qty
-      else totals.set(key, { name: item.name || key, units: qty })
-    }
-  }
-  return Array.from(totals.values()).sort((a, b) => b.units - a.units).slice(0, 5)
+// Only the columns these two panels draw. Both lists are a fixed five rows,
+// and asking for the columns by name keeps an order's `items` jsonb and a
+// product's description out of the response entirely.
+type RecentOrder = Pick<Order, 'id' | 'kashier_order_id' | 'customer_name' | 'total_amount' | 'status'>
+type LowStockProduct = Pick<ProductCatalogEntry, 'id' | 'name' | 'image_url' | 'total_stock' | 'min_price' | 'max_price'>
+
+// The RPC buckets by Africa/Cairo calendar day and hands back 'YYYY-MM-DD'.
+// Built from the parts rather than parsed as a date string so the label is the
+// day the store had, whatever timezone the admin's browser is in: a bare
+// `new Date('2026-09-09')` is parsed as UTC midnight and reads as the 8th west
+// of Greenwich.
+function dayLabel(isoDay: string, lang: Lang): string {
+  const [y, m, d] = isoDay.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US', { month: 'short', day: 'numeric' })
 }
 
 export default function AdminDashboard() {
@@ -67,40 +63,69 @@ export default function AdminDashboard() {
     products: 0,
     pending: 0,
   })
-  const [recentOrders, setRecentOrders] = useState<Order[]>([])
-  const [topProducts, setTopProducts] = useState<ProductCatalogEntry[]>([])
+  const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([])
+  const [topProducts, setTopProducts] = useState<LowStockProduct[]>([])
   const [revenueChart, setRevenueChart] = useState<{ date: string; revenue: number }[]>([])
   const [sellersChart, setSellersChart] = useState<{ name: string; units: number }[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const t = useT()
+  const { lang } = useLanguage()
   const { formatPrice } = useCurrency()
+  const catalogPrice = useCatalogPrice()
 
-  useEffect(() => {
-    async function load() {
-      const [{ data: orders }, { data: products }] = await Promise.all([
-        supabase.from('orders').select('*'),
-        supabase.from('product_catalog').select('*'),
-      ])
-
-      const paidOrders = (orders || []).filter(o => o.payment_status === 'paid')
-      const revenue = paidOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0)
-      setStats({
-        revenue,
-        orders: (orders || []).length,
-        products: (products || []).length,
-        pending: (orders || []).filter(o => o.status === 'pending' || o.status === 'confirmed').length,
-      })
-      setRecentOrders((orders || []).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 5))
-      // Only genuinely low-stock products (< 10) belong under "Low Stock" --
-      // previously this sorted low-first but always sliced 5, so a fully-
-      // stocked catalog still listed 5 items as if they were low.
-      setTopProducts((products || []).filter(p => p.total_stock < 10).sort((a, b) => a.total_stock - b.total_stock).slice(0, 5))
-      setRevenueChart(revenueByDay(paidOrders))
-      setSellersChart(bestSellers(paidOrders))
+  // Three bounded requests, none of which grows with the number of orders or
+  // products: the aggregates, the five most recent orders, and the five
+  // lowest-stock products. Only genuinely low-stock products (< 10) belong
+  // under "Low Stock", filtered in SQL rather than over a downloaded catalog.
+  async function load() {
+    setLoading(true)
+    const [summaryRes, recentRes, lowStockRes] = await Promise.all([
+      supabase.rpc('admin_dashboard_summary', { p_days: CHART_DAYS }),
+      supabase
+        .from('orders')
+        .select('id, kashier_order_id, customer_name, total_amount, status')
+        .order('created_at', { ascending: false })
+        .limit(PANEL_ROWS),
+      supabase
+        .from('product_catalog')
+        .select('id, name, image_url, total_stock, min_price, max_price')
+        .lt('total_stock', LOW_STOCK_BELOW)
+        .order('total_stock')
+        .limit(PANEL_ROWS),
+    ])
+    // Zero revenue, zero orders and an empty chart are what a failed read used
+    // to draw. This is the first screen of the admin: it has to be honest or
+    // nothing behind it is trusted.
+    if (summaryRes.error || recentRes.error || lowStockRes.error) {
+      setLoadError(true)
       setLoading(false)
+      return
     }
-    load()
-  }, [])
+    setLoadError(false)
+    const summary = summaryRes.data as DashboardSummary
+
+    setStats({
+      revenue: Number(summary.revenue) || 0,
+      orders: Number(summary.orders) || 0,
+      products: Number(summary.products) || 0,
+      pending: Number(summary.pending) || 0,
+    })
+    setRecentOrders((recentRes.data || []) as RecentOrder[])
+    setTopProducts((lowStockRes.data || []) as LowStockProduct[])
+    // The raw 'YYYY-MM-DD' is kept and formatted at render time: a label baked
+    // in here would stay in the language the dashboard was loaded in.
+    setRevenueChart((summary.revenue_by_day || []).map(d => ({
+      date: d.date,
+      revenue: Number(d.revenue) || 0,
+    })))
+    setSellersChart((summary.best_sellers || []).map(s => ({
+      name: s.name,
+      units: Number(s.units) || 0,
+    })))
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
 
   function statusLabel(s: string): string {
     const key = STATUS_LABEL_MAP[s]
@@ -112,6 +137,12 @@ export default function AdminDashboard() {
       <div className="py-24 flex justify-center">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
       </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <LoadErrorPanel onRetry={load} />
     )
   }
 
@@ -158,6 +189,7 @@ export default function AdminDashboard() {
                     axisLine={{ stroke: 'hsl(var(--border))' }}
                     tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11 }}
                     interval={Math.ceil(revenueChart.length / 6)}
+                    tickFormatter={(v: string) => dayLabel(v, lang)}
                   />
                   <YAxis
                     tickLine={false}
@@ -170,6 +202,7 @@ export default function AdminDashboard() {
                     contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: 0, fontSize: 12 }}
                     labelStyle={{ color: 'hsl(var(--foreground))' }}
                     formatter={(v: number) => [formatPrice(v), t.adminRevenue]}
+                    labelFormatter={(v: string) => dayLabel(v, lang)}
                   />
                   <Line
                     type="monotone"
@@ -273,9 +306,14 @@ export default function AdminDashboard() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="truncate">{p.name}</p>
-                    <p className="text-xs text-muted-foreground">{formatPrice(Number(p.price))}</p>
+                    {/* products.price is the base price, not what the shop
+                        charges: a variant price_override made this line
+                        disagree with the product's own page. min_price and
+                        max_price on product_catalog are the authoritative
+                        pair, through the same helper the storefront uses. */}
+                    <p className="text-xs text-muted-foreground">{catalogPrice(p)}</p>
                   </div>
-                  <p className={`text-sm font-medium ${p.total_stock < 10 ? 'text-red-700' : 'text-foreground'}`}>
+                  <p className={`text-sm font-medium ${p.total_stock < LOW_STOCK_BELOW ? 'text-red-700' : 'text-foreground'}`}>
                     {t.shopOnlyLeft(p.total_stock)}
                   </p>
                 </div>

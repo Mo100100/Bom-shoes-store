@@ -157,6 +157,8 @@ export const translations = {
     // Brands
     brandsEyebrow: 'Shop by Brand',
     brandsSubtitle: 'The names behind every pair, curated for you.',
+    brandsLoadError: 'Could not load the brands. Please try again.',
+    brandsEmpty: 'No brands to show yet.',
 
     // Shop
     shopEyebrow: 'The Collection',
@@ -380,6 +382,9 @@ export const translations = {
     failedTryAgain: 'Try again',
     failedBack: 'Back to basket',
 
+    // Auth
+    authProfileLoadError: 'Could not load your account, so this page cannot check your access. You are still signed in.',
+
     // Login
     loginEyebrow: 'Returning customer',
     loginTitle: 'Welcome back',
@@ -401,6 +406,7 @@ export const translations = {
     signupCta: 'Create account',
     signupSuccess: 'Account created. Welcome to BOM Store.',
     signupError: 'Could not create account',
+    signupProfileFailed: 'Your account was created and you are signed in, but saving your details failed. Refresh the page to retry, and contact us if it keeps failing.',
     signupErrorShort: 'Password must be at least 6 characters',
     signupHave: 'Already with us?',
     signupSignIn: 'Sign in',
@@ -463,6 +469,10 @@ export const translations = {
     adminUpdateSuccess: 'Product updated',
     adminCreateSuccess: 'Product created',
     adminRequired: 'Name and price are required',
+    adminPriceInvalid: 'The price must be a number greater than zero.',
+    adminCostPriceInvalid: 'The cost price cannot be negative. Leave it empty if you do not track it.',
+    adminCategoryRequired: 'Pick a category for this product. If the list is empty, add one in Settings first.',
+    adminSlugTaken: 'Another product already uses this link. Change the link and save again.',
     adminDeleteConfirm: (name: string) => `Delete "${name}"?`,
     adminDeleted: 'Deleted',
     adminDeleteProduct: 'Delete product',
@@ -484,6 +494,10 @@ export const translations = {
     adminOrderNeverReserved: 'No payment and no stock is recorded for this order. If the money did arrive, use Mark paid, which takes the stock first. Otherwise it can only be cancelled.',
     adminPaymentNotMarkable: 'Only an order still awaiting payment can be marked paid.',
     adminFulfillFailed: 'This order could not be fulfilled, usually because a size on it is out of stock or no longer exists. Nothing was changed. The server logs say which item it was.',
+    adminNotAuthorised: 'This account is not an admin account, so the change was refused. Sign out and back in, and ask the store owner if it still refuses.',
+    adminOrderNotFound: 'This order no longer exists. It was probably removed in another tab. Reload the page.',
+    adminStatusNotSettable: 'That is not a state an order can be moved to.',
+    adminOrderNoChange: 'Nothing changed: the order is already in that state.',
     adminCancelConfirm: 'Cancel this order? Its items go back into stock and the order cannot be reopened afterwards.',
     adminMarkPaidConfirm: 'Confirm the payment for this online order? This takes its items out of stock, so only do it if the money really arrived.',
     adminCod: 'COD',
@@ -510,6 +524,9 @@ export const translations = {
     adminSavingBtn: 'Saving…',
     adminSaved: 'Saved',
     adminSaveFailed: 'Save failed',
+    adminSaveNotApplied: 'Nothing was written. Reload the page and try again.',
+    adminLoadError: 'Could not load this list. It has not been emptied, this screen just could not read it.',
+    adminCouldNotCheckUsage: 'Could not check whether any products still use this. Nothing was deleted.',
     adminDeleteFailed: 'Delete failed',
     adminUploadFailed: 'Upload failed',
 
@@ -569,6 +586,8 @@ export const translations = {
     adminCouponUpdated: 'Coupon updated',
     adminCouponCreated: 'Coupon created',
     adminCouponDeleted: 'Coupon deleted',
+    adminCouponHasRedemptions: (count: number) => `This coupon was used on ${count} order(s). Those orders still point at it, so it cannot be deleted. Switch it off instead: it stops applying at checkout and its redemption history stays intact.`,
+    adminCouponOnOrders: 'This coupon is attached to at least one order, so it cannot be deleted. Switch it off instead.',
     adminThisAutoPromotion: 'this auto-promotion',
     adminCouponDeleteConfirm: (code: string) => `Delete ${code}?`,
     adminDiscountPercentOff: (n: number) => `${n}% off`,
@@ -576,18 +595,31 @@ export const translations = {
     adminDiscountBxgyOff: (buy: number, get: number, percent: number) => `Buy ${buy} Get ${get} ${percent}% off`,
     adminNoDateLimit: 'No date limit',
     adminAny: 'Any',
+    // The arrow runs start -> end, so it has to follow the reading direction:
+    // U+2192 is not a mirrored character, so an RTL paragraph leaves it
+    // pointing from the end date back at the start date. The Arabic string
+    // uses the leftwards arrow instead (same intent as the `flip-rtl` class
+    // does for icon components).
+    adminDateRange: (start: string, end: string) => `${start} → ${end}`,
 
     // Admin - bundles
     adminAddBundle: 'Add bundle',
     adminBundleCount: (n: number) => `${n} ${n === 1 ? 'bundle' : 'bundles'}`,
     adminNoBundles: 'No bundles yet',
+    adminBundlesLoadError: 'Could not load bundles. Please try again.',
     adminEditBundle: 'Edit bundle',
     adminNewBundle: 'New bundle',
     adminDeleteBundle: 'Delete bundle',
     adminRequiredProducts: 'Required products',
+    adminBundleItemsLoadError: 'Could not load this bundle\'s products. Saving is disabled so they are not deleted.',
     adminAddRow: '+ Add row',
+    adminQuantityMustBePositive: 'Quantity must be a whole number of 1 or more.',
     adminSelectProduct: 'Select a product',
     adminRemoveRow: 'Remove row',
+    // Shared by five remove buttons whose own labels call the thing a row, a
+    // badge or a link, so the dialog names no noun at all rather than
+    // contradicting the button the admin just clicked.
+    adminRemoveConfirm: 'Remove this? There is no undo, though nothing is written until you save.',
     adminNameRequired: 'Name is required',
     adminBundleUpdated: 'Bundle updated',
     adminBundleCreated: 'Bundle created',
@@ -613,6 +645,8 @@ export const translations = {
     adminUploading: 'Uploading…',
     adminUploadLabel: (label: string) => `Upload ${label}`,
     adminCurrentLabel: (label: string) => `Current ${label}`,
+    adminLogoTooTall: 'This logo is close to square, or taller than it is wide, so the header can only show it small. Upload a wide version, about 3 times wider than it is tall, to fill the space.',
+    adminLogoTooWide: 'This logo is far wider than it is tall, so the header scales it down to fit and it ends up small. A shape closer to 3 times wider than tall works best.',
     adminCategories: 'Categories',
     adminEnglishName: 'English name',
     adminDeleteCategory: 'Delete category',
@@ -641,6 +675,8 @@ export const translations = {
     adminShipping: 'Shipping by governorate',
     adminShippingHint: 'Set the delivery price for each governorate. The customer picks their governorate at checkout and pays that amount. Set 0 for free delivery there.',
     adminShippingEmpty: 'No governorates yet. Add them below.',
+    adminSettingsAssetsLoadError: 'Could not read the current logo and favicon. They have not been removed, this screen just could not load them.',
+    adminSettingsContentLoadError: 'Could not load the saved settings below. They are showing defaults, so saving is disabled until they load.',
     adminRestoreGovernorates: 'Add all 27 governorates',
     adminBrands: 'Brands',
     adminBrandsHint: 'Add the brands you carry. Upload a logo (WebP with a transparent background looks best) to show it in the homepage brand bar instead of the name.',
@@ -652,6 +688,10 @@ export const translations = {
     adminBrandDeleted: 'Brand deleted',
     adminBrandNameRequired: 'Brand name is required',
     adminCouldNotAddBrand: 'Could not add brand',
+    adminNameTooShort: (min: number) => `Name must be at least ${min} characters`,
+    adminNameTooLong: (max: number) => `Name must be ${max} characters or less`,
+    adminNameDuplicate: 'That name is already in the list',
+    adminBrandKeyTitle: 'Product key. Fixed when the brand was created, so renaming the brand never disconnects its products.',
     adminBrandInUse: (count: number) => `${count} product(s) still use this brand`,
     adminUploadLogo: 'Upload logo',
     adminRemoveLogo: 'Remove logo',
@@ -664,15 +704,22 @@ export const translations = {
     adminRoleCustomer: 'customer',
     adminRoleAdmin: 'admin',
     adminCantChangeOwnRole: "You can't change your own role here",
+    adminLastAdminConfirm: 'This is the only other admin. Take their access away and you are the only admin left. Continue?',
+    adminNoUsers: 'No users match this search',
 
     // Admin - count nouns
     adminUsersCount: (n: number) => `${n} ${n === 1 ? 'user' : 'users'}`,
+    // PostgREST caps every response at max_rows (supabase/config.toml), so a
+    // list longer than that arrives silently short. Say so rather than letting
+    // the missing rows read as rows that do not exist.
+    adminListTruncated: (shown: number, total: number) => `Showing the newest ${shown} of ${total}. The rest are not on this screen.`,
     adminOrdersCount: (n: number) => `${n} ${n === 1 ? 'order' : 'orders'}`,
     adminNoProducts: 'No products yet',
 
     // Admin - product form (extra fields)
     adminBrandField: 'Brand',
     adminBrandNoneOption: '- None (BOM Store own) -',
+    adminOptionNotInList: (value: string) => `${value} (no longer in the list)`,
     adminCostPrice: 'Cost Price',
     adminMaterials: 'Materials',
     adminWeightGrams: 'Weight (grams)',
@@ -699,6 +746,7 @@ export const translations = {
     adminDeleteImage: 'Delete image',
 
     // Admin - homepage tabs
+    adminHomepageLoadError: 'Could not load the homepage content. Nothing can be saved until it loads.',
     adminHeroTab: 'Hero',
     adminShowcaseTab: 'Showcase',
     adminCuratedTab: 'Curated',
@@ -767,6 +815,7 @@ export const translations = {
     adminTestimonialsCount: (n: number) => `${n} ${n === 1 ? 'testimonial' : 'testimonials'}`,
     adminAddTestimonial: 'Add testimonial',
     adminEditTestimonial: 'Edit testimonial',
+    adminDeleteTestimonial: 'Delete testimonial',
     adminNewTestimonial: 'New testimonial',
     adminNoTestimonials: 'No testimonials yet',
     adminColOrder: 'Order',
@@ -972,6 +1021,8 @@ export const translations = {
     // Brands
     brandsEyebrow: 'تسوق حسب الماركة',
     brandsSubtitle: 'الأسماء وراء كل زوج، مختارة لك.',
+    brandsLoadError: 'تعذر تحميل الماركات. يرجى المحاولة مرة أخرى.',
+    brandsEmpty: 'لا توجد ماركات لعرضها بعد.',
 
     // Shop
     shopEyebrow: 'المجموعة',
@@ -1184,6 +1235,9 @@ export const translations = {
     failedTryAgain: 'حاول مرة أخرى',
     failedBack: 'العودة إلى السلة',
 
+    // Auth
+    authProfileLoadError: 'تعذر تحميل حسابك، لذا لا تستطيع هذه الصفحة التحقق من صلاحيتك. ما زلت مسجل الدخول.',
+
     // Login
     loginEyebrow: 'عميل عائد',
     loginTitle: 'مرحبا بعودتك',
@@ -1205,6 +1259,7 @@ export const translations = {
     signupCta: 'إنشاء حساب',
     signupSuccess: 'تم إنشاؤ الحساب. مرحبا بك في BOM Store.',
     signupError: 'تعذر إنشاؤ الحساب',
+    signupProfileFailed: 'تم إنشاء حسابك وتم تسجيل دخولك، لكن تعذر حفظ بياناتك. حدث الصفحة للمحاولة مرة أخرى، وتواصل معنا إذا استمرت المشكلة.',
     signupErrorShort: 'يجب ألا تقل كلمة المرور عن 6 أحرف',
     signupHave: 'لديك حساب بعد؟',
     signupSignIn: 'تسجيل الدخول',
@@ -1267,6 +1322,10 @@ export const translations = {
     adminUpdateSuccess: 'تم تحديث المنتج',
     adminCreateSuccess: 'تم إنشاؤ المنتج',
     adminRequired: 'الاسم و السعر مطلوبان',
+    adminPriceInvalid: 'السعر يجب أن يكون رقما أكبر من صفر.',
+    adminCostPriceInvalid: 'سعر التكلفة لا يمكن أن يكون بالسالب. اتركه فارغا إذا كنت لا تسجله.',
+    adminCategoryRequired: 'اختر تصنيفا لهذا المنتج. إذا كانت القائمة فارغة فأضف تصنيفا من الإعدادات أولا.',
+    adminSlugTaken: 'هناك منتج آخر يستخدم هذا الرابط. غير الرابط ثم احفظ مرة أخرى.',
     adminDeleteConfirm: (name: string) => `حذف "${name}"؟`,
     adminDeleted: 'تم الحذف',
     adminDeleteProduct: 'حذف المنتج',
@@ -1288,6 +1347,10 @@ export const translations = {
     adminOrderNeverReserved: 'لا يوجد دفع ولا مخزون محجوز مسجل لهذا الطلب. إذا وصل المبلغ فعلا فاستخدم "تحديد كمدفوع" وهو يخصم المخزون أولا، وإلا فلا يمكن إلا إلغاؤه.',
     adminPaymentNotMarkable: 'يمكن تحديد الدفع فقط لطلب ما زال بانتظار التحصيل.',
     adminFulfillFailed: 'تعذر تنفيذ هذا الطلب، غالبا لأن أحد المقاسات نفد أو لم يعد موجودا. لم يتغير أي شيء. سجلات الخادم توضح أي قطعة كانت السبب.',
+    adminNotAuthorised: 'هذا الحساب ليس حساب مسؤول، لذا تم رفض التغيير. سجل الخروج ثم الدخول مرة أخرى، وإذا استمر الرفض فاسأل صاحب المتجر.',
+    adminOrderNotFound: 'هذا الطلب لم يعد موجودا. غالبا تم حذفه من نافذة أخرى. أعد تحميل الصفحة.',
+    adminStatusNotSettable: 'هذه ليست حالة يمكن نقل الطلب إليها.',
+    adminOrderNoChange: 'لم يتغير شيء: الطلب في هذه الحالة بالفعل.',
     adminCancelConfirm: 'إلغاء هذا الطلب؟ سترجع قطعه إلى المخزون ولا يمكن إعادة فتحه بعد ذلك.',
     adminMarkPaidConfirm: 'تأكيد دفع هذا الطلب الإلكتروني؟ سيخصم قطعه من المخزون، لذا لا تفعل ذلك إلا إذا وصل المبلغ فعلا.',
     adminCod: 'عند الاستلام',
@@ -1314,6 +1377,9 @@ export const translations = {
     adminSavingBtn: 'جار الحفظ…',
     adminSaved: 'تم الحفظ',
     adminSaveFailed: 'فشل الحفظ',
+    adminSaveNotApplied: 'لم يتم حفظ أي شيء. أعد تحميل الصفحة وحاول مرة أخرى.',
+    adminLoadError: 'تعذر تحميل هذه القائمة. لم يتم حذف محتواها، هذه الشاشة فقط لم تستطع قراءتها.',
+    adminCouldNotCheckUsage: 'تعذر التحقق مما إذا كانت هناك منتجات ما زالت تستخدم هذا. لم يتم حذف أي شيء.',
     adminDeleteFailed: 'فشل الحذف',
     adminUploadFailed: 'فشل الرفع',
 
@@ -1373,6 +1439,8 @@ export const translations = {
     adminCouponUpdated: 'تم تحديث الكوبون',
     adminCouponCreated: 'تم إنشاء الكوبون',
     adminCouponDeleted: 'تم حذف الكوبون',
+    adminCouponHasRedemptions: (count: number) => `تم استخدام هذا الكوبون في ${count} طلب. هذه الطلبات ما زالت مرتبطة به، لذا لا يمكن حذفه. أوقف تفعيله بدلا من ذلك: سيتوقف عن العمل عند الدفع ويبقى سجل الاستخدام كما هو.`,
+    adminCouponOnOrders: 'هذا الكوبون مرتبط بطلب واحد على الأقل، لذا لا يمكن حذفه. أوقف تفعيله بدلا من ذلك.',
     adminThisAutoPromotion: 'هذا العرض التلقائي',
     adminCouponDeleteConfirm: (code: string) => `حذف ${code}؟`,
     adminDiscountPercentOff: (n: number) => `خصم ${n}%`,
@@ -1380,18 +1448,23 @@ export const translations = {
     adminDiscountBxgyOff: (buy: number, get: number, percent: number) => `اشتر ${buy} واحصل على ${get} بخصم ${percent}%`,
     adminNoDateLimit: 'بلا حد زمني',
     adminAny: 'أي وقت',
+    adminDateRange: (start: string, end: string) => `${start} ← ${end}`,
 
     // Admin - bundles
     adminAddBundle: 'إضافة حزمة',
     adminBundleCount: (n: number) => `${n} ${n === 1 ? 'حزمة' : 'حزم'}`,
     adminNoBundles: 'لا حزم بعد',
+    adminBundlesLoadError: 'تعذر تحميل الحزم. يرجى المحاولة مرة أخرى.',
     adminEditBundle: 'تعديل الحزمة',
     adminNewBundle: 'حزمة جديدة',
     adminDeleteBundle: 'حذف الحزمة',
     adminRequiredProducts: 'المنتجات المطلوبة',
+    adminBundleItemsLoadError: 'تعذر تحميل منتجات هذه الحزمة. تم تعطيل الحفظ حتى لا تحذف.',
     adminAddRow: '+ إضافة صف',
+    adminQuantityMustBePositive: 'يجب أن تكون الكمية رقما صحيحا لا يقل عن 1.',
     adminSelectProduct: 'اختر منتجا',
     adminRemoveRow: 'إزالة الصف',
+    adminRemoveConfirm: 'إزالة هذا؟ لا يمكن التراجع، مع أن شيئا لا يحفظ قبل الضغط على حفظ.',
     adminNameRequired: 'الاسم مطلوب',
     adminBundleUpdated: 'تم تحديث الحزمة',
     adminBundleCreated: 'تم إنشاء الحزمة',
@@ -1417,6 +1490,8 @@ export const translations = {
     adminUploading: 'جار الرفع…',
     adminUploadLabel: (label: string) => `رفع ${label}`,
     adminCurrentLabel: (label: string) => `الحالي ${label}`,
+    adminLogoTooTall: 'هذا الشعار قريب من المربع أو أطول من عرضه، لذلك يظهر في رأس الصفحة صغيرًا فقط. ارفع نسخة عريضة يكون عرضها حوالي 3 أضعاف ارتفاعها لملء المساحة.',
+    adminLogoTooWide: 'هذا الشعار أعرض بكثير من ارتفاعه، لذلك يصغّره رأس الصفحة ليناسب المساحة فيظهر صغيرًا. أفضل شكل هو ما يقارب 3 أضعاف العرض مقابل الارتفاع.',
     adminCategories: 'الفئات',
     adminEnglishName: 'الاسم بالإنجليزية',
     adminDeleteCategory: 'حذف الفئة',
@@ -1445,6 +1520,8 @@ export const translations = {
     adminShipping: 'الشحن حسب المحافظة',
     adminShippingHint: 'حدّد سعر التوصيل لكل محافظة. يختار العميل محافظته عند الدفع ويدفع هذا المبلغ. اجعله 0 للتوصيل المجاني هناك.',
     adminShippingEmpty: 'لا توجد محافظات بعد. أضفها من الأسفل.',
+    adminSettingsAssetsLoadError: 'تعذر قراءة الشعار وأيقونة الموقع الحاليين. لم يتم حذفهما، هذه الشاشة فقط لم تستطع تحميلهما.',
+    adminSettingsContentLoadError: 'تعذر تحميل الإعدادات المحفوظة بالأسفل. المعروض هو القيم الافتراضية، لذا تم تعطيل الحفظ حتى يتم التحميل.',
     adminRestoreGovernorates: 'إضافة كل المحافظات الـ27',
     adminBrands: 'الماركات',
     adminBrandsHint: 'أضف الماركات التي تبيعها. ارفع شعارًا (بصيغة WebP بخلفية شفافة يظهر بأفضل شكل) ليظهر في شريط الماركات بالصفحة الرئيسية بدلًا من الاسم.',
@@ -1456,6 +1533,10 @@ export const translations = {
     adminBrandDeleted: 'تم حذف الماركة',
     adminBrandNameRequired: 'اسم الماركة مطلوب',
     adminCouldNotAddBrand: 'تعذرت إضافة الماركة',
+    adminNameTooShort: (min: number) => `الاسم يجب ألا يقل عن ${min} حرفين`,
+    adminNameTooLong: (max: number) => `الاسم يجب ألا يزيد عن ${max} حرفًا`,
+    adminNameDuplicate: 'هذا الاسم موجود بالفعل في القائمة',
+    adminBrandKeyTitle: 'مُعرّف المنتجات. يُثبَّت عند إنشاء الماركة، لذا تغيير الاسم لا يفصل منتجاتها أبدًا.',
     adminBrandInUse: (count: number) => `${count} منتج ما زال يستخدم هذه الماركة`,
     adminUploadLogo: 'رفع الشعار',
     adminRemoveLogo: 'إزالة الشعار',
@@ -1468,15 +1549,19 @@ export const translations = {
     adminRoleCustomer: 'عميل',
     adminRoleAdmin: 'مسؤول',
     adminCantChangeOwnRole: 'لا يمكنك تغيير دورك من هنا',
+    adminLastAdminConfirm: 'هذا هو المسؤول الآخر الوحيد. إذا سحبت صلاحيته ستصبح المسؤول الوحيد. هل تريد المتابعة؟',
+    adminNoUsers: 'لا يوجد مستخدمون مطابقون لهذا البحث',
 
     // Admin - count nouns
     adminUsersCount: (n: number) => `${n} ${n === 1 ? 'مستخدم واحد' : 'مستخدم'}`,
+    adminListTruncated: (shown: number, total: number) => `يتم عرض أحدث ${shown} من إجمالي ${total}. الباقي غير معروض في هذه الشاشة.`,
     adminOrdersCount: (n: number) => `${n} ${n === 1 ? 'طلب واحد' : 'طلب'}`,
     adminNoProducts: 'لا منتجات بعد',
 
     // Admin - product form (extra fields)
     adminBrandField: 'الماركة',
     adminBrandNoneOption: '- بلا ماركة (منتج BOM Store) -',
+    adminOptionNotInList: (value: string) => `${value} (لم يعد موجودًا في القائمة)`,
     adminCostPrice: 'سعر التكلفة',
     adminMaterials: 'الخامات',
     adminWeightGrams: 'الوزن (جرام)',
@@ -1503,6 +1588,7 @@ export const translations = {
     adminDeleteImage: 'حذف الصورة',
 
     // Admin - homepage tabs
+    adminHomepageLoadError: 'تعذر تحميل محتوى الصفحة الرئيسية. لا يمكن الحفظ حتى يتم التحميل.',
     adminHeroTab: 'الواجهة',
     adminShowcaseTab: 'العرض',
     adminCuratedTab: 'المختارة',
@@ -1571,6 +1657,7 @@ export const translations = {
     adminTestimonialsCount: (n: number) => `${n} ${n === 1 ? 'رأي واحد' : 'آراء'}`,
     adminAddTestimonial: 'إضافة رأي',
     adminEditTestimonial: 'تعديل الرأي',
+    adminDeleteTestimonial: 'حذف الرأي',
     adminNewTestimonial: 'رأي جديد',
     adminNoTestimonials: 'لا آراء بعد',
     adminColOrder: 'الترتيب',

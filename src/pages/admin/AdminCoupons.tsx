@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 import { supabase, Coupon } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
-import { useT } from '@/contexts/LanguageContext'
+import { useLanguage, useT } from '@/contexts/LanguageContext'
+import { Lang } from '@/lib/translations'
 import { Loader2, Plus, X, Edit2, Trash2 } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
 import { useCategories } from '@/contexts/CategoriesContext'
 
@@ -55,12 +57,14 @@ function discountLabel(c: Coupon, formatPrice: (n: number) => string, t: Transla
   return t.adminFreeShipping
 }
 
-function dateRangeLabel(c: Coupon, t: Translations): string {
-  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null)
+function dateRangeLabel(c: Coupon, t: Translations, lang: Lang): string {
+  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null)
   const start = fmt(c.starts_at)
   const end = fmt(c.ends_at)
   if (!start && !end) return t.adminNoDateLimit
-  return `${start || t.adminAny} → ${end || t.adminAny}`
+  // The arrow itself is part of the translated string: it has to point the way
+  // the language reads.
+  return t.adminDateRange(start || t.adminAny, end || t.adminAny)
 }
 
 export default function AdminCoupons() {
@@ -68,25 +72,36 @@ export default function AdminCoupons() {
   const [usageCounts, setUsageCounts] = useState<Record<string, number>>({})
   const [products, setProducts] = useState<ProductOption[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [editing, setEditing] = useState<Partial<Coupon> | null>(null)
   const [saving, setSaving] = useState(false)
   const { isAdmin } = useAuth()
   const { formatPrice, currency } = useCurrency()
   const { categories } = useCategories()
   const t = useT()
+  const { lang } = useLanguage()
   const CATEGORY_VALUES = categories.map(c => c.value)
 
   async function load() {
     setLoading(true)
-    const [{ data: couponRows }, { data: redemptions }, { data: productRows }] = await Promise.all([
+    const [couponRes, redemptionRes, productRes] = await Promise.all([
       supabase.from('coupons').select('*').order('created_at', { ascending: false }),
-      supabase.from('coupon_redemptions').select('coupon_id'),
+      // Grouped in SQL. This used to download every redemption row in the shop
+      // and tally them in a loop, capped at max_rows = 1000, so a busy code
+      // could read as barely used here while the checkout was already
+      // refusing it. The view is one row per redeemed coupon, so its size
+      // follows the coupon list rather than the order book.
+      supabase.from('coupon_redemption_counts').select('coupon_id, redemption_count'),
       supabase.from('products').select('id, name').order('name'),
     ])
-    setCoupons(couponRows || [])
-    setProducts(productRows || [])
+    // "No coupons yet" over live discount codes invites the owner to create a
+    // second SAVE20 that then stacks with the first one.
+    const failed = !!(couponRes.error || redemptionRes.error || productRes.error)
+    setLoadError(failed)
+    setCoupons(failed ? [] : couponRes.data || [])
+    setProducts(failed ? [] : productRes.data || [])
     const counts: Record<string, number> = {}
-    for (const r of redemptions || []) counts[r.coupon_id] = (counts[r.coupon_id] || 0) + 1
+    if (!failed) for (const r of redemptionRes.data || []) counts[r.coupon_id] = Number(r.redemption_count) || 0
     setUsageCounts(counts)
     setLoading(false)
   }
@@ -100,8 +115,11 @@ export default function AdminCoupons() {
   }
 
   async function toggleActive(c: Coupon) {
-    const { error } = await supabase.from('coupons').update({ active: !c.active }).eq('id', c.id)
+    const { data, error } = await supabase.from('coupons').update({ active: !c.active }).eq('id', c.id).select('id')
     if (error) { toast.error(error.message); return }
+    // A zero-row update returns no error: the checkbox would flip to off while
+    // the coupon carried on discounting every order.
+    if (!data.length) { toast.error(t.adminSaveNotApplied); return }
     load()
   }
 
@@ -139,8 +157,11 @@ export default function AdminCoupons() {
       }
 
       if (editing.id) {
-        const { error } = await supabase.from('coupons').update(payload).eq('id', editing.id)
+        const { data, error } = await supabase.from('coupons').update(payload).eq('id', editing.id).select('id')
         if (error) throw error
+        // A zero-row match returns no error, so without this a tightened limit
+        // or an end date that never landed would still toast "Coupon updated".
+        if (!data.length) throw new Error(t.adminSaveNotApplied)
       } else {
         const { error } = await supabase.from('coupons').insert(payload)
         if (error) throw error
@@ -156,10 +177,29 @@ export default function AdminCoupons() {
     }
   }
 
+  // Deleting a redeemed coupon is money history, not a list entry.
+  // coupon_redemptions.coupon_id cascades on delete, but the redemption row
+  // only exists alongside its order (coupon_redemptions.order_id cascades from
+  // orders), and orders.coupon_id has NO delete action. So a coupon any order
+  // still points at is refused by the database rather than cascaded away: the
+  // history is safe, and what the owner used to get was the raw English
+  // constraint message. Both refusals are stated up front here instead.
   async function handleDelete(c: Coupon) {
+    const used = usageCounts[c.id] || 0
+    // The counts come from the same read that renders this row, and a failed
+    // read renders LoadErrorPanel instead of the table, so this is never a
+    // guess at zero.
+    if (used > 0) { toast.error(t.adminCouponHasRedemptions(used)); return }
     if (!confirm(t.adminCouponDeleteConfirm(c.code || t.adminThisAutoPromotion))) return
-    const { error } = await supabase.from('coupons').delete().eq('id', c.id)
+    const { data, error } = await supabase.from('coupons').delete().eq('id', c.id).select('id')
+    // An order can carry coupon_id without a redemption row (it was placed
+    // but never paid, so fulfill_order never recorded one), so the foreign key
+    // still refuses some deletes the redemption count allowed.
+    if (error?.code === '23503') { toast.error(t.adminCouponOnOrders); return }
     if (error) { toast.error(error.message); return }
+    // A zero-row delete returns no error: an RLS denial would otherwise toast
+    // "Coupon deleted" over a coupon the checkout is still applying.
+    if (!data.length) { toast.error(t.adminDeleteFailed); return }
     toast.success(t.adminCouponDeleted)
     load()
   }
@@ -176,7 +216,8 @@ export default function AdminCoupons() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">{t.adminCouponCount(coupons.length)}</p>
+        {/* A count over a failed read would read as "you have no coupons". */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminCouponCount(coupons.length)}</p>}
         {isAdmin && (
           <button
             onClick={openNew}
@@ -192,6 +233,8 @@ export default function AdminCoupons() {
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
+      ) : loadError ? (
+        <LoadErrorPanel onRetry={load} />
       ) : (
         <div className="border border-border bg-card overflow-hidden">
           <div className="overflow-x-auto">
@@ -228,7 +271,7 @@ export default function AdminCoupons() {
                     <td className="px-4 py-3">
                       {usageCounts[c.id] || 0} / {c.usage_limit ?? '∞'}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{dateRangeLabel(c, t)}</td>
+                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{dateRangeLabel(c, t, lang)}</td>
                     <td className="px-4 py-3 text-end">
                       <button onClick={() => openEdit(c)} className="p-1.5 hover:bg-muted cursor-pointer" aria-label={t.adminEditCoupon}>
                         <Edit2 className="w-3.5 h-3.5" />

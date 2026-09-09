@@ -1,36 +1,29 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { cn } from '@/lib/utils'
-import { supabase } from '@/lib/supabase'
+import { useStoreSettings } from '@/contexts/StoreSettingsContext'
 
 interface LogoProps {
   size?: number
   className?: string
   showText?: boolean
+  /**
+   * Also cap the uploaded logo's width at a share of the viewport. For the
+   * sticky header only, where the logo shares a 375px row with the menu button
+   * and the icon group. The footer and the mobile drawer have the width to
+   * spare, so they leave it off and show the mark at full size.
+   */
+  capToViewport?: boolean
 }
 
-// Singleton row id -- see supabase/migrations/20260704008000_store_settings_realtime.sql.
-const STORE_SETTINGS_ID = '00000000-0000-0000-0000-000000000001'
-
-// One-time fetch of the admin-configured logo URL, if any. Stays null (and
-// the SVG monogram below keeps rendering) on a missing row, a fetch error,
-// or an unreachable table -- this must never blank/break the header logo.
-function useStoreLogoUrl() {
-  const [url, setUrl] = useState<string | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    supabase
-      .from('store_settings')
-      .select('logo_url')
-      .eq('id', STORE_SETTINGS_ID)
-      .maybeSingle()
-      .then(
-        ({ data }) => { if (!cancelled) setUrl(data?.logo_url || null) },
-        () => {} // ponytail: leave url null, SVG fallback covers it
-      )
-    return () => { cancelled = true }
-  }, [])
-  return url
-}
+// An uploaded logo is constrained by HEIGHT and keeps its natural width, which
+// is what a real (wide) logo needs -- forcing it into a square box drew a
+// 600x200 mark at 56x19 in a 56px header slot. The width is capped at this
+// multiple of the height so a very wide mark cannot push the header nav out of
+// place; object-contain letterboxes anything wider than the cap.
+const MAX_LOGO_ASPECT = 3
+// The extra cap capToViewport asks for: a 375px header has about 110px to
+// spare next to the menu button and the icon group.
+const MAX_LOGO_VIEWPORT_WIDTH = '30vw'
 
 /**
  * BOM Store monogram logo.
@@ -38,10 +31,15 @@ function useStoreLogoUrl() {
  * Renders the admin-uploaded logo (store_settings.logo_url) if one is set,
  * otherwise falls back to this hardcoded SVG monogram.
  */
-export default function Logo({ size = 64, className, showText = true }: LogoProps) {
-  const fetchedLogoUrl = useStoreLogoUrl()
-  const [imgFailed, setImgFailed] = useState(false)
-  const logoUrl = imgFailed ? null : fetchedLogoUrl
+export default function Logo({ size = 64, className, showText = true, capToViewport = false }: LogoProps) {
+  const { logoUrl: fetchedLogoUrl } = useStoreSettings()
+  // Keyed by URL, not a bare boolean: the admin can now replace the logo
+  // without a page reload, so a broken upload must not keep the monogram
+  // showing once a working one lands.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const logoUrl = fetchedLogoUrl === failedUrl ? null : fetchedLogoUrl
+  const aspectCap = `${size * MAX_LOGO_ASPECT}px`
+  const maxLogoWidth = capToViewport ? `min(${aspectCap}, ${MAX_LOGO_VIEWPORT_WIDTH})` : aspectCap
   const r = size * 0.45
   const cx = size / 2
   const cy = size / 2
@@ -57,15 +55,16 @@ export default function Logo({ size = 64, className, showText = true }: LogoProp
 
   if (logoUrl) {
     return (
-      <div className={cn('flex flex-col items-center select-none', className)} style={{ width: size }}>
+      // No fixed width here, unlike the monogram below: the box is as wide as
+      // the logo actually is, so the flex header (and its RTL mirror) lays out
+      // around the real mark instead of around 54% of empty space.
+      <div className={cn('flex flex-col items-center select-none', className)}>
         <img
           src={logoUrl}
           alt="BOM Store logo"
-          width={size}
-          height={size}
-          style={{ width: size, height: size }}
-          className="object-contain"
-          onError={() => setImgFailed(true)}
+          style={{ height: size, maxWidth: maxLogoWidth }}
+          className="w-auto object-contain"
+          onError={() => setFailedUrl(logoUrl)}
         />
         {text}
       </div>

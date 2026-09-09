@@ -1,8 +1,13 @@
-import { useEffect, useState } from 'react'
-import { supabase, StoreSettings } from '@/lib/supabase'
+import { useEffect, useRef, useState } from 'react'
+import { supabase } from '@/lib/supabase'
 import { useCategories } from '@/contexts/CategoriesContext'
 import { useBrands } from '@/contexts/BrandsContext'
+import { useStoreSettings } from '@/contexts/StoreSettingsContext'
 import { compressImage } from '@/lib/compressImage'
+import {
+  validateBrandName, MIN_BRAND_NAME_LENGTH, MAX_BRAND_NAME_LENGTH,
+  type BrandNameError,
+} from '@/lib/brands'
 import {
   DEFAULT_CHECKOUT_CONFIG, EGYPT_GOVERNORATES,
   type CheckoutConfig, type ShippingRegion,
@@ -18,7 +23,65 @@ type Translations = ReturnType<typeof useT>
 const STORE_SETTINGS_ID = '00000000-0000-0000-0000-000000000001'
 
 type UploadField = 'logo_url' | 'favicon_url'
-type SettingsState = Pick<StoreSettings, 'logo_url' | 'favicon_url'>
+
+// Brands and categories share one rule because they share one shape: the name
+// typed here becomes `value`, the primary key products.brand / products.category
+// store as free text, and nothing can change it afterwards. One unvalidated
+// keystroke is how the live row value='ل' / name='Burberry' was created.
+function nameErrorMessage(error: BrandNameError, t: Translations): string {
+  if (error === 'required') return t.adminBrandNameRequired
+  if (error === 'tooShort') return t.adminNameTooShort(MIN_BRAND_NAME_LENGTH)
+  if (error === 'tooLong') return t.adminNameTooLong(MAX_BRAND_NAME_LENGTH)
+  return t.adminNameDuplicate
+}
+
+// Returns the ordered key list with two entries swapped, or null when the move
+// runs off the end. Positions are rewritten from this list in one statement,
+// so the list is the order rather than a pair of numbers to trade.
+function swapAt(values: string[], a: number, b: number): string[] | null {
+  if (b < 0 || b >= values.length) return null
+  const next = [...values]
+  const held = next[a]
+  next[a] = next[b]
+  next[b] = held
+  return next
+}
+
+// A header logo is a wide mark. Logo.tsx keeps the uploaded aspect ratio, so a
+// portrait or near-square image is drawn small however tall the header is: say
+// that at upload time rather than let the owner conclude the upload never went
+// through. Never blocks the upload -- the owner may have a reason.
+//
+// The lower bound is 1.5 rather than 1 because the header gives a logo three
+// times its height in width (Logo.tsx MAX_LOGO_ASPECT), so anything below 1.5:1
+// uses less than half the space it is offered -- a 1.05:1 mark draws 59px wide
+// in a 168px slot and looks exactly as unchanged as the 277x600 one did.
+const MIN_HEADER_ASPECT = 1.5
+const MAX_HEADER_ASPECT = 6
+
+async function warnIfNotHeaderShaped(file: File, t: Translations) {
+  let aspect: number
+  try {
+    const bitmap = await createImageBitmap(file)
+    aspect = bitmap.width / bitmap.height
+    bitmap.close?.()
+  } catch {
+    return // undecodable here (SVG in some browsers): nothing to judge
+  }
+  if (aspect < MIN_HEADER_ASPECT) toast.warning(t.adminLogoTooTall, { duration: 12000 })
+  else if (aspect > MAX_HEADER_ASPECT) toast.warning(t.adminLogoTooWide, { duration: 12000 })
+}
+
+// Delete the object a new upload replaces, the way product images are cleaned
+// up (AdminProducts.handleDeleteImage). Non-fatal by design: the row already
+// points at the new file, so a failed delete costs a few KB of the free tier,
+// never a broken logo. Only ever called once the UPDATE is confirmed written.
+async function removeStoreAsset(url: string | null) {
+  const path = url?.split('/store-assets/')[1]
+  if (!path) return
+  const { error } = await supabase.storage.from('store-assets').remove([decodeURIComponent(path)])
+  if (error) console.warn('store-assets cleanup failed', error.message)
+}
 
 type WhatsAppContent = { phone: string; message_en: string; message_ar: string }
 type ContactContentState = {
@@ -40,7 +103,6 @@ const EMPTY_CONTACT: ContactContentState = {
 }
 
 export default function AdminSettings() {
-  const [settings, setSettings] = useState<SettingsState | null>(null)
   const [loading, setLoading] = useState(true)
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [uploadingFavicon, setUploadingFavicon] = useState(false)
@@ -53,63 +115,102 @@ export default function AdminSettings() {
   const [newLabelAr, setNewLabelAr] = useState('')
   const [savingCategory, setSavingCategory] = useState(false)
   const { brands, reload: reloadBrands } = useBrands()
+  // The logo/favicon live in the one context the storefront header reads, so
+  // an upload here updates the header in place instead of after a reload.
+  const {
+    logoUrl, faviconUrl, loading: settingsLoading, loadError: settingsError,
+    apply: applyStoreSettings, reload: reloadStoreSettings,
+  } = useStoreSettings()
   const [newBrandName, setNewBrandName] = useState('')
   const [savingBrand, setSavingBrand] = useState(false)
   // brand `value` whose logo is currently uploading (null = none)
   const [uploadingBrandLogo, setUploadingBrandLogo] = useState<string | null>(null)
   const [checkoutConfig, setCheckoutConfig] = useState<CheckoutConfig>(DEFAULT_CHECKOUT_CONFIG)
   const [savingCheckout, setSavingCheckout] = useState(false)
-  const [brandsPageEnabled, setBrandsPageEnabled] = useState(true)
+  // The WHOLE site_visibility object, not just the one flag rendered below.
+  // The toggle used to write { brands_page_enabled } on its own, which would
+  // have discarded every other key the row grows.
+  const [visibility, setVisibility] = useState<Record<string, unknown>>({})
+  const brandsPageEnabled = visibility.brands_page_enabled !== false
   const [savingVisibility, setSavingVisibility] = useState(false)
   const [regions, setRegions] = useState<ShippingRegion[]>([])
   const [savingShipping, setSavingShipping] = useState(false)
+  // False until the site_content read below succeeds. The five blocks it feeds
+  // (whatsapp, contact, checkout config, brands visibility, shipping regions)
+  // hold placeholder defaults until then, and writing one of those back would
+  // replace the live row -- the whole shipping price table, for instance --
+  // with defaults. Every site_content write on this screen goes through
+  // saveContent, which refuses while this is false.
+  const [contentLoaded, setContentLoaded] = useState(false)
   const t = useT()
 
-  async function load() {
-    setLoading(true)
-    const { data } = await supabase
-      .from('store_settings')
-      .select('logo_url, favicon_url')
-      .eq('id', STORE_SETTINGS_ID)
-      .maybeSingle()
-    setSettings(data || { logo_url: null, favicon_url: null })
+  // Only the most recently started load may touch state (Shop.tsx's guard), so
+  // a slow failure can't land after a retry has already succeeded.
+  const loadIdRef = useRef(0)
 
-    const { data: content } = await supabase
-      .from('site_content')
-      .select('key, value')
-      .in('key', ['whatsapp', 'contact', 'checkout_config', 'shipping', 'site_visibility'])
-    for (const row of content || []) {
-      if (row.key === 'whatsapp') setWhatsapp({ ...EMPTY_WHATSAPP, ...row.value })
-      if (row.key === 'checkout_config') setCheckoutConfig({ ...DEFAULT_CHECKOUT_CONFIG, ...row.value })
-      if (row.key === 'site_visibility') setBrandsPageEnabled((row.value as { brands_page_enabled?: boolean })?.brands_page_enabled !== false)
-      if (row.key === 'shipping') {
-        const rs = (row.value as { regions?: ShippingRegion[] })?.regions
-        setRegions(Array.isArray(rs) ? rs : [])
+  async function load() {
+    const id = ++loadIdRef.current
+    setLoading(true)
+    try {
+      const { data: content, error: contentError } = await supabase
+        .from('site_content')
+        .select('key, value')
+        .in('key', ['whatsapp', 'contact', 'checkout_config', 'shipping', 'site_visibility'])
+      if (id !== loadIdRef.current) return
+      // A failed read leaves every block below on its defaults, which must not be
+      // mistaken for "the owner has not configured this yet".
+      setContentLoaded(!contentError)
+      if (contentError) return
+      for (const row of content || []) {
+        if (row.key === 'whatsapp') setWhatsapp({ ...EMPTY_WHATSAPP, ...row.value })
+        if (row.key === 'checkout_config') setCheckoutConfig({ ...DEFAULT_CHECKOUT_CONFIG, ...row.value })
+        if (row.key === 'site_visibility') setVisibility((row.value as Record<string, unknown>) || {})
+        if (row.key === 'shipping') {
+          const rs = (row.value as { regions?: ShippingRegion[] })?.regions
+          setRegions(Array.isArray(rs) ? rs : [])
+        }
+        if (row.key === 'contact') {
+          const v = row.value as Record<string, string | null>
+          setContact({
+            email: v.email || '', phone: v.phone || '',
+            address_en: v.address_en || '', address_ar: v.address_ar || '',
+            map_url: v.map_url || '',
+            social_instagram: v.social_instagram || '', social_facebook: v.social_facebook || '',
+            social_tiktok: v.social_tiktok || '', social_twitter: v.social_twitter || '',
+          })
+        }
       }
-      if (row.key === 'contact') {
-        const v = row.value as Record<string, string | null>
-        setContact({
-          email: v.email || '', phone: v.phone || '',
-          address_en: v.address_en || '', address_ar: v.address_ar || '',
-          map_url: v.map_url || '',
-          social_instagram: v.social_instagram || '', social_facebook: v.social_facebook || '',
-          social_tiktok: v.social_tiktok || '', social_twitter: v.social_twitter || '',
-        })
-      }
+    } catch {
+      // postgrest-js reports a failed request as { error }, but a genuine throw
+      // must not leave the spinner up with no way out.
+      if (id !== loadIdRef.current) return
+      setContentLoaded(false)
+    } finally {
+      if (id === loadIdRef.current) setLoading(false)
     }
-    setLoading(false)
   }
   useEffect(() => { load() }, [])
 
+  // Single choke point for every site_content write on this screen: there is no
+  // other path to one, so a payload built from a failed read cannot be written.
+  async function saveContent(key: string, value: unknown): Promise<boolean> {
+    if (!contentLoaded) { toast.error(t.adminSettingsContentLoadError); return false }
+    const { data, error } = await supabase
+      .from('site_content').update({ value }).eq('key', key).select('key')
+    if (error) { toast.error(error.message || t.adminSaveFailed); return false }
+    // A zero-row match returns no error. This is the one write path for the
+    // shipping price table, the payment methods and the contact block, so an
+    // unchecked "Saved" here is the owner believing Cairo now costs 60 EGP
+    // when the row still says 40.
+    if (!data.length) { toast.error(t.adminSaveNotApplied); return false }
+    toast.success(t.adminSaved)
+    return true
+  }
+
   async function handleSaveWhatsapp() {
     setSavingWhatsapp(true)
-    const { error } = await supabase
-      .from('site_content')
-      .update({ value: whatsapp })
-      .eq('key', 'whatsapp')
+    await saveContent('whatsapp', whatsapp)
     setSavingWhatsapp(false)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
-    toast.success(t.adminSaved)
   }
 
   async function handleSaveContact() {
@@ -120,13 +221,8 @@ export default function AdminSettings() {
     const value = Object.fromEntries(
       Object.entries(contact).map(([k, v]) => [k, v || null])
     )
-    const { error } = await supabase
-      .from('site_content')
-      .update({ value })
-      .eq('key', 'contact')
+    await saveContent('contact', value)
     setSavingContact(false)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
-    toast.success(t.adminSaved)
   }
 
   async function handleUpload(field: UploadField, raw: File | undefined, setUploading: (v: boolean) => void) {
@@ -136,6 +232,7 @@ export default function AdminSettings() {
       const prefix = field === 'logo_url' ? 'logo' : 'favicon'
       // Compress the logo; leave the favicon untouched (it must stay tiny/native).
       const file = field === 'logo_url' ? await compressImage(raw, { maxDim: 600 }) : raw
+      const previousUrl = field === 'logo_url' ? logoUrl : faviconUrl
       const path = `${prefix}/${Date.now()}-${file.name}`
       const { error: upErr } = await supabase.storage.from('store-assets').upload(path, file)
       if (upErr) throw upErr
@@ -145,13 +242,31 @@ export default function AdminSettings() {
       // makes the one row the only possible row). An upsert issues INSERT ... ON
       // CONFLICT, whose INSERT arm the missing insert policy rejects with an RLS
       // violation even though the row already exists -- so update the seeded row.
-      const { error: dbErr } = await supabase
+      const { data: saved, error: dbErr } = await supabase
         .from('store_settings')
         .update({ [field]: pub.publicUrl })
         .eq('id', STORE_SETTINGS_ID)
+        .select('logo_url, favicon_url')
+        .maybeSingle()
       if (dbErr) throw dbErr
-      setSettings(prev => ({ ...(prev || { logo_url: null, favicon_url: null }), [field]: pub.publicUrl }))
+      // An UPDATE matching no row (an RLS denial, a missing singleton) comes
+      // back with no error and no row. Without this the old object below would
+      // be deleted while the row still pointed at it.
+      if (!saved) {
+        // The row is unchanged, so the file just uploaded is an orphan.
+        await removeStoreAsset(pub.publicUrl)
+        throw new Error(t.adminSaveFailed)
+      }
+      // Adopt the row the UPDATE just returned, BEFORE deleting anything: a
+      // re-read here could fail, leave the header on the old URL, and then the
+      // delete below would 404 every <Logo> into the monogram fallback under a
+      // green "Saved" toast -- the exact symptom this task exists to remove.
+      applyStoreSettings(saved)
+      await removeStoreAsset(previousUrl)
       toast.success(t.adminSaved)
+      // After the write, so a failed upload never explains how a logo that was
+      // never saved would have rendered.
+      if (field === 'logo_url') await warnIfNotHeaderShaped(raw, t)
     } catch (e: any) {
       toast.error(e.message || t.adminUploadFailed)
     } finally {
@@ -169,33 +284,32 @@ export default function AdminSettings() {
     }
     setCheckoutConfig(next)
     setSavingCheckout(true)
-    const { error } = await supabase.from('site_content').update({ value: next }).eq('key', 'checkout_config')
+    // Put the switch back when the write did not land, the way the brands-page
+    // toggle below does: a switch left showing "card payments off" over a row
+    // that still says on is the owner trusting the wrong answer.
+    const saved = await saveContent('checkout_config', next)
+    if (!saved) setCheckoutConfig(checkoutConfig)
     setSavingCheckout(false)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
-    toast.success(t.adminSaved)
   }
 
   // ----- Brands page visibility (nav link + /brands page) -----
   async function handleToggleBrandsPage(enabled: boolean) {
-    setBrandsPageEnabled(enabled)
+    const next = { ...visibility, brands_page_enabled: enabled }
+    setVisibility(next)
     setSavingVisibility(true)
-    const { error } = await supabase
-      .from('site_content')
-      .update({ value: { brands_page_enabled: enabled } })
-      .eq('key', 'site_visibility')
+    // Merged over the row that was read, so a second flag added later is not
+    // erased by whoever toggles this one first.
+    const saved = await saveContent('site_visibility', next)
+    if (!saved) setVisibility(visibility)
     setSavingVisibility(false)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
-    toast.success(t.adminSaved)
   }
 
   // ----- Shipping price per governorate -----
   async function saveRegions(next: ShippingRegion[]) {
     setRegions(next)
     setSavingShipping(true)
-    const { error } = await supabase.from('site_content').update({ value: { regions: next } }).eq('key', 'shipping')
+    await saveContent('shipping', { regions: next })
     setSavingShipping(false)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
-    toast.success(t.adminSaved)
   }
   function handleRegionPrice(code: string, price: number) {
     saveRegions(regions.map(r => r.code === code ? { ...r, price: Math.max(0, price) } : r))
@@ -214,13 +328,26 @@ export default function AdminSettings() {
     const label_en = newLabelEn.trim()
     const label_ar = newLabelAr.trim()
     if (!label_en || !label_ar) { toast.error(t.adminBothNamesRequired); return }
+    // label_en becomes the primary key, so it gets the same guard a brand name
+    // does: a one-character key or a case-variant duplicate is unmanageable
+    // once products point at it.
+    const invalid = validateBrandName(label_en, categories.flatMap(c => [c.value, c.label_en]))
+    if (invalid) { toast.error(nameErrorMessage(invalid, t)); return }
     setSavingCategory(true)
-    const position = categories.length ? Math.max(...categories.map(c => c.position)) + 1 : 0
-    const { error } = await supabase
+    // No position: the database assigns max + 1 on insert (see the
+    // 20260813000000 migration). It used to be computed from the array loaded
+    // in this browser, which can be hours stale. Two inserts in flight at the
+    // same instant can still land on the same position, and the next reorder
+    // renumbers them.
+    const { data, error } = await supabase
       .from('categories')
-      .insert({ value: label_en, label_en, label_ar, position })
+      .insert({ value: label_en, label_en, label_ar })
+      .select('value')
+      .maybeSingle()
     setSavingCategory(false)
     if (error) { toast.error(error.message || t.adminCouldNotAddCategory); return }
+    // An insert that matched no row comes back with no error and no row.
+    if (!data) { toast.error(t.adminCouldNotAddCategory); return }
     setNewLabelEn('')
     setNewLabelAr('')
     toast.success(t.adminCategoryAdded)
@@ -228,8 +355,13 @@ export default function AdminSettings() {
   }
 
   async function handleUpdateCategoryLabel(value: string, field: 'label_en' | 'label_ar', text: string) {
-    const { error } = await supabase.from('categories').update({ [field]: text }).eq('value', value)
+    const { data, error } = await supabase
+      .from('categories').update({ [field]: text }).eq('value', value).select('value').maybeSingle()
     if (error) { toast.error(error.message || t.adminSaveFailed); return }
+    // Same guard the brand rename has: an UPDATE matching no row returns no
+    // error, and the reload below would then quietly put the old label back
+    // with nothing said.
+    if (!data) { toast.error(t.adminSaveNotApplied); return }
     reloadCategories()
   }
 
@@ -238,70 +370,109 @@ export default function AdminSettings() {
     // ponytail: a simple existence check, not a foreign key -- products.category
     // has always been free text, so this is the same protection an FK ON DELETE
     // RESTRICT would give without a schema change.
-    const { count } = await supabase
+    const { count, error: countError } = await supabase
       .from('products')
       .select('id', { count: 'exact', head: true })
       .eq('category', value)
+    // A failed count comes back as null, which is falsy: without this the
+    // guard would evaporate on a dropped read and the delete would go ahead
+    // over however many products are really pointing at this category.
+    if (countError) { toast.error(t.adminCouldNotCheckUsage); return }
     if (count) { toast.error(t.adminCategoryInUse(count)); return }
-    const { error } = await supabase.from('categories').delete().eq('value', value)
+    const { data, error } = await supabase.from('categories').delete().eq('value', value).select('value')
     if (error) { toast.error(error.message || t.adminDeleteFailed); return }
+    // A delete matching no row returns no error, so the reload below would put
+    // the category straight back under a green "Category deleted".
+    if (!data.length) { toast.error(t.adminDeleteFailed); return }
     toast.success(t.adminCategoryDeleted)
     reloadCategories()
   }
 
+  // One statement for the whole order, in place of two independent UPDATEs.
+  // A swap made of two writes can half-apply, and both rows then hold the same
+  // position: every later swap of that pair trades identical numbers and reads
+  // as a no-op the admin cannot explain. Both errors were discarded too.
+  // The RPC rewrites position 0..n-1 and rolls back unless every row matched.
+  async function reorder(table: 'categories' | 'brands', values: string[]): Promise<boolean> {
+    const { data, error } = await supabase.rpc('admin_reorder_positions_by_value', {
+      p_table: table,
+      p_values: values,
+    })
+    // Refused, incomplete or never sent: the RPC is all or nothing, so every
+    // failure here means the stored order is untouched.
+    if (error || !Number(data)) { toast.error(t.adminSaveNotApplied); return false }
+    return true
+  }
+
   async function handleMoveCategory(index: number, direction: -1 | 1) {
-    const target = categories[index + direction]
-    const current = categories[index]
-    if (!target) return
-    await Promise.all([
-      supabase.from('categories').update({ position: target.position }).eq('value', current.value),
-      supabase.from('categories').update({ position: current.position }).eq('value', target.value),
-    ])
-    reloadCategories()
+    const next = swapAt(categories.map(c => c.value), index, index + direction)
+    if (!next) return
+    if (await reorder('categories', next)) reloadCategories()
   }
 
   // ----- Brands (mirror of categories, plus a logo upload per brand) -----
   async function handleAddBrand() {
     const name = newBrandName.trim()
-    if (!name) { toast.error(t.adminBrandNameRequired); return }
+    const invalid = validateBrandName(name, brands.flatMap(b => [b.value, b.name]))
+    if (invalid) { toast.error(nameErrorMessage(invalid, t)); return }
     setSavingBrand(true)
-    const position = brands.length ? Math.max(...brands.map(b => b.position)) + 1 : 0
-    // value == name (same convention categories use); products.brand stores it.
-    const { error } = await supabase.from('brands').insert({ value: name, name, position })
+    // The key is seeded from the name and then frozen for the life of the row:
+    // this is the ONE moment `value` is ever written. See src/lib/brands.ts.
+    // The position is the database's to assign, as it is for categories above.
+    const { data, error } = await supabase
+      .from('brands')
+      .insert({ value: name, name })
+      .select('value')
+      .maybeSingle()
     setSavingBrand(false)
     if (error) { toast.error(error.message || t.adminCouldNotAddBrand); return }
+    if (!data) { toast.error(t.adminCouldNotAddBrand); return }
     setNewBrandName('')
     toast.success(t.adminBrandAdded)
     reloadBrands()
   }
 
-  async function handleUpdateBrandName(value: string, name: string) {
-    const { error } = await supabase.from('brands').update({ name }).eq('value', value)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
+  // A rename changes the DISPLAY NAME only. `value` is the primary key that
+  // products.brand stores, it is written once at creation and never again, so
+  // no rename can leave a product pointing at a key that no longer exists.
+  // Every screen renders `name` through brandLabel(), which is what makes the
+  // key's staying put invisible to customers.
+  // Returns whether the new name is now the saved one, so the caller can put
+  // the box back to what the database actually holds when it is not.
+  async function handleUpdateBrandName(value: string, name: string): Promise<boolean> {
+    const invalid = validateBrandName(name, brands.filter(b => b.value !== value).flatMap(b => [b.value, b.name]))
+    if (invalid) { toast.error(nameErrorMessage(invalid, t)); return false }
+    const { data, error } = await supabase
+      .from('brands').update({ name }).eq('value', value).select('value').maybeSingle()
+    if (error) { toast.error(error.message || t.adminSaveFailed); return false }
+    // An UPDATE matching no row (RLS, or a brand deleted in another tab)
+    // returns no error: without this the admin sees a rename that never was.
+    if (!data) { toast.error(t.adminSaveFailed); return false }
+    toast.success(t.adminSaved)
     reloadBrands()
+    return true
   }
 
   async function handleDeleteBrand(value: string) {
     if (!confirm(t.adminDeleteConfirm(value))) return
     // Same free-text guard categories use -- products.brand isn't an FK.
-    const { count } = await supabase
+    const { count, error: countError } = await supabase
       .from('products').select('id', { count: 'exact', head: true }).eq('brand', value)
+    // Same as the category guard: a null count is "could not tell", not "none".
+    if (countError) { toast.error(t.adminCouldNotCheckUsage); return }
     if (count) { toast.error(t.adminBrandInUse(count)); return }
-    const { error } = await supabase.from('brands').delete().eq('value', value)
+    const { data, error } = await supabase.from('brands').delete().eq('value', value).select('value')
     if (error) { toast.error(error.message || t.adminDeleteFailed); return }
+    // Same zero-row trap as the category delete above.
+    if (!data.length) { toast.error(t.adminDeleteFailed); return }
     toast.success(t.adminBrandDeleted)
     reloadBrands()
   }
 
   async function handleMoveBrand(index: number, direction: -1 | 1) {
-    const target = brands[index + direction]
-    const current = brands[index]
-    if (!target) return
-    await Promise.all([
-      supabase.from('brands').update({ position: target.position }).eq('value', current.value),
-      supabase.from('brands').update({ position: current.position }).eq('value', target.value),
-    ])
-    reloadBrands()
+    const next = swapAt(brands.map(b => b.value), index, index + direction)
+    if (!next) return
+    if (await reorder('brands', next)) reloadBrands()
   }
 
   async function handleUploadBrandLogo(value: string, raw: File | undefined) {
@@ -315,8 +486,16 @@ export default function AdminSettings() {
       const { error: upErr } = await supabase.storage.from('store-assets').upload(path, file)
       if (upErr) throw upErr
       const { data: pub } = supabase.storage.from('store-assets').getPublicUrl(path)
-      const { error: dbErr } = await supabase.from('brands').update({ logo_url: pub.publicUrl }).eq('value', value)
+      const { data: saved, error: dbErr } = await supabase
+        .from('brands').update({ logo_url: pub.publicUrl }).eq('value', value).select('value').maybeSingle()
       if (dbErr) throw dbErr
+      // An UPDATE matching no row comes back with no error and no row, which
+      // is a "Saved" toast over an unchanged brand and an orphaned upload --
+      // the same trap the store logo upload above had.
+      if (!saved) {
+        await removeStoreAsset(pub.publicUrl)
+        throw new Error(t.adminSaveFailed)
+      }
       toast.success(t.adminSaved)
       reloadBrands()
     } catch (e: any) {
@@ -332,7 +511,7 @@ export default function AdminSettings() {
     reloadBrands()
   }
 
-  if (loading) {
+  if (loading || settingsLoading) {
     return (
       <div className="py-24 flex justify-center">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -342,16 +521,33 @@ export default function AdminSettings() {
 
   return (
     <div className="max-w-xl space-y-8">
+      {(!contentLoaded || settingsError) && (
+        <div className="border border-terracotta bg-card p-6">
+          {settingsError && (
+            <p className="text-sm text-terracotta">{t.adminSettingsAssetsLoadError}</p>
+          )}
+          {!contentLoaded && (
+            <p className="text-sm text-terracotta mt-1 first:mt-0">{t.adminSettingsContentLoadError}</p>
+          )}
+          <button
+            type="button"
+            onClick={() => { load(); reloadStoreSettings() }}
+            className="mt-3 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          >
+            {t.failedTryAgain}
+          </button>
+        </div>
+      )}
       <UploadField
         label={t.adminLogo}
-        currentUrl={settings?.logo_url || null}
+        currentUrl={logoUrl}
         uploading={uploadingLogo}
         onChange={file => handleUpload('logo_url', file, setUploadingLogo)}
         t={t}
       />
       <UploadField
         label={t.adminFavicon}
-        currentUrl={settings?.favicon_url || null}
+        currentUrl={faviconUrl}
         uploading={uploadingFavicon}
         onChange={file => handleUpload('favicon_url', file, setUploadingFavicon)}
         t={t}
@@ -367,7 +563,7 @@ export default function AdminSettings() {
           <input
             type="checkbox"
             checked={checkoutConfig.online_enabled}
-            disabled={savingCheckout}
+            disabled={savingCheckout || !contentLoaded}
             onChange={e => handleToggleCheckout({ online_enabled: e.target.checked })}
             className="w-4 h-4 accent-foreground cursor-pointer"
           />
@@ -377,7 +573,7 @@ export default function AdminSettings() {
           <input
             type="checkbox"
             checked={checkoutConfig.cash_enabled}
-            disabled={savingCheckout}
+            disabled={savingCheckout || !contentLoaded}
             onChange={e => handleToggleCheckout({ cash_enabled: e.target.checked })}
             className="w-4 h-4 accent-foreground cursor-pointer"
           />
@@ -400,31 +596,39 @@ export default function AdminSettings() {
                 type="number"
                 min={0}
                 defaultValue={r.price}
+                disabled={!contentLoaded}
                 onBlur={e => {
-                  const v = Number(e.target.value)
-                  if (!Number.isNaN(v) && v !== r.price) handleRegionPrice(r.code, v)
+                  // Number('') is 0, and this saves on blur with a success
+                  // toast: a stray backspace made a governorate ship free.
+                  // An unusable box goes back to the stored price instead.
+                  const raw = e.target.value.trim()
+                  const v = Number(raw)
+                  if (raw === '' || !Number.isFinite(v) || v < 0) { e.target.value = String(r.price); return }
+                  if (v !== r.price) handleRegionPrice(r.code, v)
                 }}
-                className="w-24 bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none"
+                className="w-24 bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none disabled:opacity-40"
               />
               <span className="text-[11px] text-muted-foreground w-8">EGP</span>
               <button
                 type="button"
                 onClick={() => handleRemoveRegion(r.code)}
-                className="p-2 text-red-700 hover:bg-muted cursor-pointer flex-shrink-0"
+                disabled={!contentLoaded}
+                className="p-2 text-red-700 hover:bg-muted cursor-pointer flex-shrink-0 disabled:opacity-40"
                 aria-label={t.adminDelete}
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             </div>
           ))}
-          {regions.length === 0 && (
+          {/* Only after a successful read is an empty list actually empty. */}
+          {contentLoaded && regions.length === 0 && (
             <p className="text-[11px] text-muted-foreground py-2">{t.adminShippingEmpty}</p>
           )}
         </div>
         <button
           type="button"
           onClick={handleRestoreGovernorates}
-          disabled={savingShipping}
+          disabled={savingShipping || !contentLoaded}
           className="text-xs tracking-wide border border-border px-3 py-2 hover:bg-muted cursor-pointer disabled:opacity-50 inline-flex items-center gap-2"
         >
           <Plus className="w-3.5 h-3.5" />
@@ -523,7 +727,7 @@ export default function AdminSettings() {
             <input
               type="checkbox"
               checked={brandsPageEnabled}
-              disabled={savingVisibility}
+              disabled={savingVisibility || !contentLoaded}
               onChange={e => handleToggleBrandsPage(e.target.checked)}
               className="w-4 h-4 accent-foreground cursor-pointer"
             />
@@ -585,10 +789,26 @@ export default function AdminSettings() {
               <input
                 type="text"
                 defaultValue={b.name}
-                onBlur={e => e.target.value.trim() && e.target.value !== b.name && handleUpdateBrandName(b.value, e.target.value.trim())}
+                // Uncontrolled, so a rejected rename has to be put back by
+                // hand: leaving the typed text in the box is how the admin ends
+                // up believing a name that was never saved.
+                onBlur={async e => {
+                  const next = e.target.value.trim()
+                  if (!next || next === b.name) { e.target.value = b.name; return }
+                  if (!await handleUpdateBrandName(b.value, next)) e.target.value = b.name
+                }}
                 placeholder={t.adminBrandName}
                 className="flex-1 min-w-0 bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none"
               />
+              {/* The immutable key products point at. Shown so a rename that
+                  leaves the /shop?brand= link unchanged is not a surprise. */}
+              <span
+                dir="ltr"
+                title={t.adminBrandKeyTitle}
+                className="text-[10px] font-mono text-muted-foreground shrink-0 max-w-[80px] truncate"
+              >
+                {b.value}
+              </span>
               <button
                 type="button"
                 onClick={() => handleDeleteBrand(b.value)}
@@ -653,7 +873,7 @@ export default function AdminSettings() {
         </div>
         <button
           onClick={handleSaveWhatsapp}
-          disabled={savingWhatsapp}
+          disabled={savingWhatsapp || !contentLoaded}
           className="text-xs tracking-wider uppercase border border-foreground px-4 py-2 hover:bg-foreground hover:text-background transition-colors disabled:opacity-50 cursor-pointer"
         >
           {savingWhatsapp ? t.adminSavingBtn : t.adminSaveBtn}
@@ -748,7 +968,7 @@ export default function AdminSettings() {
         </div>
         <button
           onClick={handleSaveContact}
-          disabled={savingContact}
+          disabled={savingContact || !contentLoaded}
           className="text-xs tracking-wider uppercase border border-foreground px-4 py-2 hover:bg-foreground hover:text-background transition-colors disabled:opacity-50 cursor-pointer"
         >
           {savingContact ? t.adminSavingBtn : t.adminSaveBtn}

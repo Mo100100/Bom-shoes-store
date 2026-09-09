@@ -9,6 +9,7 @@ import QuickViewModal from '@/components/QuickViewModal'
 import ProductCard from '@/components/ProductCard'
 import { useSeo } from '@/hooks/useSeo'
 import { useCategories } from '@/contexts/CategoriesContext'
+import { useBrands } from '@/contexts/BrandsContext'
 import { compareSizes, firstInStockVariant } from '@/lib/sizes'
 
 const SORT_VALUES = ['featured', 'price-asc', 'price-desc', 'newest']
@@ -35,6 +36,7 @@ export default function Shop() {
   const { lang } = useLanguage()
   const { addItem } = useCart()
   const { categories, categoryLabel: dbCategoryLabel } = useCategories()
+  const { brandLabel } = useBrands()
   const CATEGORY_VALUES = ['All', ...categories.map(c => c.value)]
   function categoryLabel(c: string): string {
     return c === 'All' ? t.shopAll : dbCategoryLabel(c)
@@ -212,7 +214,9 @@ export default function Shop() {
         {/* Header */}
         <div className="text-center mb-16">
           <p className="text-zen text-muted-foreground mb-4">{brand ? t.navBrands : saleOnly ? t.navSale : t.shopEyebrow}</p>
-          <h1 className="font-display text-5xl md:text-7xl mb-6">{brand || (saleOnly ? t.navSale : t.shopTitle)}</h1>
+          {/* ?brand= carries brands.value, the immutable key products store,
+              which is not the display name -- so the heading looks it up. */}
+          <h1 className="font-display text-5xl md:text-7xl mb-6">{brandLabel(brand) || (saleOnly ? t.navSale : t.shopTitle)}</h1>
           {search ? (
             <div className="flex items-center justify-center gap-3 flex-wrap">
               <p className="text-muted-foreground font-light">{t.shopSearchingFor(search)}</p>

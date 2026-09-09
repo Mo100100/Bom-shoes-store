@@ -247,6 +247,10 @@ export type StoreSettings = {
   // once backed was removed (CurrencyContext.tsx always renders EGP, the only
   // currency Kashier ever settles).
   currency: string
+  // Seeded by 20260704008000 and never maintained: store_settings has no
+  // updated_at trigger and no code path writes this column, so it records when
+  // the singleton row was created, not when the logo or favicon last changed.
+  // Never use it to detect a change; compare the URL instead.
   updated_at: string
 }
 

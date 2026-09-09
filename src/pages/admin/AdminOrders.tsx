@@ -1,9 +1,10 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { supabase, Order } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import { useT } from '@/contexts/LanguageContext'
+import { useLanguage, useT } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { Loader2, ChevronDown, ChevronUp, Search } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
 
 type SortKey = 'date' | 'total'
@@ -35,6 +36,24 @@ const STATUS_LABEL_MAP: Record<string, string> = {
 //   delivered, in both directions, and can always be cancelled.
 const ACTIVE_STATUSES = ['confirmed', 'processing', 'shipped', 'delivered']
 
+// Same page size AdminActivityLog uses, and the same "load more" shape. Past
+// max_rows = 1000 (supabase/config.toml) an unpaginated select('*') left the
+// oldest orders unreachable from the admin entirely, and the status counts and
+// the total were computed over that truncated set.
+const PAGE_SIZE = 50
+// admin_orders_page() caps p_limit at 500. A refetch after a status change
+// re-reads everything already on screen rather than throwing the admin back to
+// page one, so it has to respect the same ceiling.
+const MAX_REFETCH = 500
+
+// What admin_orders_page() returns. `total` and `status_counts` span the whole
+// table, not the loaded page: counting the rows in hand is the bug.
+type OrdersPage = {
+  rows: Order[]
+  total: number
+  status_counts: Record<string, number>
+}
+
 function allowedStatuses(order: Order): string[] {
   if (order.status === 'cancelled') return []
   const holdsStock = order.payment_status === 'paid' || !!order.stock_reserved_at
@@ -42,16 +61,34 @@ function allowedStatuses(order: Order): string[] {
   return [...ACTIVE_STATUSES, 'cancelled']
 }
 
+// Pieces, not order lines: an order of two products with three pairs each is
+// six pieces, and reading it as "2 pieces" understates every order in the list.
+// A line with no quantity recorded is still one piece.
+function pieceCount(items: unknown): number {
+  if (!Array.isArray(items)) return 0
+  return items.reduce((sum, item) => sum + (Number(item?.quantity) || 1), 0)
+}
+
 export default function AdminOrders() {
   const [orders, setOrders] = useState<Order[]>([])
+  const [total, setTotal] = useState(0)
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [filter, setFilter] = useState<string>('all')
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  // Only the most recent load may land. Two searches typed a moment apart can
+  // come back out of order, and the loser would otherwise paint its rows next
+  // to the winner's total. Same guard AdminBundles uses.
+  const loadIdRef = useRef(0)
   const { isAdmin } = useAuth()
   const t = useT()
+  const { lang } = useLanguage()
   const { formatPrice } = useCurrency()
 
   function toggleSort(key: SortKey) {
@@ -63,16 +100,75 @@ export default function AdminOrders() {
     }
   }
 
-  async function load() {
+  // Filtering, searching, sorting and counting all happen in the database:
+  // doing any of them over the loaded page would give an answer about the page
+  // rather than about the shop.
+  function pageArgs(offset: number, limit: number) {
+    return {
+      p_status: filter === 'all' ? null : filter,
+      p_search: search.trim() || null,
+      p_sort: sortKey || 'date',
+      p_dir: sortKey ? sortDir : 'desc',
+      p_offset: offset,
+      p_limit: limit,
+    }
+  }
+
+  // Takes an optional page size, so every reference to it must be CALLED
+  // rather than passed: an onClick handed this function directly would supply
+  // React's click event as `limit` and the retry could never succeed.
+  async function load(limit = PAGE_SIZE) {
+    const id = ++loadIdRef.current
     setLoading(true)
-    const { data } = await supabase
-      .from('orders')
-      .select('*')
-      .order('created_at', { ascending: false })
-    setOrders(data || [])
+    const { data, error } = await supabase.rpc('admin_orders_page', pageArgs(0, limit))
+    if (id !== loadIdRef.current) return
+    // "No orders yet" on a shop that has orders is the single most alarming
+    // thing this dashboard can say, so a failed read never renders as one.
+    setLoadError(!!error)
+    const page = (error ? null : data) as OrdersPage | null
+    const rows = page?.rows || []
+    setOrders(rows)
+    setTotal(page ? Number(page.total) || 0 : 0)
+    setStatusCounts(page?.status_counts || {})
+    setHasMore(rows.length < (page ? Number(page.total) || 0 : 0))
+    // A "load more" this load superseded returns without clearing its own
+    // flag, which would leave the button disabled for good.
+    setLoadingMore(false)
     setLoading(false)
   }
-  useEffect(() => { load() }, [])
+
+  // Debounced so typing in the search box is one request per pause, not one
+  // per keystroke. Changing the filter or the sort re-runs immediately.
+  useEffect(() => {
+    const id = setTimeout(() => { load() }, search.trim() ? 300 : 0)
+    return () => clearTimeout(id)
+  }, [filter, search, sortKey, sortDir])
+
+  async function loadMore() {
+    // Shares the counter with load(): a filter or search change mid-flight
+    // discards this page rather than appending it under the new query's rows.
+    const id = ++loadIdRef.current
+    setLoadingMore(true)
+    const { data, error } = await supabase.rpc('admin_orders_page', pageArgs(orders.length, PAGE_SIZE))
+    if (id !== loadIdRef.current) return
+    // A failed page must not read as "that was the last order": keep the
+    // button and say what happened, same as AdminActivityLog.
+    if (error) { toast.error(t.adminLoadError); setLoadingMore(false); return }
+    const page = data as OrdersPage
+    const rows = page.rows || []
+    const nextTotal = Number(page.total) || 0
+    setOrders(prev => [...prev, ...rows])
+    setTotal(nextTotal)
+    setStatusCounts(page.status_counts || {})
+    setHasMore(orders.length + rows.length < nextTotal)
+    setLoadingMore(false)
+  }
+
+  // After a write, re-read everything the admin already has on screen instead
+  // of collapsing back to the first page.
+  function reload() {
+    load(Math.min(Math.max(orders.length, PAGE_SIZE), MAX_REFETCH))
+  }
 
   // Every state change goes through admin_update_order_status(), never a plain
   // UPDATE: cancelling an order has to give its reserved stock back, and
@@ -85,6 +181,11 @@ export default function AdminOrders() {
     if (hint === 'order_never_reserved') return t.adminOrderNeverReserved
     if (hint === 'payment_not_markable') return t.adminPaymentNotMarkable
     if (hint === 'fulfill_failed') return t.adminFulfillFailed
+    // The three the RPC also raises. Missing here, they surfaced as the raw
+    // English SQL message to an owner reading the dashboard in Arabic.
+    if (hint === 'not_admin') return t.adminNotAuthorised
+    if (hint === 'order_not_found') return t.adminOrderNotFound
+    if (hint === 'status_not_settable') return t.adminStatusNotSettable
     return fallback
   }
 
@@ -95,13 +196,17 @@ export default function AdminOrders() {
     // away from 'delivered', so it gets the same confirm() a product deletion
     // gets in AdminProducts.
     if (newStatus === 'cancelled' && !confirm(t.adminCancelConfirm)) return
-    const { error } = await supabase.rpc('admin_update_order_status', {
+    const { data, error } = await supabase.rpc('admin_update_order_status', {
       p_order_id: order.id,
       p_status: newStatus,
     })
     if (error) { toast.error(refusalMessage(error.hint, error.message)); return }
+    // The RPC returns whether anything actually changed. It returns false for
+    // a status the order is already in, and "Order updated" over a no-op is
+    // how the owner concludes a change was saved when none was.
+    if (!data) { toast.error(t.adminOrderNoChange); return }
     toast.success(t.adminUpdated)
-    load()
+    reload()
   }
 
   // Two shapes, both "the money arrived":
@@ -115,11 +220,14 @@ export default function AdminOrders() {
   async function markPaid(order: Order) {
     const isOnlineFulfil = order.payment_method !== 'cash'
     if (isOnlineFulfil && !confirm(t.adminMarkPaidConfirm)) return
-    const { error } = await supabase.rpc('admin_update_order_status', {
+    const { data, error } = await supabase.rpc('admin_update_order_status', {
       p_order_id: order.id,
       p_payment_status: 'paid',
     })
     if (error) { toast.error(refusalMessage(error.hint, error.message)); return }
+    // Same as updateStatus: false means the order was already in that state,
+    // so no payment was recorded and no confirmation email should be sent.
+    if (!data) { toast.error(t.adminOrderNoChange); return }
     // The customer of a lost webhook never got the confirmation the gateway
     // path sends, so send it here. Non-fatal exactly as it is in the webhook:
     // the order is fulfilled either way and a failed email must not read as a
@@ -130,30 +238,9 @@ export default function AdminOrders() {
         .catch(err => console.error('send-order-confirmation failed', err))
     }
     toast.success(t.adminMarkedPaid)
-    load()
+    reload()
   }
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    let rows = filter === 'all' ? orders : orders.filter(o => o.status === filter)
-    if (q) {
-      rows = rows.filter(o =>
-        (o.customer_name || '').toLowerCase().includes(q) ||
-        (o.customer_email || '').toLowerCase().includes(q) ||
-        (o.kashier_order_id || '').toLowerCase().includes(q) ||
-        o.id.toLowerCase().includes(q)
-      )
-    }
-    if (sortKey) {
-      rows = [...rows].sort((a, b) => {
-        const diff = sortKey === 'date'
-          ? new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-          : Number(a.total_amount) - Number(b.total_amount)
-        return sortDir === 'asc' ? diff : -diff
-      })
-    }
-    return rows
-  }, [orders, filter, search, sortKey, sortDir])
 
   function statusLabel(s: string): string {
     const key = STATUS_LABEL_MAP[s]
@@ -174,11 +261,14 @@ export default function AdminOrders() {
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              {s === 'all' ? t.adminOrdersAll : statusLabel(s)} {s !== 'all' && `(${orders.filter(o => o.status === s).length})`}
+              {/* Counts come from the database, over every order: counting
+                  the loaded page would say "3 shipped" on a shop with 400. */}
+              {s === 'all' ? t.adminOrdersAll : statusLabel(s)} {s !== 'all' && `(${statusCounts[s] || 0})`}
             </button>
           ))}
         </div>
-        <p className="text-sm text-muted-foreground">{t.adminOrdersCount(filtered.length)}</p>
+        {/* A count over a failed read would read as "you have no orders". */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminOrdersCount(total)}</p>}
       </div>
 
       <div className="relative mb-4 max-w-sm">
@@ -196,7 +286,9 @@ export default function AdminOrders() {
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
-      ) : filtered.length === 0 ? (
+      ) : loadError ? (
+        <LoadErrorPanel onRetry={() => load()} />
+      ) : orders.length === 0 ? (
         <div className="border border-border bg-card p-12 text-center">
           <p className="text-muted-foreground">{t.adminNoOrdersFilter}</p>
         </div>
@@ -234,7 +326,7 @@ export default function AdminOrders() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(o => {
+                {orders.map(o => {
                   const allowed = allowedStatuses(o)
                   return (
                   <Fragment key={o.id}>
@@ -243,20 +335,34 @@ export default function AdminOrders() {
                     onClick={() => setExpandedId(id => (id === o.id ? null : o.id))}
                   >
                     <td className="px-4 py-4 font-mono text-xs text-muted-foreground">
-                      <span className="inline-flex items-center gap-1.5">
+                      {/* Real <button>, not just the row's onClick, so the
+                          toggle is reachable and operable from the keyboard
+                          (a bare onClick on <tr> is invisible to Tab/Enter).
+                          Same fix as AdminActivityLog, but deliberately with
+                          NO aria-label: this button wraps the visible order
+                          id, and a label would replace it as the accessible
+                          name, so the table could no longer be navigated (or
+                          voice-controlled) by order number. aria-expanded
+                          carries the state on its own. */}
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); setExpandedId(id => (id === o.id ? null : o.id)) }}
+                        aria-expanded={expandedId === o.id}
+                        className="inline-flex items-center gap-1.5 cursor-pointer text-start"
+                      >
                         {expandedId === o.id ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
                         {o.kashier_order_id || o.id.slice(0, 8)}
-                      </span>
+                      </button>
                     </td>
                     <td className="px-4 py-4">
                       <p className="font-medium">{o.customer_name || t.dash}</p>
                       <p className="text-xs text-muted-foreground">{o.customer_email}</p>
                     </td>
                     <td className="px-4 py-4 text-muted-foreground whitespace-nowrap">
-                      {new Date(o.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      {new Date(o.created_at).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US', { month: 'short', day: 'numeric' })}
                     </td>
                     <td className="px-4 py-4 text-muted-foreground">
-                      {Array.isArray(o.items) ? o.items.length : 0} {(o.items as any[])?.length === 1 ? t.piece : t.pieces}
+                      {pieceCount(o.items)} {pieceCount(o.items) === 1 ? t.piece : t.pieces}
                     </td>
                     <td className="px-4 py-4 font-medium">{formatPrice(Number(o.total_amount))}</td>
                     <td className="px-4 py-4">
@@ -380,6 +486,18 @@ export default function AdminOrders() {
               </tbody>
             </table>
           </div>
+          {hasMore && (
+            <div className="p-4 flex justify-center border-t border-border">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="text-xs underline cursor-pointer disabled:opacity-50 flex items-center gap-2"
+              >
+                {loadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {t.adminLoadMore}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

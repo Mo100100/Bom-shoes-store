@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { supabase, Testimonial } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useT } from '@/contexts/LanguageContext'
 import type { TranslationKey } from '@/lib/translations'
 import { Loader2, Plus, X, Edit2, Trash2, ArrowUp, ArrowDown, Star } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
 
 // Every one of these keys is pre-seeded by migration (see task context) --
@@ -37,34 +38,69 @@ type TabKey = typeof TABS[number]['key']
 export default function AdminHomepage() {
   const [tab, setTab] = useState<TabKey>('hero')
   const [loading, setLoading] = useState(true)
-  const [drafts, setDrafts] = useState<Record<string, any>>({})
+  // `null` means the content has never been read successfully. Saving writes
+  // back the whole jsonb blob, so a draft built on a failed read would replace
+  // the live seeded rows with `{}`. Keeping "not loaded" out of band from
+  // "loaded and empty" is what makes that impossible: the tabs, and with them
+  // every Save button, are not rendered at all while drafts is null.
+  const [drafts, setDrafts] = useState<Record<string, any> | null>(null)
   const [products, setProducts] = useState<ProductOption[]>([])
   const { isAdmin } = useAuth()
   const t = useT()
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
-      const [{ data: contentRows }, { data: productRows }] = await Promise.all([
+  // Same guard as Shop.tsx: only the most recently started load may touch
+  // state, so a slow failure can't land after a retry has already succeeded.
+  const loadIdRef = useRef(0)
+
+  async function load() {
+    const id = ++loadIdRef.current
+    setLoading(true)
+    try {
+      const [content, catalog] = await Promise.all([
         supabase.from('site_content').select('key, value').in('key', SITE_CONTENT_KEYS as unknown as string[]),
         supabase.from('product_catalog').select('id, name, slug').order('name'),
       ])
+      if (id !== loadIdRef.current) return
+      if (content.error || catalog.error) {
+        setDrafts(null)
+        setProducts([])
+        return
+      }
       const map: Record<string, any> = {}
-      for (const row of contentRows || []) map[row.key] = row.value
+      for (const row of content.data || []) map[row.key] = row.value
       setDrafts(map)
-      setProducts(productRows || [])
-      setLoading(false)
+      setProducts(catalog.data || [])
+    } catch {
+      // postgrest-js reports a failed request as { error }, but a genuine throw
+      // (auth refresh, malformed JSON) must not leave the spinner up forever.
+      if (id !== loadIdRef.current) return
+      setDrafts(null)
+      setProducts([])
+    } finally {
+      if (id === loadIdRef.current) setLoading(false)
     }
-    load()
-  }, [])
+  }
+  useEffect(() => { load() }, [])
 
   function setField(key: SiteContentKey, field: string, value: any) {
-    setDrafts(d => ({ ...d, [key]: { ...d[key], [field]: value } }))
+    setDrafts(d => (d ? { ...d, [key]: { ...d[key], [field]: value } } : d))
   }
 
   async function saveKey(key: SiteContentKey) {
-    const { error } = await supabase.from('site_content').update({ value: drafts[key] || {} }).eq('key', key)
+    // Second lock behind the render guard below: no draft, no write.
+    if (!drafts) { toast.error(t.adminHomepageLoadError); return }
+    const { data, error } = await supabase
+      .from('site_content')
+      .update({ value: drafts[key] || {} })
+      .eq('key', key)
+      .select('key, value')
     if (error) { toast.error(error.message); return }
+    // A zero-row match returns no error, so an unchecked update would toast
+    // "Saved" after an RLS denial or against a key that isn't seeded.
+    if (!data.length) { toast.error(t.adminSaveNotApplied); return }
+    // Re-sync this key from the row the database actually stored, instead of
+    // leaving the editor on the copy read at mount.
+    setDrafts(d => (d ? { ...d, [key]: data[0].value } : d))
     toast.success(t.adminSaved)
   }
 
@@ -72,6 +108,21 @@ export default function AdminHomepage() {
     return (
       <div className="py-24 flex justify-center">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  // A failed read is never dressed up as "nothing configured yet".
+  if (!drafts) {
+    return (
+      <div className="py-24 text-center">
+        <p className="text-terracotta">{t.adminHomepageLoadError}</p>
+        <button
+          onClick={() => load()}
+          className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+        >
+          {t.failedTryAgain}
+        </button>
       </div>
     )
   }
@@ -302,6 +353,9 @@ function ShowcaseTab({
     setPick('')
   }
   function remove(idx: number) {
+    // The trash sits right beside the two move arrows in a cluster of 3.5px
+    // icons, and there is no undo, so a misclick is the realistic failure.
+    if (!confirm(t.adminRemoveConfirm)) return
     setField('product_ids', ids.filter((_, i) => i !== idx))
   }
   function move(idx: number, dir: -1 | 1) {
@@ -373,6 +427,7 @@ function TrustBadgesTab({ value, setField, onSave, readOnly }: { value: any; set
     setField('items', [...items, { icon: 'Truck', title_en: '', title_ar: '', desc_en: '', desc_ar: '' }])
   }
   function removeItem(idx: number) {
+    if (!confirm(t.adminRemoveConfirm)) return
     setField('items', items.filter((_, i) => i !== idx))
   }
 
@@ -473,6 +528,7 @@ function AnnouncementTab({ value, setField, onSave, readOnly }: { value: any; se
     setField('lines', [...lines, { en: '', ar: '' }])
   }
   function removeLine(idx: number) {
+    if (!confirm(t.adminRemoveConfirm)) return
     setField('lines', lines.filter((_, i) => i !== idx))
   }
   function move(idx: number, dir: -1 | 1) {
@@ -533,6 +589,7 @@ function FooterLinksTab({ value, setField, onSave, readOnly }: { value: any; set
     setField('items', [...items, { label_en: '', label_ar: '', url: '' }])
   }
   function removeItem(idx: number) {
+    if (!confirm(t.adminRemoveConfirm)) return
     setField('items', items.filter((_, i) => i !== idx))
   }
 
@@ -625,6 +682,7 @@ const EMPTY_TESTIMONIAL: Partial<Testimonial> = {
 function TestimonialsTab() {
   const [rows, setRows] = useState<Testimonial[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [editing, setEditing] = useState<Partial<Testimonial> | null>(null)
   const [saving, setSaving] = useState(false)
   const { isAdmin } = useAuth()
@@ -632,8 +690,11 @@ function TestimonialsTab() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('testimonials').select('*').order('position')
-    setRows(data || [])
+    const { data, error } = await supabase.from('testimonials').select('*').order('position')
+    // A failed read must not read as "no testimonials", which is an invitation
+    // to type the live ones in again.
+    setLoadError(!!error)
+    setRows(error ? [] : data || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -652,6 +713,8 @@ function TestimonialsTab() {
     load()
   }
 
+  // One RPC, one UPDATE statement, same as AdminBanners: this was one UPDATE
+  // per row per arrow click with every result discarded.
   async function move(row: Testimonial, direction: -1 | 1) {
     const idx = rows.findIndex(r => r.id === row.id)
     const swapIdx = idx + direction
@@ -659,7 +722,13 @@ function TestimonialsTab() {
     const reordered = [...rows]
     ;[reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]]
     setRows(reordered)
-    await Promise.all(reordered.map((r, i) => supabase.from('testimonials').update({ position: i }).eq('id', r.id)))
+    const { data, error } = await supabase.rpc('admin_reorder_positions', {
+      p_table: 'testimonials',
+      p_ids: reordered.map(r => r.id),
+    })
+    // The RPC applies the whole list or none of it, so every failure here --
+    // refused, incomplete, or never sent -- means nothing was written.
+    if (error || !Number(data)) toast.error(t.adminSaveNotApplied)
     load()
   }
 
@@ -681,8 +750,11 @@ function TestimonialsTab() {
       }
 
       if (editing.id) {
-        const { error } = await supabase.from('testimonials').update(payload).eq('id', editing.id)
+        const { data, error } = await supabase.from('testimonials').update(payload).eq('id', editing.id).select('id')
         if (error) throw error
+        // A zero-row match returns no error: without this an edited quote that
+        // never landed would still toast "Testimonial updated".
+        if (!data.length) throw new Error(t.adminSaveNotApplied)
       } else {
         const { error } = await supabase.from('testimonials').insert(payload)
         if (error) throw error
@@ -709,7 +781,8 @@ function TestimonialsTab() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">{t.adminTestimonialsCount(rows.length)}</p>
+        {/* A count over a failed read would read as "you have none". */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminTestimonialsCount(rows.length)}</p>}
         {isAdmin && (
           <button
             onClick={openNew}
@@ -725,6 +798,8 @@ function TestimonialsTab() {
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
+      ) : loadError ? (
+        <LoadErrorPanel onRetry={load} />
       ) : (
         <div className="border border-border bg-card overflow-hidden">
           <div className="overflow-x-auto">
@@ -776,7 +851,7 @@ function TestimonialsTab() {
                       <button onClick={() => openEdit(r)} className="p-1.5 hover:bg-muted cursor-pointer" aria-label={t.adminEditTestimonial}>
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
-                      <button onClick={() => handleDelete(r)} className="p-1.5 hover:bg-muted text-red-700 cursor-pointer" aria-label={t.adminTestimonialDeleted}>
+                      <button onClick={() => handleDelete(r)} className="p-1.5 hover:bg-muted text-red-700 cursor-pointer" aria-label={t.adminDeleteTestimonial}>
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </td>

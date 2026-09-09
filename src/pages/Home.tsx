@@ -13,6 +13,7 @@ import ProductCard from '@/components/ProductCard'
 import CountdownTimer from '@/components/CountdownTimer'
 import { useSeo } from '@/hooks/useSeo'
 import { useBrands } from '@/contexts/BrandsContext'
+import { useCategories } from '@/contexts/CategoriesContext'
 import { firstInStockVariant } from '@/lib/sizes'
 
 const TRUST_ICONS: Record<string, typeof Truck> = {
@@ -31,7 +32,8 @@ export default function Home() {
   const t = useT()
   const { lang } = useLanguage()
   const { addItem } = useCart()
-  const { brands } = useBrands()
+  const { brands, brandLabel } = useBrands()
+  const { categoryLabel } = useCategories()
 
   useSeo({ title: `${t.brandName} · ${t.brandTagline}`, description: t.homeHeroSubtitle })
 
@@ -183,7 +185,10 @@ export default function Home() {
                 <div>
                   <h3 className="font-sans text-sm font-bold tracking-[0.04em] uppercase leading-tight">{heroProduct.name}</h3>
                   <p className="text-xs text-muted-foreground uppercase tracking-[0.06em] mt-0.5 mb-2.5">
-                    {heroProduct.brand || t.brandName}
+                    {/* products.brand holds brands.value, an immutable key
+                        that is not the display name, so it goes through the
+                        same lookup every other brand render uses. */}
+                    {brandLabel(heroProduct.brand) || t.brandName}
                   </p>
                   <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.1em] uppercase">
                     {t.homeShopTheLook}
@@ -268,7 +273,7 @@ export default function Home() {
                   <ProductCard
                     key={p.id}
                     product={p}
-                    categoryLabel={p.brand || ''}
+                    categoryLabel={categoryLabel(p.category)}
                     onQuickAdd={quickAdd}
                     quickAdding={quickAddingId === p.id}
                     animationDelay={`${(i % 5) * 60}ms`}

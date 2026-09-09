@@ -1,7 +1,9 @@
 import { useEffect, useState, Fragment } from 'react'
 import { supabase, ActivityLog } from '@/lib/supabase'
-import { useT } from '@/contexts/LanguageContext'
+import { useLanguage, useT } from '@/contexts/LanguageContext'
 import { Loader2, ChevronDown, ChevronRight } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
+import { toast } from 'sonner'
 
 const PAGE_SIZE = 50
 
@@ -14,6 +16,7 @@ function actionClass(action: string): string {
 export default function AdminActivityLog() {
   const [logs, setLogs] = useState<ActivityLog[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [filter, setFilter] = useState('all')
@@ -25,6 +28,7 @@ export default function AdminActivityLog() {
   // counts/product names.
   const [actorNames, setActorNames] = useState<Record<string, string>>({})
   const t = useT()
+  const { lang } = useLanguage()
 
   // Labels are singular for readability; the filter value itself is the real
   // entity_type stored on the row, which is the trigger's tg_table_name (i.e.
@@ -56,8 +60,11 @@ export default function AdminActivityLog() {
 
   async function load() {
     setLoading(true)
-    const { data } = await buildQuery(filter).range(0, PAGE_SIZE - 1)
-    const rows = data || []
+    const { data, error } = await buildQuery(filter).range(0, PAGE_SIZE - 1)
+    const rows = error ? [] : data || []
+    // "No activity recorded yet" for a failed read is how an audit trail stops
+    // being an audit trail: nothing looks wrong.
+    setLoadError(!!error)
     setLogs(rows)
     setHasMore(rows.length === PAGE_SIZE)
     setExpanded(new Set())
@@ -68,7 +75,10 @@ export default function AdminActivityLog() {
 
   async function loadMore() {
     setLoadingMore(true)
-    const { data } = await buildQuery(filter).range(logs.length, logs.length + PAGE_SIZE - 1)
+    const { data, error } = await buildQuery(filter).range(logs.length, logs.length + PAGE_SIZE - 1)
+    // A failed page must not read as "that was the end of the log": keep the
+    // button and say what happened, rather than silently hiding the rest.
+    if (error) { toast.error(t.adminLoadError); setLoadingMore(false); return }
     const rows = data || []
     setLogs(prev => [...prev, ...rows])
     setHasMore(rows.length === PAGE_SIZE)
@@ -114,6 +124,8 @@ export default function AdminActivityLog() {
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
+      ) : loadError ? (
+        <LoadErrorPanel onRetry={load} />
       ) : logs.length === 0 ? (
         <div className="border border-border bg-card p-12 text-center">
           <p className="text-muted-foreground">{t.adminNoActivity}</p>
@@ -139,7 +151,7 @@ export default function AdminActivityLog() {
                       onClick={() => toggle(l.id)}
                     >
                       <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                        {new Date(l.created_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}
+                        {new Date(l.created_at).toLocaleString(lang === 'ar' ? 'ar-EG' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' })}
                       </td>
                       <td className="px-4 py-3">{actorLabel(l)}</td>
                       <td className="px-4 py-3">
