@@ -1,4 +1,4 @@
-import { ReactNode } from 'react'
+import { ReactNode, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { useT } from '@/contexts/LanguageContext'
@@ -11,6 +11,7 @@ export default function ProtectedRoute({
   requireAdmin?: boolean
 }) {
   const { user, isAdmin, loading, profileError, reloadProfile } = useAuth()
+  const [retrying, setRetrying] = useState(false)
   const t = useT()
 
   if (loading) {
@@ -33,9 +34,13 @@ export default function ProtectedRoute({
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-6">
         <p className="text-terracotta">{t.authProfileLoadError}</p>
+        {/* Disabled while the retry is in flight: during an outage the read
+            can take seconds, and a button that does nothing visible reads as
+            broken. Same reason BrandsContext puts `loading` back to true. */}
         <button
-          onClick={() => reloadProfile()}
-          className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          onClick={async () => { setRetrying(true); await reloadProfile(); setRetrying(false) }}
+          disabled={retrying}
+          className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {t.failedTryAgain}
         </button>

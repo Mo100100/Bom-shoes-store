@@ -517,6 +517,7 @@ export const translations = {
     adminSaveFailed: 'Save failed',
     adminSaveNotApplied: 'Nothing was written. Reload the page and try again.',
     adminLoadError: 'Could not load this list. It has not been emptied, this screen just could not read it.',
+    adminCouldNotCheckUsage: 'Could not check whether any products still use this. Nothing was deleted.',
     adminDeleteFailed: 'Delete failed',
     adminUploadFailed: 'Upload failed',
 
@@ -1343,6 +1344,7 @@ export const translations = {
     adminSaveFailed: 'فشل الحفظ',
     adminSaveNotApplied: 'لم يتم حفظ أي شيء. أعد تحميل الصفحة وحاول مرة أخرى.',
     adminLoadError: 'تعذر تحميل هذه القائمة. لم يتم حذف محتواها، هذه الشاشة فقط لم تستطع قراءتها.',
+    adminCouldNotCheckUsage: 'تعذر التحقق مما إذا كانت هناك منتجات ما زالت تستخدم هذا. لم يتم حذف أي شيء.',
     adminDeleteFailed: 'فشل الحذف',
     adminUploadFailed: 'فشل الرفع',
 

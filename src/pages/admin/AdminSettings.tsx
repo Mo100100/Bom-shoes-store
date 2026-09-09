@@ -342,10 +342,14 @@ export default function AdminSettings() {
     // ponytail: a simple existence check, not a foreign key -- products.category
     // has always been free text, so this is the same protection an FK ON DELETE
     // RESTRICT would give without a schema change.
-    const { count } = await supabase
+    const { count, error: countError } = await supabase
       .from('products')
       .select('id', { count: 'exact', head: true })
       .eq('category', value)
+    // A failed count comes back as null, which is falsy: without this the
+    // guard would evaporate on a dropped read and the delete would go ahead
+    // over however many products are really pointing at this category.
+    if (countError) { toast.error(t.adminCouldNotCheckUsage); return }
     if (count) { toast.error(t.adminCategoryInUse(count)); return }
     const { error } = await supabase.from('categories').delete().eq('value', value)
     if (error) { toast.error(error.message || t.adminDeleteFailed); return }
@@ -410,8 +414,10 @@ export default function AdminSettings() {
   async function handleDeleteBrand(value: string) {
     if (!confirm(t.adminDeleteConfirm(value))) return
     // Same free-text guard categories use -- products.brand isn't an FK.
-    const { count } = await supabase
+    const { count, error: countError } = await supabase
       .from('products').select('id', { count: 'exact', head: true }).eq('brand', value)
+    // Same as the category guard: a null count is "could not tell", not "none".
+    if (countError) { toast.error(t.adminCouldNotCheckUsage); return }
     if (count) { toast.error(t.adminBrandInUse(count)); return }
     const { error } = await supabase.from('brands').delete().eq('value', value)
     if (error) { toast.error(error.message || t.adminDeleteFailed); return }

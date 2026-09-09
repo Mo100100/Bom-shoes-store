@@ -43,68 +43,77 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return promise
   }
 
+  // Never throws and never rejects: the promise it returns is the one both
+  // callers await, and a rejected one cached in profileLoadRef would leave
+  // every later caller awaiting the same rejection with `loading` stuck true.
   async function readProfile(userId: string) {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle()
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle()
 
-    // Could not READ. Never fall through to the insert below: the row may well
-    // exist (and hold role 'admin'), and a blind insert would fail on the
-    // primary key anyway. Leave the door open for a retry.
-    if (error) {
-      profileLoadRef.current = null
-      setProfile(null)
-      setProfileError(true)
-      return
-    }
+      // Could not READ. Never fall through to the insert below: the row may
+      // well exist (and hold role 'admin'), and a blind insert would fail on
+      // the primary key anyway. Leave the door open for a retry.
+      if (error) { failProfile(); return }
 
-    if (data) {
-      setProfile(data)
+      if (data) {
+        setProfile(data)
+        setProfileError(false)
+        return
+      }
+
+      // Read succeeded and there is genuinely no row: a user who signed up
+      // before this table, or whose signup insert never landed.
+      const { data: userData } = await supabase.auth.getUser()
+      if (!userData.user) { failProfile(); return }
+      // No role: the column defaults to 'customer' and a BEFORE INSERT
+      // trigger forces it anyway (20260809000000). The client never gets a
+      // say in it.
+      const newProfile = {
+        id: userId,
+        email: userData.user.email || '',
+        full_name: userData.user.user_metadata?.full_name || '',
+      }
+      const { data: created, error: insertError } = await supabase
+        .from('profiles')
+        .insert(newProfile)
+        .select()
+        .single()
+      // An insert that wrote nothing leaves this account with no profile at
+      // all, which is a broken state and not "you are not an admin".
+      if (insertError || !created) { failProfile(); return }
+      setProfile(created)
       setProfileError(false)
-      return
+    } catch {
+      // A genuine throw (an auth client rejecting, malformed JSON) lands here
+      // rather than escaping into the cached promise.
+      failProfile()
     }
+  }
 
-    // Read succeeded and there is genuinely no row: a user who signed up
-    // before this table, or whose signup insert never landed.
-    const { data: userData } = await supabase.auth.getUser()
-    if (!userData.user) {
-      profileLoadRef.current = null
-      setProfileError(true)
-      return
-    }
-    // No role: the column defaults to 'customer' and a BEFORE INSERT
-    // trigger forces it anyway (20260809000000). The client never gets a
-    // say in it.
-    const newProfile = {
-      id: userId,
-      email: userData.user.email || '',
-      full_name: userData.user.user_metadata?.full_name || '',
-    }
-    const { data: created, error: insertError } = await supabase
-      .from('profiles')
-      .insert(newProfile)
-      .select()
-      .single()
-    // An insert that wrote nothing leaves this account with no profile at all,
-    // which is a broken state and not "you are not an admin".
-    if (insertError || !created) {
-      profileLoadRef.current = null
-      setProfile(null)
-      setProfileError(true)
-      return
-    }
-    setProfile(created)
-    setProfileError(false)
+  // One exit for every way this can fail. Clearing the ref is what lets the
+  // next auth event, or the Try again button, start a fresh read.
+  function failProfile() {
+    profileLoadRef.current = null
+    setProfile(null)
+    setProfileError(true)
   }
 
   // Retry after a failed read, from the screen that noticed it.
   async function reloadProfile() {
-    const { data: { user: current } } = await supabase.auth.getUser()
-    if (!current) return
-    profileLoadRef.current = null
-    await loadProfile(current.id)
+    try {
+      const { data: { user: current } } = await supabase.auth.getUser()
+      // Still signed out, or the auth call itself failed: say so rather than
+      // returning silently and leaving the retry button looking dead.
+      if (!current) { failProfile(); return }
+      profileLoadRef.current = null
+      await loadProfile(current.id)
+    } catch {
+      failProfile()
+    }
   }
 
   useEffect(() => {

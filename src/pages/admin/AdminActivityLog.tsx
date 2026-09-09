@@ -2,6 +2,7 @@ import { useEffect, useState, Fragment } from 'react'
 import { supabase, ActivityLog } from '@/lib/supabase'
 import { useT } from '@/contexts/LanguageContext'
 import { Loader2, ChevronDown, ChevronRight } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
 
 const PAGE_SIZE = 50
@@ -123,15 +124,7 @@ export default function AdminActivityLog() {
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
       ) : loadError ? (
-        <div className="border border-terracotta bg-card p-12 text-center">
-          <p className="text-terracotta">{t.adminLoadError}</p>
-          <button
-            onClick={() => load()}
-            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
-          >
-            {t.failedTryAgain}
-          </button>
-        </div>
+        <LoadErrorPanel onRetry={load} />
       ) : logs.length === 0 ? (
         <div className="border border-border bg-card p-12 text-center">
           <p className="text-muted-foreground">{t.adminNoActivity}</p>

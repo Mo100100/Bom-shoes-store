@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { useT } from '@/contexts/LanguageContext'
 import { Loader2, Plus, X, Edit2, Trash2 } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
 import { useCategories } from '@/contexts/CategoriesContext'
 
@@ -202,15 +203,7 @@ export default function AdminCoupons() {
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
       ) : loadError ? (
-        <div className="border border-terracotta bg-card p-12 text-center">
-          <p className="text-terracotta">{t.adminLoadError}</p>
-          <button
-            onClick={() => load()}
-            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
-          >
-            {t.failedTryAgain}
-          </button>
-        </div>
+        <LoadErrorPanel onRetry={load} />
       ) : (
         <div className="border border-border bg-card overflow-hidden">
           <div className="overflow-x-auto">

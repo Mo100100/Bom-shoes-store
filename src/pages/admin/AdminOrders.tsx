@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useT } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { Loader2, ChevronDown, ChevronUp, Search } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
 
 type SortKey = 'date' | 'total'
@@ -202,15 +203,7 @@ export default function AdminOrders() {
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
       ) : loadError ? (
-        <div className="border border-terracotta bg-card p-12 text-center">
-          <p className="text-terracotta">{t.adminLoadError}</p>
-          <button
-            onClick={() => load()}
-            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
-          >
-            {t.failedTryAgain}
-          </button>
-        </div>
+        <LoadErrorPanel onRetry={load} />
       ) : filtered.length === 0 ? (
         <div className="border border-border bg-card p-12 text-center">
           <p className="text-muted-foreground">{t.adminNoOrdersFilter}</p>

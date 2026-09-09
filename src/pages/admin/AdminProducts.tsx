@@ -9,6 +9,7 @@ import { compressImage } from '@/lib/compressImage'
 import { diffVariants, DesiredVariant } from '@/lib/variantDiff'
 import { splitSizes } from '@/lib/sizes'
 import { Loader2, Plus, X, Edit2, Trash2, Star, Search, ChevronUp, ChevronDown } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
 
 type SortKey = 'name' | 'price'
@@ -106,7 +107,7 @@ export default function AdminProducts() {
   const { isAdmin } = useAuth()
   const t = useT()
   const { formatPrice, currency } = useCurrency()
-  const { categories, categoryLabel } = useCategories()
+  const { categories, categoryLabel, loadError: categoriesLoadError } = useCategories()
   const { brands, brandLabel, loadError: brandsLoadError } = useBrands()
   const CATEGORY_VALUES = categories.map(c => c.value)
   // What the two selects in the editor are actually bound to. A product can
@@ -186,9 +187,14 @@ export default function AdminProducts() {
     return true
   }
 
-  async function loadCostPrice(productId: string) {
-    const { data } = await supabase.from('product_costs').select('cost_price').eq('product_id', productId).maybeSingle()
+  // Same contract as loadVariants, and for the same reason: handleSave upserts
+  // whatever is in the box, so a failed read would write null over the real
+  // cost price and every profit figure on the dashboard with it.
+  async function loadCostPrice(productId: string): Promise<boolean> {
+    const { data, error } = await supabase.from('product_costs').select('cost_price').eq('product_id', productId).maybeSingle()
+    if (error) return false
     setCostPrice(data?.cost_price ?? null)
+    return true
   }
 
   function openNew() {
@@ -201,10 +207,10 @@ export default function AdminProducts() {
   }
   async function openEdit(p: ProductCatalogEntry) {
     setDragIndex(null)
-    const [, variantsLoaded] = await Promise.all([loadImages(p.id), loadVariants(p.id), loadCostPrice(p.id)])
-    // Opened only once its sizes are really in hand, so Save can never write
-    // an emptiness that came from a dropped read.
-    if (!variantsLoaded) { toast.error(t.adminLoadError); return }
+    const [, variantsLoaded, costLoaded] = await Promise.all([loadImages(p.id), loadVariants(p.id), loadCostPrice(p.id)])
+    // Opened only once its sizes and its cost are really in hand, so Save can
+    // never write an emptiness that came from a dropped read.
+    if (!variantsLoaded || !costLoaded) { toast.error(t.adminLoadError); return }
     setEditing({ ...p })
   }
 
@@ -399,11 +405,16 @@ export default function AdminProducts() {
       // (Shop, ProductDetail, Cart) don't go stale now that variants are the
       // real source of truth. Same `desiredVariants` list the variant rows came
       // from, so the legacy columns can't reintroduce a crammed size.
-      await supabase.from('products').update({
+      const { error: legacyError } = await supabase.from('products').update({
         stock: desiredVariants.reduce((sum, v) => sum + v.stock, 0),
         sizes: Array.from(new Set(desiredVariants.map(v => v.size))),
         colors: Array.from(new Set(desiredVariants.map(v => v.color))),
       }).eq('id', productId)
+      // The zero-row case is already covered by the UPDATE above (same row,
+      // same id), but a rejected write is not: Shop, ProductDetail and Cart
+      // still read these flat columns, so a silent failure here sells a size
+      // that no longer exists.
+      if (legacyError) throw legacyError
 
       toast.success(isNew ? t.adminCreateSuccess : t.adminUpdateSuccess)
       if (isNew) {
@@ -478,15 +489,7 @@ export default function AdminProducts() {
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
       ) : loadError ? (
-        <div className="border border-terracotta bg-card p-12 text-center">
-          <p className="text-terracotta">{t.adminLoadError}</p>
-          <button
-            onClick={() => load()}
-            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
-          >
-            {t.failedTryAgain}
-          </button>
-        </div>
+        <LoadErrorPanel onRetry={load} />
       ) : visibleProducts.length === 0 ? (
         <div className="border border-border bg-card p-12 text-center">
           <p className="text-muted-foreground">{t.adminNoProducts}</p>
@@ -606,8 +609,13 @@ export default function AdminProducts() {
                     onChange={e => setEditing({ ...editing, category: e.target.value })}
                     className="w-full bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none cursor-pointer"
                   >
+                    {/* Same reasoning as the brand select below: when the
+                        LIST failed to load, "no longer in the list" would be a
+                        guess, so show the stored value plainly instead. */}
                     {!CATEGORY_VALUES.includes(editingCategory) && (
-                      <option value={editingCategory}>{t.adminOptionNotInList(editingCategory)}</option>
+                      <option value={editingCategory}>
+                        {categoriesLoadError ? editingCategory : t.adminOptionNotInList(editingCategory)}
+                      </option>
                     )}
                     {CATEGORY_VALUES.map(c => (
                       <option key={c} value={c}>{categoryLabel(c)}</option>

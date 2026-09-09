@@ -3,6 +3,7 @@ import { supabase, Profile } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useT } from '@/contexts/LanguageContext'
 import { Loader2, ChevronDown, Search } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
 
 const ROLE_VALUES = ['customer', 'admin']
@@ -84,15 +85,7 @@ export default function AdminUsers() {
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
       ) : loadError ? (
-        <div className="py-24 text-center">
-          <p className="text-terracotta">{t.adminLoadError}</p>
-          <button
-            onClick={() => load()}
-            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
-          >
-            {t.failedTryAgain}
-          </button>
-        </div>
+        <LoadErrorPanel onRetry={load} />
       ) : (
         <div className="border border-border bg-card overflow-hidden">
           <div className="overflow-x-auto">

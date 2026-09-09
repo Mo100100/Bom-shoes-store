@@ -4,6 +4,7 @@ import { supabase, Order, ProductCatalogEntry } from '@/lib/supabase'
 import { useT } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { Package, ShoppingBag, TrendingUp, ListOrdered, Loader2 } from 'lucide-react'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
@@ -128,15 +129,7 @@ export default function AdminDashboard() {
 
   if (loadError) {
     return (
-      <div className="border border-terracotta bg-card p-12 text-center">
-        <p className="text-terracotta">{t.adminLoadError}</p>
-        <button
-          onClick={() => load()}
-          className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
-        >
-          {t.failedTryAgain}
-        </button>
-      </div>
+      <LoadErrorPanel onRetry={load} />
     )
   }
 
