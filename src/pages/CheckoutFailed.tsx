@@ -14,8 +14,11 @@ export default function CheckoutFailed() {
   // Which ways to pay this page may offer comes from the same
   // admin-editable site_content.checkout_config the checkout form reads, so
   // it can never send a customer to a payment method that is switched off.
-  // Null until it resolves: offering nothing for a moment is better than
-  // offering a method that turns out to be disabled.
+  // Null until it resolves, and null FOREVER if the read fails: offering
+  // nothing is better than offering a method that turns out to be disabled,
+  // and a page whose whole job is to undo a dead end must not create another
+  // one. fetchCheckoutConfig throws on a failed read now, so the rejection
+  // handler below is a live path rather than the dead code it used to be.
   const [config, setConfig] = useState<CheckoutConfig | null>(null)
   useEffect(() => { fetchCheckoutConfig().then(setConfig, () => setConfig(null)) }, [])
 

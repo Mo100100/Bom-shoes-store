@@ -16,7 +16,17 @@ export type ShippingRegion = {
 }
 export type ShippingConfig = { regions: ShippingRegion[] }
 
-export const DEFAULT_CHECKOUT_CONFIG: CheckoutConfig = { online_enabled: true, cash_enabled: true }
+// Used for a config row that exists but is missing a key, and as the initial
+// state of the screens that read it. NOT used for a failed read: see
+// fetchCheckoutConfig.
+//
+// online_enabled defaults FALSE and cash_enabled TRUE because the two are not
+// symmetrical. Offering cash the store does not take costs one manual phone
+// call; offering card the store cannot process sends the customer into a
+// payment form that does not exist, which is the dead end this whole change
+// set is closing. Card payment is switched off in production today, so false
+// is also the truthful default.
+export const DEFAULT_CHECKOUT_CONFIG: CheckoutConfig = { online_enabled: false, cash_enabled: true }
 
 // The 27 Egyptian governorates -- single source of truth for the admin's
 // "restore all governorates" action (matches the migration seed).
@@ -50,20 +60,26 @@ export const EGYPT_GOVERNORATES: ShippingRegion[] = [
   { code: 'south_sinai', name_en: 'South Sinai', name_ar: 'جنوب سيناء', price: 0 },
 ]
 
+// Throws on a failed read. `error` used to be ignored, which made a blocked
+// or dropped read indistinguishable from a successful read of an absent row:
+// both produced `data == null` and both fell back to the defaults. That is
+// what let CheckoutFailed offer "try again" into a card form the store does
+// not have, and it made that page's own rejection handler dead code.
 export async function fetchCheckoutConfig(): Promise<CheckoutConfig> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('site_content')
     .select('value')
     .eq('key', 'checkout_config')
     .maybeSingle()
+  if (error) throw error
   return { ...DEFAULT_CHECKOUT_CONFIG, ...(data?.value as Partial<CheckoutConfig> | undefined) }
 }
 
-// Unlike fetchCheckoutConfig above, a failure here cannot fall back to a safe
-// default: the governorate select is required, and an empty region list means
-// checkout cannot be completed at all. Throwing lets the caller (Checkout.tsx)
-// tell the customer and offer a retry, instead of silently rendering an
-// empty, unusable dropdown.
+// Like fetchCheckoutConfig above, a failure here throws, and here there is no
+// safe default at all: the governorate select is required, and an empty region
+// list means checkout cannot be completed. Throwing lets the caller
+// (Checkout.tsx) tell the customer and offer a retry, instead of silently
+// rendering an empty, unusable dropdown.
 export async function fetchShippingConfig(): Promise<ShippingConfig> {
   const { data, error } = await supabase
     .from('site_content')
