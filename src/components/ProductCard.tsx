@@ -54,7 +54,10 @@ export default function ProductCard({
   // products.brand stores brands.value, an immutable key that is not the
   // display name (the live row value='ل' has name='Burberry'). Look it up the
   // same way the category beside it is looked up.
-  const topLabel = brandLabel(p.brand) || categoryLabel
+  // Brand names are Latin, the category fallback is translated, so only the
+  // brand run gets .latin-text (which keeps its tracking-* on the Arabic store).
+  const brandName = brandLabel(p.brand)
+  const topLabel = brandName || categoryLabel
 
   return (
     <Link
@@ -98,7 +101,7 @@ export default function ProductCard({
       </div>
 
       <div className="px-0.5">
-        <span className="block text-[11px] font-semibold tracking-[0.1em] uppercase text-muted-foreground mb-1">
+        <span className={cn('block text-[11px] font-semibold tracking-[0.1em] uppercase text-muted-foreground mb-1', brandName && 'latin-text')}>
           {topLabel}
         </span>
         <h3 className="text-sm font-semibold uppercase tracking-wide leading-snug text-foreground min-h-[36px] group-hover:text-muted-foreground transition-colors">

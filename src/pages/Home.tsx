@@ -217,7 +217,7 @@ export default function Home() {
                 {b.logo_url ? (
                   <img src={b.logo_url} alt={b.name} className="h-6 w-auto object-contain opacity-80 group-hover:opacity-100 transition-opacity" />
                 ) : (
-                  <span className="font-display text-[22px] md:text-[26px] font-semibold tracking-[0.04em] leading-none text-foreground/85 group-hover:text-foreground transition-colors">
+                  <span className="latin-text font-display text-[22px] md:text-[26px] font-semibold tracking-[0.04em] leading-none text-foreground/85 group-hover:text-foreground transition-colors">
                     {b.name}
                   </span>
                 )}

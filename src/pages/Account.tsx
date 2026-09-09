@@ -101,7 +101,7 @@ export default function Account() {
                 <div key={o.id} className="border border-border p-5 sm:p-6">
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div>
-                      <p className="font-mono text-xs text-muted-foreground tracking-wider">
+                      <p className="latin-text font-mono text-xs text-muted-foreground tracking-wider">
                         {o.kashier_order_id || o.id.slice(0, 8).toUpperCase()}
                       </p>
                       <p className="text-xs text-muted-foreground mt-1">

@@ -345,6 +345,24 @@ img { object-position: center; }
   transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
 }
 
+/* Arabic is cursive: every positive letter-spacing severs the joins and the
+   word renders as a row of disconnected glyphs. Tailwind's tracking-* utilities
+   sit on Arabic strings in ~165 places (nav, buttons, labels, the announcement
+   bar at 0.25em), so neutralise them once here instead of at every call site.
+   Latin runs inside an Arabic page opt out with .latin-text and keep the exact
+   utility value they were given, since this rule never matches them. */
+body.font-arabic [class*="tracking-"]:not(.latin-text) {
+  letter-spacing: 0;
+}
+
+/* Marks an element whose text is always Latin even on the Arabic store: brand
+   names, product names, order references. Keeps its tracking-* letter-spacing
+   and isolates the run so trailing digits and punctuation order correctly
+   beside Arabic, without changing the block's alignment. */
+.latin-text {
+  unicode-bidi: isolate;
+}
+
 /* A visible keyboard focus ring. Inputs across the app set `outline-none` (or
    `focus:outline-none`) and only change border colour, which leaves keyboard
    users with nothing to follow. `!important` is what beats those utilities;
