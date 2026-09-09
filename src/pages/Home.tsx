@@ -25,8 +25,6 @@ export default function Home() {
   const [recent, setRecent] = useState<ProductCatalogEntry[]>([])
   const [productsLoading, setProductsLoading] = useState(true)
   const [dropEndsAt, setDropEndsAt] = useState<Date | null>(null)
-  // ponytail: fallback drop deadline when no auto-promo/manual target set.
-  const [placeholderDrop] = useState(() => new Date(Date.now() + 3 * 24 * 60 * 60 * 1000))
   const [quickAddingId, setQuickAddingId] = useState<string | null>(null)
   const [content, setContent] = useState<Record<string, any>>({})
   const t = useT()
@@ -105,9 +103,18 @@ export default function Home() {
   const trustEnabled = trustC?.enabled !== false
   const brandBarEnabled = content.categories_strip?.enabled !== false
 
-  const dropTarget = dropC?.countdown_mode === 'manual' && dropC?.manual_target
-    ? new Date(dropC.manual_target)
-    : (dropEndsAt || placeholderDrop)
+  // A deadline is either real or it is not rendered. The old fallback invented
+  // "now plus three days" and, being state-initialised, reset on every page
+  // load: a timer that never reaches zero is a lie told to rush a purchase.
+  // Manual mode reads the admin's date, auto mode the soonest promo end, and
+  // both drop the timer once the date is in the past. The rest of the section
+  // (copy, image, CTA) keeps rendering either way.
+  const dropTarget = dropC?.countdown_mode === 'manual'
+    ? (dropC?.manual_target ? new Date(dropC.manual_target) : null)
+    : dropEndsAt
+  const showCountdown = dropC?.countdown_mode !== 'off'
+    && dropTarget != null
+    && dropTarget.getTime() > Date.now()
 
   const pick = (en?: string, ar?: string) => (lang === 'ar' ? (ar ?? en) : (en ?? ar)) || ''
 
@@ -316,7 +323,7 @@ export default function Home() {
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform flip-rtl" />
               </Link>
             </div>
-            {dropC?.countdown_mode !== 'off' && (
+            {showCountdown && (
               <CountdownTimer
                 target={dropTarget}
                 labels={{ days: t.homeDropDays, hours: t.homeDropHrs, minutes: t.homeDropMins, seconds: t.homeDropSecs }}
