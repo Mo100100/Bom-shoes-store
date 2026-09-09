@@ -13,15 +13,25 @@ import SectionHeading from '@/components/SectionHeading'
 // "no testimonials yet" empty state here for a customer to misread as broken,
 // and a homepage must not grow an error panel because an optional section
 // could not load.
+type TestimonialCard = Pick<
+  Testimonial,
+  'id' | 'quote_en' | 'quote_ar' | 'author_name' | 'author_title' | 'avatar_url' | 'rating'
+>
+
 export default function HomeTestimonials() {
   const t = useT()
   const { lang } = useLanguage()
-  const [rows, setRows] = useState<Testimonial[]>([])
+  // Only the columns this section renders: `active` is already enforced by
+  // RLS and `created_at` is never shown, so neither needs to cross the wire.
+  const [rows, setRows] = useState<TestimonialCard[]>([])
 
   useEffect(() => {
     let cancelled = false
-    // RLS already restricts the anonymous read to active = true.
-    supabase.from('testimonials').select('*').order('position').limit(6)
+    // RLS already restricts the anonymous read to active = true. `position`
+    // orders the rows without being selected.
+    supabase.from('testimonials')
+      .select('id, quote_en, quote_ar, author_name, author_title, avatar_url, rating')
+      .order('position').limit(6)
       .then(({ data }) => { if (!cancelled) setRows(data || []) })
     return () => { cancelled = true }
   }, [])
