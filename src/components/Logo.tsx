@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { cn } from '@/lib/utils'
-import { supabase } from '@/lib/supabase'
+import { useStoreSettings } from '@/contexts/StoreSettingsContext'
 
 interface LogoProps {
   size?: number
@@ -8,29 +8,14 @@ interface LogoProps {
   showText?: boolean
 }
 
-// Singleton row id -- see supabase/migrations/20260704008000_store_settings_realtime.sql.
-const STORE_SETTINGS_ID = '00000000-0000-0000-0000-000000000001'
-
-// One-time fetch of the admin-configured logo URL, if any. Stays null (and
-// the SVG monogram below keeps rendering) on a missing row, a fetch error,
-// or an unreachable table -- this must never blank/break the header logo.
-function useStoreLogoUrl() {
-  const [url, setUrl] = useState<string | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    supabase
-      .from('store_settings')
-      .select('logo_url')
-      .eq('id', STORE_SETTINGS_ID)
-      .maybeSingle()
-      .then(
-        ({ data }) => { if (!cancelled) setUrl(data?.logo_url || null) },
-        () => {} // ponytail: leave url null, SVG fallback covers it
-      )
-    return () => { cancelled = true }
-  }, [])
-  return url
-}
+// An uploaded logo is constrained by HEIGHT and keeps its natural width, which
+// is what a real (wide) logo needs -- forcing it into a square box drew a
+// 600x200 mark at 56x19 in a 56px header slot. The width is capped at this
+// multiple of the height, and additionally at a share of the viewport, because
+// a 375px header only has about 110px to spare next to the menu button and the
+// icon group. object-contain letterboxes anything wider than the cap.
+const MAX_LOGO_ASPECT = 3
+const MAX_LOGO_VIEWPORT_WIDTH = '30vw'
 
 /**
  * BOM Store monogram logo.
@@ -39,9 +24,12 @@ function useStoreLogoUrl() {
  * otherwise falls back to this hardcoded SVG monogram.
  */
 export default function Logo({ size = 64, className, showText = true }: LogoProps) {
-  const fetchedLogoUrl = useStoreLogoUrl()
-  const [imgFailed, setImgFailed] = useState(false)
-  const logoUrl = imgFailed ? null : fetchedLogoUrl
+  const { logoUrl: fetchedLogoUrl } = useStoreSettings()
+  // Keyed by URL, not a bare boolean: the admin can now replace the logo
+  // without a page reload, so a broken upload must not keep the monogram
+  // showing once a working one lands.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const logoUrl = fetchedLogoUrl === failedUrl ? null : fetchedLogoUrl
   const r = size * 0.45
   const cx = size / 2
   const cy = size / 2
@@ -57,15 +45,16 @@ export default function Logo({ size = 64, className, showText = true }: LogoProp
 
   if (logoUrl) {
     return (
-      <div className={cn('flex flex-col items-center select-none', className)} style={{ width: size }}>
+      // No fixed width here, unlike the monogram below: the box is as wide as
+      // the logo actually is, so the flex header (and its RTL mirror) lays out
+      // around the real mark instead of around 54% of empty space.
+      <div className={cn('flex flex-col items-center select-none', className)}>
         <img
           src={logoUrl}
           alt="BOM Store logo"
-          width={size}
-          height={size}
-          style={{ width: size, height: size }}
-          className="object-contain"
-          onError={() => setImgFailed(true)}
+          style={{ height: size, maxWidth: `min(${size * MAX_LOGO_ASPECT}px, ${MAX_LOGO_VIEWPORT_WIDTH})` }}
+          className="w-auto object-contain"
+          onError={() => setFailedUrl(logoUrl)}
         />
         {text}
       </div>

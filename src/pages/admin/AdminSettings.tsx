@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { supabase, StoreSettings } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase'
 import { useCategories } from '@/contexts/CategoriesContext'
 import { useBrands } from '@/contexts/BrandsContext'
+import { useStoreSettings } from '@/contexts/StoreSettingsContext'
 import { compressImage } from '@/lib/compressImage'
 import {
   DEFAULT_CHECKOUT_CONFIG, EGYPT_GOVERNORATES,
@@ -18,7 +19,37 @@ type Translations = ReturnType<typeof useT>
 const STORE_SETTINGS_ID = '00000000-0000-0000-0000-000000000001'
 
 type UploadField = 'logo_url' | 'favicon_url'
-type SettingsState = Pick<StoreSettings, 'logo_url' | 'favicon_url'>
+
+// A header logo is a wide mark. Logo.tsx now keeps the uploaded aspect ratio,
+// so a portrait image is drawn as a narrow strip however tall the header is:
+// say that at upload time rather than let the owner conclude the upload never
+// went through. Never blocks the upload -- the owner may have a reason.
+const MIN_HEADER_ASPECT = 1
+const MAX_HEADER_ASPECT = 6
+
+async function warnIfNotHeaderShaped(file: File, t: Translations) {
+  let aspect: number
+  try {
+    const bitmap = await createImageBitmap(file)
+    aspect = bitmap.width / bitmap.height
+    bitmap.close?.()
+  } catch {
+    return // undecodable here (SVG in some browsers): nothing to judge
+  }
+  if (aspect < MIN_HEADER_ASPECT) toast.warning(t.adminLogoTooTall, { duration: 12000 })
+  else if (aspect > MAX_HEADER_ASPECT) toast.warning(t.adminLogoTooWide, { duration: 12000 })
+}
+
+// Delete the object a new upload replaces, the way product images are cleaned
+// up (AdminProducts.handleDeleteImage). Non-fatal by design: the row already
+// points at the new file, so a failed delete costs a few KB of the free tier,
+// never a broken logo. Only ever called once the UPDATE is confirmed written.
+async function removeStoreAsset(url: string | null) {
+  const path = url?.split('/store-assets/')[1]
+  if (!path) return
+  const { error } = await supabase.storage.from('store-assets').remove([decodeURIComponent(path)])
+  if (error) console.warn('store-assets cleanup failed', error.message)
+}
 
 type WhatsAppContent = { phone: string; message_en: string; message_ar: string }
 type ContactContentState = {
@@ -40,7 +71,6 @@ const EMPTY_CONTACT: ContactContentState = {
 }
 
 export default function AdminSettings() {
-  const [settings, setSettings] = useState<SettingsState | null>(null)
   const [loading, setLoading] = useState(true)
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [uploadingFavicon, setUploadingFavicon] = useState(false)
@@ -53,6 +83,12 @@ export default function AdminSettings() {
   const [newLabelAr, setNewLabelAr] = useState('')
   const [savingCategory, setSavingCategory] = useState(false)
   const { brands, reload: reloadBrands } = useBrands()
+  // The logo/favicon live in the one context the storefront header reads, so
+  // an upload here updates the header in place instead of after a reload.
+  const {
+    logoUrl, faviconUrl, loading: settingsLoading,
+    loadError: settingsError, reload: reloadStoreSettings,
+  } = useStoreSettings()
   const [newBrandName, setNewBrandName] = useState('')
   const [savingBrand, setSavingBrand] = useState(false)
   // brand `value` whose logo is currently uploading (null = none)
@@ -80,14 +116,6 @@ export default function AdminSettings() {
     const id = ++loadIdRef.current
     setLoading(true)
     try {
-      const { data } = await supabase
-        .from('store_settings')
-        .select('logo_url, favicon_url')
-        .eq('id', STORE_SETTINGS_ID)
-        .maybeSingle()
-      if (id !== loadIdRef.current) return
-      setSettings(data || { logo_url: null, favicon_url: null })
-
       const { data: content, error: contentError } = await supabase
         .from('site_content')
         .select('key, value')
@@ -162,6 +190,8 @@ export default function AdminSettings() {
       const prefix = field === 'logo_url' ? 'logo' : 'favicon'
       // Compress the logo; leave the favicon untouched (it must stay tiny/native).
       const file = field === 'logo_url' ? await compressImage(raw, { maxDim: 600 }) : raw
+      if (field === 'logo_url') await warnIfNotHeaderShaped(raw, t)
+      const previousUrl = field === 'logo_url' ? logoUrl : faviconUrl
       const path = `${prefix}/${Date.now()}-${file.name}`
       const { error: upErr } = await supabase.storage.from('store-assets').upload(path, file)
       if (upErr) throw upErr
@@ -171,12 +201,23 @@ export default function AdminSettings() {
       // makes the one row the only possible row). An upsert issues INSERT ... ON
       // CONFLICT, whose INSERT arm the missing insert policy rejects with an RLS
       // violation even though the row already exists -- so update the seeded row.
-      const { error: dbErr } = await supabase
+      const { data: saved, error: dbErr } = await supabase
         .from('store_settings')
         .update({ [field]: pub.publicUrl })
         .eq('id', STORE_SETTINGS_ID)
+        .select('logo_url, favicon_url')
+        .maybeSingle()
       if (dbErr) throw dbErr
-      setSettings(prev => ({ ...(prev || { logo_url: null, favicon_url: null }), [field]: pub.publicUrl }))
+      // An UPDATE matching no row (an RLS denial, a missing singleton) comes
+      // back with no error and no row. Without this the old object below would
+      // be deleted while the row still pointed at it.
+      if (!saved) {
+        // The row is unchanged, so the file just uploaded is an orphan.
+        await removeStoreAsset(pub.publicUrl)
+        throw new Error(t.adminSaveFailed)
+      }
+      await removeStoreAsset(previousUrl)
+      await reloadStoreSettings()
       toast.success(t.adminSaved)
     } catch (e: any) {
       toast.error(e.message || t.adminUploadFailed)
@@ -349,7 +390,7 @@ export default function AdminSettings() {
     reloadBrands()
   }
 
-  if (loading) {
+  if (loading || settingsLoading) {
     return (
       <div className="py-24 flex justify-center">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -359,12 +400,17 @@ export default function AdminSettings() {
 
   return (
     <div className="max-w-xl space-y-8">
-      {!contentLoaded && (
+      {(!contentLoaded || settingsError) && (
         <div className="border border-terracotta bg-card p-6">
-          <p className="text-sm text-terracotta">{t.adminSettingsContentLoadError}</p>
+          {settingsError && (
+            <p className="text-sm text-terracotta">{t.adminSettingsAssetsLoadError}</p>
+          )}
+          {!contentLoaded && (
+            <p className="text-sm text-terracotta mt-1 first:mt-0">{t.adminSettingsContentLoadError}</p>
+          )}
           <button
             type="button"
-            onClick={() => load()}
+            onClick={() => { load(); reloadStoreSettings() }}
             className="mt-3 text-sm border-b border-foreground pb-0.5 cursor-pointer"
           >
             {t.failedTryAgain}
@@ -373,14 +419,14 @@ export default function AdminSettings() {
       )}
       <UploadField
         label={t.adminLogo}
-        currentUrl={settings?.logo_url || null}
+        currentUrl={logoUrl}
         uploading={uploadingLogo}
         onChange={file => handleUpload('logo_url', file, setUploadingLogo)}
         t={t}
       />
       <UploadField
         label={t.adminFavicon}
-        currentUrl={settings?.favicon_url || null}
+        currentUrl={faviconUrl}
         uploading={uploadingFavicon}
         onChange={file => handleUpload('favicon_url', file, setUploadingFavicon)}
         t={t}
