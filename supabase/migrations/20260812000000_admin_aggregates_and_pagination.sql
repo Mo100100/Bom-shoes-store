@@ -44,11 +44,15 @@ create index if not exists orders_payment_status_created_at_idx
 -- 1. Dashboard aggregates.
 --
 -- TIMEZONE. Revenue was bucketed by UTC day for a store that sells in Cairo,
--- so every order placed after 22:00 local (23:00 in summer) landed on the next
--- day's bar and the owner's "today" never matched the chart's. Days are cut on
--- the 'Africa/Cairo' calendar date instead. The IANA zone, not a fixed +02,
--- because Egypt reinstated DST in 2023 and the offset is +03 for part of the
--- year: a hardcoded offset would be an hour wrong every summer.
+-- which is UTC+2 (UTC+3 in summer). Local time runs AHEAD of UTC, so the
+-- mis-bucketed orders are the EARLY ones: an order placed at 00:30 local is
+-- 22:30 UTC on the day before, and it landed on the PREVIOUS day's bar. The
+-- window is local midnight to 02:00, and to 03:00 while DST is in force. Late
+-- evening is fine: 23:00 local is 21:00 UTC, the same UTC day.
+--
+-- Days are cut on the 'Africa/Cairo' calendar date instead. The IANA zone, not
+-- a fixed +02, because Egypt reinstated DST in 2023 and the offset is +03 for
+-- part of the year: a hardcoded offset would be an hour wrong every summer.
 --
 -- Returns one jsonb object rather than a set, so the whole screen is a single
 -- round trip and the response is a fixed size (4 scalars + p_days chart points
@@ -291,8 +295,8 @@ comment on view public.bundle_item_counts is
 -- image gallery fired one UPDATE per row inside a Promise.all over a .map,
 -- which is the N+1 write this project forbids, and none of the results were
 -- checked while the UI had already drawn the new order. One call now rewrites
--- the whole list and returns how many rows it actually touched, so a partial
--- or fully refused reorder can be reported instead of assumed.
+-- the whole list in a single statement and refuses to half-apply it, so a
+-- reorder that did not land is reported instead of assumed.
 --
 -- p_table is matched against a fixed list before it reaches format(%I); no
 -- other table can be reached through this function.
@@ -327,17 +331,29 @@ begin
     update public.%I t
     set "position" = v.ord - 1
     from (select id, ord from unnest($1::uuid[]) with ordinality as u(id, ord)) v
-    where t.id = v.id and t."position" is distinct from v.ord - 1
+    where t.id = v.id
   $q$, p_table)
   using p_ids;
 
   get diagnostics v_updated = row_count;
+
+  -- Every id the caller sent must have matched a row. If one was deleted in
+  -- another tab, the survivors have just been renumbered around the gap, which
+  -- is a DIFFERENT order from the one on screen, and a non-zero row count would
+  -- read as success at the call site. Raising rolls the whole statement back,
+  -- so the list is either fully applied or untouched.
+  if v_updated <> array_length(p_ids, 1) then
+    raise exception 'admin_reorder_positions: % of % rows matched in %',
+      v_updated, array_length(p_ids, 1), p_table
+      using errcode = 'P0001', hint = 'reorder_incomplete';
+  end if;
+
   return v_updated;
 end;
 $$;
 
 comment on function public.admin_reorder_positions(text, uuid[]) is
-  'Rewrites position 0..n-1 across hero_banners, testimonials or product_images in one statement. Returns the number of rows whose position actually changed. Admin only.';
+  'Rewrites position 0..n-1 across hero_banners, testimonials or product_images in one statement. Raises (rolling the statement back) unless every id matched a row. Admin only.';
 
 revoke execute on function public.admin_reorder_positions(text, uuid[]) from anon, public;
 grant execute on function public.admin_reorder_positions(text, uuid[]) to authenticated;

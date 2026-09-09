@@ -688,6 +688,10 @@ export const translations = {
 
     // Admin - count nouns
     adminUsersCount: (n: number) => `${n} ${n === 1 ? 'user' : 'users'}`,
+    // PostgREST caps every response at max_rows (supabase/config.toml), so a
+    // list longer than that arrives silently short. Say so rather than letting
+    // the missing rows read as rows that do not exist.
+    adminListTruncated: (shown: number, total: number) => `Showing the newest ${shown} of ${total}. The rest are not on this screen.`,
     adminOrdersCount: (n: number) => `${n} ${n === 1 ? 'order' : 'orders'}`,
     adminNoProducts: 'No products yet',
 
@@ -1515,6 +1519,7 @@ export const translations = {
 
     // Admin - count nouns
     adminUsersCount: (n: number) => `${n} ${n === 1 ? 'مستخدم واحد' : 'مستخدم'}`,
+    adminListTruncated: (shown: number, total: number) => `يتم عرض أحدث ${shown} من إجمالي ${total}. الباقي غير معروض في هذه الشاشة.`,
     adminOrdersCount: (n: number) => `${n} ${n === 1 ? 'طلب واحد' : 'طلب'}`,
     adminNoProducts: 'لا منتجات بعد',
 

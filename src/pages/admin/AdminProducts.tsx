@@ -15,6 +15,11 @@ import { toast } from 'sonner'
 type SortKey = 'name' | 'price'
 type SortDir = 'asc' | 'desc'
 
+// PostgREST caps every response at max_rows (supabase/config.toml) whatever
+// the client asks for, and returns no error when it truncates. 118 products
+// today, so this is latent, but this is the screen the 1001st is added from.
+const MAX_ROWS = 1000
+
 const EMPTY: Partial<Product> = {
   name: '', slug: '', description: '', price: 0, category: 'Sneakers',
   brand: null, featured: false, materials: '', weight_grams: null, tags: [],
@@ -85,6 +90,7 @@ async function syncFeaturedImage(productId: string) {
 
 export default function AdminProducts() {
   const [products, setProducts] = useState<ProductCatalogEntry[]>([])
+  const [totalProducts, setTotalProducts] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [editing, setEditing] = useState<Partial<Product> | null>(null)
@@ -150,12 +156,22 @@ export default function AdminProducts() {
 
   async function load() {
     setLoading(true)
-    const { data, error } = await supabase.from('product_catalog').select('*').order('created_at', { ascending: false })
+    // Bounded at max_rows (supabase/config.toml), which PostgREST enforces
+    // whatever the client asks for, and asked with an exact count so a
+    // truncated catalog can say so. Not paginated: the search, the category
+    // filter and the sort all run over the loaded array, so a page would
+    // silently turn "no results" into "no results on this page".
+    const { data, error, count } = await supabase
+      .from('product_catalog')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .limit(MAX_ROWS)
     // A failed read is not an empty catalog: "No products yet" over 118 live
     // products is exactly the kind of thing that sends an owner looking for a
     // backup that was never needed.
     setLoadError(!!error)
     setProducts(error ? [] : data || [])
+    setTotalProducts(error ? 0 : count || 0)
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -342,7 +358,9 @@ export default function AdminProducts() {
       p_table: 'product_images',
       p_ids: reordered.map(img => img.id),
     })
-    if (error || !Number(data)) toast.error(error?.message || t.adminSaveNotApplied)
+    // The RPC applies the whole list or none of it, so every failure here --
+    // refused, incomplete, or never sent -- means nothing was written.
+    if (error || !Number(data)) toast.error(t.adminSaveNotApplied)
     await loadImages(productId)
   }
 
@@ -459,6 +477,9 @@ export default function AdminProducts() {
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         {/* A count over a failed read would read as "you have no products". */}
         {!loadError && <p className="text-sm text-muted-foreground">{t.adminPieces(visibleProducts.length)}</p>}
+        {!loadError && totalProducts > products.length && (
+          <p className="text-sm text-terracotta">{t.adminListTruncated(products.length, totalProducts)}</p>
+        )}
         {isAdmin && (
           <button
             onClick={openNew}

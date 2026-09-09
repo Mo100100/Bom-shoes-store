@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { supabase, Order } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useT } from '@/contexts/LanguageContext'
@@ -74,6 +74,10 @@ export default function AdminOrders() {
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  // Only the most recent load may land. Two searches typed a moment apart can
+  // come back out of order, and the loser would otherwise paint its rows next
+  // to the winner's total. Same guard AdminBundles uses.
+  const loadIdRef = useRef(0)
   const { isAdmin } = useAuth()
   const t = useT()
   const { formatPrice } = useCurrency()
@@ -101,9 +105,14 @@ export default function AdminOrders() {
     }
   }
 
+  // Takes an optional page size, so every reference to it must be CALLED
+  // rather than passed: an onClick handed this function directly would supply
+  // React's click event as `limit` and the retry could never succeed.
   async function load(limit = PAGE_SIZE) {
+    const id = ++loadIdRef.current
     setLoading(true)
     const { data, error } = await supabase.rpc('admin_orders_page', pageArgs(0, limit))
+    if (id !== loadIdRef.current) return
     // "No orders yet" on a shop that has orders is the single most alarming
     // thing this dashboard can say, so a failed read never renders as one.
     setLoadError(!!error)
@@ -113,6 +122,9 @@ export default function AdminOrders() {
     setTotal(page ? Number(page.total) || 0 : 0)
     setStatusCounts(page?.status_counts || {})
     setHasMore(rows.length < (page ? Number(page.total) || 0 : 0))
+    // A "load more" this load superseded returns without clearing its own
+    // flag, which would leave the button disabled for good.
+    setLoadingMore(false)
     setLoading(false)
   }
 
@@ -124,8 +136,12 @@ export default function AdminOrders() {
   }, [filter, search, sortKey, sortDir])
 
   async function loadMore() {
+    // Shares the counter with load(): a filter or search change mid-flight
+    // discards this page rather than appending it under the new query's rows.
+    const id = ++loadIdRef.current
     setLoadingMore(true)
     const { data, error } = await supabase.rpc('admin_orders_page', pageArgs(orders.length, PAGE_SIZE))
+    if (id !== loadIdRef.current) return
     // A failed page must not read as "that was the last order": keep the
     // button and say what happened, same as AdminActivityLog.
     if (error) { toast.error(t.adminLoadError); setLoadingMore(false); return }
@@ -250,7 +266,7 @@ export default function AdminOrders() {
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
       ) : loadError ? (
-        <LoadErrorPanel onRetry={load} />
+        <LoadErrorPanel onRetry={() => load()} />
       ) : orders.length === 0 ? (
         <div className="border border-border bg-card p-12 text-center">
           <p className="text-muted-foreground">{t.adminNoOrdersFilter}</p>

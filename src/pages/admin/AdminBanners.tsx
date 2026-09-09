@@ -66,9 +66,9 @@ export default function AdminBanners() {
       p_table: 'hero_banners',
       p_ids: reordered.map(b => b.id),
     })
-    // A swap always moves at least two rows, so zero means nothing was
-    // written and the order on screen is a lie.
-    if (error || !Number(data)) toast.error(error?.message || t.adminSaveNotApplied)
+    // The RPC applies the whole list or none of it, so every failure here --
+    // refused, incomplete, or never sent -- means nothing was written.
+    if (error || !Number(data)) toast.error(t.adminSaveNotApplied)
     load()
   }
 

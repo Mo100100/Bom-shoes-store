@@ -720,7 +720,9 @@ function TestimonialsTab() {
       p_table: 'testimonials',
       p_ids: reordered.map(r => r.id),
     })
-    if (error || !Number(data)) toast.error(error?.message || t.adminSaveNotApplied)
+    // The RPC applies the whole list or none of it, so every failure here --
+    // refused, incomplete, or never sent -- means nothing was written.
+    if (error || !Number(data)) toast.error(t.adminSaveNotApplied)
     load()
   }
 

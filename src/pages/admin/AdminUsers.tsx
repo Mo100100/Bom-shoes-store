@@ -6,6 +6,14 @@ import { Loader2, ChevronDown, Search } from 'lucide-react'
 import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
 
+// PostgREST truncates every response at max_rows = 1000 (supabase/config.toml)
+// and reports no error when it does, so this asks for exactly that many and
+// asks for the true total alongside it. Deliberately NOT paginated: the search
+// box and the last-admin guard below both reason over the loaded array, so a
+// page would quietly narrow a search and weaken a safety check. A visible
+// "showing the newest N of M" is the honest version of the same ceiling.
+const MAX_ROWS = 1000
+
 const ROLE_VALUES = ['customer', 'admin']
 const ROLE_LABEL_MAP: Record<string, 'adminRoleCustomer' | 'adminRoleAdmin'> = {
   customer: 'adminRoleCustomer',
@@ -14,6 +22,7 @@ const ROLE_LABEL_MAP: Record<string, 'adminRoleCustomer' | 'adminRoleAdmin'> = {
 
 export default function AdminUsers() {
   const [profiles, setProfiles] = useState<Profile[]>([])
+  const [totalProfiles, setTotalProfiles] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [search, setSearch] = useState('')
@@ -31,14 +40,16 @@ export default function AdminUsers() {
 
   async function load() {
     setLoading(true)
-    const { data, error } = await supabase
+    const { data, error, count } = await supabase
       .from('profiles')
-      .select('*')
+      .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
+      .limit(MAX_ROWS)
     // An empty user list is impossible (whoever is reading this screen is in
     // it), so rendering one for a failed read would only ever be a lie.
     setLoadError(!!error)
     setProfiles(error ? [] : data || [])
+    setTotalProfiles(error ? 0 : count || 0)
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -67,6 +78,9 @@ export default function AdminUsers() {
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         {/* A count over a failed read would read as "you have no users". */}
         {!loadError && <p className="text-sm text-muted-foreground">{t.adminUsersCount(filtered.length)}</p>}
+        {!loadError && totalProfiles > profiles.length && (
+          <p className="text-sm text-terracotta">{t.adminListTruncated(profiles.length, totalProfiles)}</p>
+        )}
       </div>
 
       <div className="relative mb-4 max-w-sm">
