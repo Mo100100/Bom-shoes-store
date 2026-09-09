@@ -113,10 +113,11 @@ export default function QuickViewModal({ productId, onClose }: QuickViewModalPro
   // whole product, so falling back to it quoted 400 for a size that has no
   // override and therefore costs the base 500.
   const effectivePrice = selectedVariant ? (selectedVariant.price_override ?? product?.price ?? 0) : (product?.price ?? 0)
-  // products.stock for the no-variant fallback, exactly as ProductDetail does
-  // it. NOT total_stock: that is the catalog view's sum over the variant rows,
-  // so a legacy product with none always read 0 and offered a disabled
-  // "Out of stock" button for stock it actually had.
+  // The selected variant's own stock, and products.stock for the legacy
+  // no-variant shape -- exactly as ProductDetail does it, and the same
+  // fallback product_catalog.total_stock itself now makes (see
+  // supabase/migrations/20260814000000_catalog_stock_truth.sql), so the grid
+  // card's sold-out overlay and this button can no longer disagree.
   const outOfStock = hasVariants ? (!selectedVariant || selectedVariant.stock === 0) : (product?.stock ?? 0) === 0
   const mainImage = images[0]?.url || product?.image_url || ''
 
