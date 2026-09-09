@@ -9,6 +9,7 @@ import { useBrands } from '@/contexts/BrandsContext'
 import { useCategories } from '@/contexts/CategoriesContext'
 import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { useRecentlyViewed } from '@/hooks/useRecentlyViewed'
+import { useWhatsApp } from '@/hooks/useWhatsApp'
 import { useSeo } from '@/hooks/useSeo'
 import { compareSizes, defaultSizeForColor, firstInStockVariant } from '@/lib/sizes'
 import { fetchShippingConfig } from '@/lib/checkoutConfig'
@@ -90,6 +91,10 @@ export default function ProductDetail() {
   const { formatPrice } = useCurrency()
   const { brandLabel } = useBrands()
   const { categoryLabel } = useCategories()
+  // The store's WhatsApp number, or null while it is still the seeded
+  // placeholder. Every WhatsApp instruction on this page is gated on it, so an
+  // instruction and the button it points at appear together or not at all.
+  const whatsapp = useWhatsApp()
 
   // Guards against two overlapping loads (fast slug-to-slug navigation, or a
   // retry click while the previous attempt is still in flight): only the
@@ -697,7 +702,11 @@ export default function ProductDetail() {
                 <div className="space-y-3 text-sm text-foreground/80 font-light leading-relaxed pt-1 pb-3 max-w-md">
                   <p>{t.productSizeGuideBrands}</p>
                   <p>{t.productSizeGuideMeasure}</p>
-                  <p>{t.productSizeGuideAsk}</p>
+                  {/* Only when there is a WhatsApp button on the page to
+                      follow the instruction with: the store's number is the
+                      seeded placeholder today, so useWhatsApp hides every
+                      WhatsApp affordance and this would point at nothing. */}
+                  {whatsapp.phone && <p>{t.productSizeGuideAsk}</p>}
                   <p>
                     {t.productSizeGuideReturns}{' '}
                     <Link to="/policies" className="border-b border-foreground pb-0.5">{t.navPolicies}</Link>
@@ -838,10 +847,12 @@ export default function ProductDetail() {
                 <Check className="w-4 h-4 text-foreground/60" />
                 <span>{t.productShip2}</span>
               </div>
-              <div className="flex items-center gap-3 text-foreground/80">
-                <Check className="w-4 h-4 text-foreground/60" />
-                <span>{t.productShip3}</span>
-              </div>
+              {whatsapp.phone && (
+                <div className="flex items-center gap-3 text-foreground/80">
+                  <Check className="w-4 h-4 text-foreground/60" />
+                  <span>{t.productShip3}</span>
+                </div>
+              )}
             </div>
 
             {/* Description accordion */}
@@ -851,9 +862,10 @@ export default function ProductDetail() {
                   <span className="text-xs tracking-widest uppercase">{t.productAccordion1}</span>
                   <span className="text-lg group-open:rotate-45 transition-transform">+</span>
                 </summary>
-                <p className="text-sm text-foreground/80 font-light leading-relaxed pt-3 pb-2">
-                  {t.productAccordion1Text}
-                </p>
+                <div className="text-sm text-foreground/80 font-light leading-relaxed pt-3 pb-2 space-y-2">
+                  <p>{t.productAccordion1Text}</p>
+                  {whatsapp.phone && <p>{t.productAccordion1Ask}</p>}
+                </div>
               </details>
               <details className="group border-t border-border/60">
                 <summary className="flex items-center justify-between cursor-pointer list-none py-4">
