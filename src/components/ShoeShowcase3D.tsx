@@ -189,7 +189,7 @@ export default function ShoeShowcase3D({ config, fallback }: ShowcaseProps) {
         {/* Shoes slide in from the bottom and exit through the top. On a phone
             they sit in the TOP half so the copy below never lands on the photo;
             from lg the copy is beside them and both can be centred. */}
-        <div className="absolute inset-x-0 top-[12%] bottom-[42%] lg:top-0 lg:bottom-0 flex items-center justify-center">
+        <div className="absolute inset-x-0 top-[12%] bottom-[42%] lg:top-0 lg:bottom-0 lg:end-1/2 flex items-center justify-center">
           {items.map((s, i) => {
             // diff > 0 → this shoe has already scrolled past (move it upward / off the top)
             // diff < 0 → this shoe hasn't appeared yet (park it below)
@@ -217,7 +217,7 @@ export default function ShoeShowcase3D({ config, fallback }: ShowcaseProps) {
                 aria-label={s.title}
                 aria-hidden={!isActive}
                 tabIndex={isActive ? 0 : -1}
-                className="absolute w-[62vw] max-w-[260px] lg:w-[60vw] lg:max-w-[680px] rounded-2xl overflow-hidden"
+                className="absolute w-[62vw] max-w-[260px] lg:w-[38vw] lg:max-w-[560px] rounded-2xl overflow-hidden"
                 style={{
                   opacity: reducedMotion ? (isActive ? 1 : 0) : opacity,
                   transform,
