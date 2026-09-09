@@ -134,9 +134,14 @@ export default function Home() {
   // Manual mode reads the admin's date, auto mode the soonest promo end, and
   // both drop the timer once the date is in the past. The rest of the section
   // (copy, image, CTA) keeps rendering either way.
-  const dropTarget = dropC?.countdown_mode === 'manual'
-    ? (dropC?.manual_target ? new Date(dropC.manual_target) : null)
-    : dropEndsAt
+  // Memoised because it is a Date: a fresh instance every render is a new
+  // `target` prop, and CountdownTimer tears down and rebuilds its one-second
+  // interval on every re-render it sees.
+  const dropTarget = useMemo(() => (
+    dropC?.countdown_mode === 'manual'
+      ? (dropC?.manual_target ? new Date(dropC.manual_target) : null)
+      : dropEndsAt
+  ), [dropC?.countdown_mode, dropC?.manual_target, dropEndsAt])
   const showCountdown = dropC?.countdown_mode !== 'off'
     && dropTarget != null
     && dropTarget.getTime() > Date.now()
