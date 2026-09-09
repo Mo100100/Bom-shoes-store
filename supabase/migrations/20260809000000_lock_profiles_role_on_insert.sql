@@ -24,6 +24,12 @@
 -- owner's own account is an admin and this migration cannot tell it apart from
 -- an intruder.
 
+-- Both statements below that touch the profiles table itself (create trigger,
+-- drop/create policy) take ACCESS EXCLUSIVE on it, and profiles is read on
+-- every page load. Fail fast rather than queueing behind a long reader and
+-- stalling the site while every later query piles up on the lock.
+set local lock_timeout = '3s';
+
 -- ---------------------------------------------------------------------------
 -- 1. Extend the role guard to INSERT.
 --
@@ -32,10 +38,18 @@
 -- and forcing normalizes those silently, while a hand-crafted role: 'admin'
 -- is written as 'customer' rather than blowing up mid-signup.
 --
--- auth.uid() is null for service-role/backend calls that carry no user JWT
--- (edge functions, admin scripts, the SQL editor). Those stay unrestricted,
--- exactly as the UPDATE branch has always treated them, so the owner can still
--- create or promote an admin from the Supabase dashboard.
+-- The INSERT branch forces the role in exactly one case: a caller with a user
+-- JWT inserting a row whose id is their own. Every other insert is a
+-- pass-through, deliberately:
+--   * auth.uid() is null for service-role/backend calls that carry no user JWT
+--     (edge functions, admin scripts, the SQL editor). Those stay unrestricted,
+--     exactly as the UPDATE branch has always treated them, so the owner can
+--     still create or promote an admin from the Supabase dashboard.
+--   * A signed-in caller inserting a row for a DIFFERENT id is left to the
+--     policy, which refuses it outright (id = auth.uid()). Forcing the role
+--     there would silently rewrite a row that should not exist at all, and
+--     would pre-empt any future admin-creates-a-user flow that is added with
+--     its own policy. There is no such flow today.
 -- ---------------------------------------------------------------------------
 create or replace function public.prevent_self_role_change()
 returns trigger
@@ -82,14 +96,54 @@ create trigger prevent_self_role_insert
 -- 2. Tighten the INSERT policy to match.
 --
 -- Same rule stated declaratively, so the hole stays shut even if the trigger
--- is ever dropped. Dropping and recreating a policy inside this migration's
--- transaction leaves no window where profiles has no INSERT policy.
+-- is ever dropped. All of it happens inside this migration's transaction, so
+-- there is no window where profiles has no INSERT policy.
+--
+-- The old policy is found by ENUMERATION, not by name. 20260703235959 is a
+-- reconstruction of tables that already existed in the original project
+-- (see its header), so the live policy's name is an assumption, and
+-- `drop policy if exists "<guessed name>"` would drop nothing, raise nothing,
+-- and leave the permissive old policy OR'd alongside the new one: layer 2
+-- silently defeated, with no diagnostic. Dropping whatever is actually there
+-- removes the assumption.
+--
+-- Policies with cmd = 'ALL' also admit INSERT but carry SELECT/UPDATE/DELETE
+-- rules too, so dropping one would be destructive. None exists on profiles
+-- today; the post-condition below counts them and fails the migration loudly
+-- if that ever changes, rather than shipping a false sense of safety.
 -- ---------------------------------------------------------------------------
-drop policy if exists "Users can insert their own profile" on public.profiles;
+do $insert_policy$
+declare
+  v_name text;
+  v_dropped text;
+  v_admitting int;
+begin
+  for v_name in
+    select policyname
+    from pg_policies
+    where schemaname = 'public' and tablename = 'profiles' and cmd = 'INSERT'
+    order by policyname
+  loop
+    execute format('drop policy %I on public.profiles', v_name);
+    v_dropped := concat_ws(', ', v_dropped, v_name);
+  end loop;
 
-create policy "Users can insert their own profile"
-  on public.profiles for insert
-  with check (id = auth.uid() and role = 'customer');
+  raise notice 'profiles INSERT policies replaced: %', coalesce(v_dropped, '(none existed)');
+
+  create policy "Users can insert their own profile"
+    on public.profiles for insert
+    with check (id = auth.uid() and role = 'customer');
+
+  select count(*)
+  into v_admitting
+  from pg_policies
+  where schemaname = 'public' and tablename = 'profiles' and cmd in ('INSERT', 'ALL');
+
+  if v_admitting <> 1 then
+    raise exception 'expected exactly 1 policy admitting INSERT on public.profiles, found %. Permissive policies are OR''d, so a second one would re-open the role hole. Inspect pg_policies and re-run.', v_admitting;
+  end if;
+end;
+$insert_policy$;
 
 -- ---------------------------------------------------------------------------
 -- 3. Audit the live data. Report only, never demote.
