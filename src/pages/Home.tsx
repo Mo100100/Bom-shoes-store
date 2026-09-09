@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase, ProductCatalogEntry } from '@/lib/supabase'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
@@ -11,6 +11,7 @@ import { toast } from 'sonner'
 import ShoeShowcase3D from '@/components/ShoeShowcase3D'
 import ProductCard from '@/components/ProductCard'
 import CountdownTimer from '@/components/CountdownTimer'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { useSeo } from '@/hooks/useSeo'
 import { useBrands } from '@/contexts/BrandsContext'
 import { useCategories } from '@/contexts/CategoriesContext'
@@ -24,6 +25,7 @@ export default function Home() {
   const [featured, setFeatured] = useState<ProductCatalogEntry[]>([])
   const [recent, setRecent] = useState<ProductCatalogEntry[]>([])
   const [productsLoading, setProductsLoading] = useState(true)
+  const [productsError, setProductsError] = useState(false)
   const [dropEndsAt, setDropEndsAt] = useState<Date | null>(null)
   const [quickAddingId, setQuickAddingId] = useState<string | null>(null)
   const [content, setContent] = useState<Record<string, any>>({})
@@ -35,20 +37,28 @@ export default function Home() {
 
   useSeo({ title: `${t.brandName} · ${t.brandTagline}`, description: t.homeHeroSubtitle })
 
-  useEffect(() => {
-    async function load() {
-      const { data: f } = await supabase
-        .from('product_catalog').select('*').eq('featured', true)
-        .order('created_at', { ascending: false }).limit(10)
-      const { data: r } = await supabase
-        .from('product_catalog').select('*')
-        .order('created_at', { ascending: false }).limit(10)
-      if (f) setFeatured(f)
-      if (r) setRecent(r)
+  const loadProducts = useCallback(async () => {
+    setProductsLoading(true)
+    setProductsError(false)
+    const [featuredRes, recentRes] = await Promise.all([
+      supabase.from('product_catalog').select('*').eq('featured', true)
+        .order('created_at', { ascending: false }).limit(10),
+      supabase.from('product_catalog').select('*')
+        .order('created_at', { ascending: false }).limit(10),
+    ])
+    // "We sell nothing" and "we could not look" must not draw the same thing,
+    // so a failed read gets the error panel, never the empty grid.
+    if (featuredRes.error || recentRes.error) {
+      setProductsError(true)
       setProductsLoading(false)
+      return
     }
-    load()
+    setFeatured(featuredRes.data || [])
+    setRecent(recentRes.data || [])
+    setProductsLoading(false)
   }, [])
+
+  useEffect(() => { loadProducts() }, [loadProducts])
 
   useEffect(() => {
     supabase.from('site_content').select('key, value').then(({ data }) => {
@@ -267,26 +277,30 @@ export default function Home() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 lg:gap-6">
-            {productsLoading
-              ? [1, 2, 3, 4, 5].map(i => (
-                  <div key={i} className="border border-border rounded-[14px] p-[18px] animate-pulse">
-                    <div className="aspect-square bg-muted/60 rounded-[10px] mb-[18px]" />
-                    <div className="h-3 w-1/2 bg-muted/60 mb-2" />
-                    <div className="h-3 w-2/3 bg-muted/60" />
-                  </div>
-                ))
-              : curated.map((p, i) => (
-                  <ProductCard
-                    key={p.id}
-                    product={p}
-                    categoryLabel={categoryLabel(p.category)}
-                    onQuickAdd={quickAdd}
-                    quickAdding={quickAddingId === p.id}
-                    animationDelay={`${(i % 5) * 60}ms`}
-                  />
-                ))}
-          </div>
+          {productsError ? (
+            <LoadErrorPanel onRetry={loadProducts} />
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 lg:gap-6">
+              {productsLoading
+                ? [1, 2, 3, 4, 5].map(i => (
+                    <div key={i} className="border border-border rounded-[14px] p-[18px] animate-pulse">
+                      <div className="aspect-square bg-muted/60 rounded-[10px] mb-[18px]" />
+                      <div className="h-3 w-1/2 bg-muted/60 mb-2" />
+                      <div className="h-3 w-2/3 bg-muted/60" />
+                    </div>
+                  ))
+                : curated.map((p, i) => (
+                    <ProductCard
+                      key={p.id}
+                      product={p}
+                      categoryLabel={categoryLabel(p.category)}
+                      onQuickAdd={quickAdd}
+                      quickAdding={quickAddingId === p.id}
+                      animationDelay={`${(i % 5) * 60}ms`}
+                    />
+                  ))}
+            </div>
+          )}
         </div>
       </section>
       )}
