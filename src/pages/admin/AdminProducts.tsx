@@ -8,6 +8,7 @@ import { useBrands } from '@/contexts/BrandsContext'
 import { compressImage } from '@/lib/compressImage'
 import { diffVariants, DesiredVariant } from '@/lib/variantDiff'
 import { splitSizes } from '@/lib/sizes'
+import { slugify, nextFreeSlug, FALLBACK_SLUG } from '@/lib/slug'
 import { Loader2, Plus, X, Edit2, Trash2, Star, Search, ChevronUp, ChevronDown } from 'lucide-react'
 import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { toast } from 'sonner'
@@ -20,8 +21,12 @@ type SortDir = 'asc' | 'desc'
 // today, so this is latent, but this is the screen the 1001st is added from.
 const MAX_ROWS = 1000
 
+// No hardcoded category: 'Sneakers' was the default in three places here, and
+// it is an ordinary row the owner can delete from Settings, after which every
+// new product pointed at a category that no longer existed. openNew() seeds
+// the first real category instead, and handleSave refuses to write none.
 const EMPTY: Partial<Product> = {
-  name: '', slug: '', description: '', price: 0, category: 'Sneakers',
+  name: '', slug: '', description: '', price: 0, category: '',
   brand: null, featured: false, materials: '', weight_grams: null, tags: [],
 }
 
@@ -124,7 +129,8 @@ export default function AdminProducts() {
   // and the save wrote the old value back. Both now render the stored value as
   // an explicit "not in list" option, so the screen cannot disagree with the
   // payload.
-  const editingCategory = editing?.category || 'Sneakers'
+  const defaultCategory = categories[0]?.value || ''
+  const editingCategory = editing?.category || defaultCategory
   const editingBrand = editing?.brand ?? ''
 
   function toggleSort(key: SortKey) {
@@ -214,7 +220,7 @@ export default function AdminProducts() {
   }
 
   function openNew() {
-    setEditing({ ...EMPTY })
+    setEditing({ ...EMPTY, category: defaultCategory })
     setImages([])
     setVariantRows([blankVariantRow()])
     setVariantErrors({})
@@ -364,9 +370,38 @@ export default function AdminProducts() {
     await loadImages(productId)
   }
 
+  // The slug is the product's only URL and a UNIQUE column. slugify() keeps
+  // Arabic (see src/lib/slug.ts), and this makes the result unique BEFORE the
+  // write instead of letting the constraint raise a raw Postgres message at
+  // the owner. Prefix-matched in one query, so the cost does not grow with the
+  // catalog and no query runs per candidate.
+  async function buildSlug(name: string, typed: string, id?: string): Promise<string> {
+    const base = slugify(typed) || slugify(name)
+    const { data, error } = await supabase
+      .from('products').select('id, slug').ilike('slug', `${base || FALLBACK_SLUG}%`)
+    // Guessing "nothing matched" from a failed read is how a duplicate slug
+    // gets written. The save stops instead.
+    if (error) throw new Error(t.adminLoadError)
+    const taken = (data || []).filter(r => r.id !== id).map(r => r.slug.toLowerCase())
+    return nextFreeSlug(base, taken)
+  }
+
   async function handleSave() {
     if (!editing) return
     if (!editing.name || !editing.price) { toast.error(t.adminRequired); return }
+    // `!editing.price` already rejects 0, but a negative price passed straight
+    // through to a live product page and to every order placed from it.
+    const price = Number(editing.price)
+    if (!Number.isFinite(price) || price <= 0) { toast.error(t.adminPriceInvalid); return }
+    // Unvalidated until now, and it is what every profit figure on the
+    // dashboard is computed from.
+    if (costPrice !== null && (!Number.isFinite(costPrice) || costPrice < 0)) {
+      toast.error(t.adminCostPriceInvalid); return
+    }
+    // Only when the category list itself is empty or failed to load. Writing
+    // no category would put the product in a section nothing lists.
+    const category = editing.category || defaultCategory
+    if (!category) { toast.error(t.adminCategoryRequired); return }
 
     // Reject half-filled rows and size boxes holding nothing usable, inline on
     // the offending row. Dropping them silently is how a product could be saved
@@ -384,13 +419,23 @@ export default function AdminProducts() {
     setSaving(true)
     try {
       const isNew = !editing.id
-      const slug = editing.slug || editing.name!.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+      // An existing product keeps the exact slug it is reachable by unless the
+      // admin edits the box. 117 of the 118 live products carry a single emoji
+      // or Arabic letter typed by hand to get around the old generator, and
+      // rewriting one of those URLs as a side effect of a price edit is the
+      // owner's decision, not this screen's -- see the 20260811000000
+      // migration. Clearing the box regenerates the slug from the name.
+      const storedSlug = products.find(p => p.id === editing.id)?.slug || ''
+      const typedSlug = editing.slug || ''
+      const slug = !isNew && typedSlug === storedSlug
+        ? storedSlug
+        : await buildSlug(editing.name!, typedSlug, editing.id)
       const payload = {
         name: editing.name,
         slug,
         description: editing.description || '',
-        price: Number(editing.price),
-        category: editing.category || 'Sneakers',
+        price,
+        category,
         brand: editing.brand?.trim() ? editing.brand.trim() : null,
         featured: !!editing.featured,
         materials: editing.materials?.trim() ? editing.materials.trim() : null,
@@ -401,6 +446,10 @@ export default function AdminProducts() {
       let productId = editing.id
       if (productId) {
         const { data, error } = await supabase.from('products').update(payload).eq('id', productId).select('id')
+        // buildSlug already made the slug free, but another admin could have
+        // taken it in between. products.slug is the only unique column on the
+        // table, so 23505 here can only be that.
+        if (error?.code === '23505') throw new Error(t.adminSlugTaken)
         if (error) throw error
         // A zero-row match returns no error: an RLS denial, or a product
         // deleted in another tab, would otherwise toast "Product updated"
@@ -416,6 +465,7 @@ export default function AdminProducts() {
           .insert({ ...payload, stock: 0, sizes: [], colors: [], image_url: '' })
           .select()
           .single()
+        if (error?.code === '23505') throw new Error(t.adminSlugTaken)
         if (error) throw error
         productId = data.id
       }
@@ -446,8 +496,10 @@ export default function AdminProducts() {
       toast.success(isNew ? t.adminCreateSuccess : t.adminUpdateSuccess)
       if (isNew) {
         // Keep the modal open so photos can be added right away, now that
-        // the product has an id to attach them to.
-        setEditing(prev => (prev ? { ...prev, id: productId } : prev))
+        // the product has an id to attach them to. The slug comes back too:
+        // it was generated here, and leaving the box showing what was typed
+        // would hide the number a collision added.
+        setEditing(prev => (prev ? { ...prev, id: productId, slug } : prev))
         await Promise.all([loadImages(productId!), loadVariants(productId!)])
       } else {
         setEditing(null)

@@ -35,6 +35,18 @@ function nameErrorMessage(error: BrandNameError, t: Translations): string {
   return t.adminNameDuplicate
 }
 
+// Returns the ordered key list with two entries swapped, or null when the move
+// runs off the end. Positions are rewritten from this list in one statement,
+// so the list is the order rather than a pair of numbers to trade.
+function swapAt(values: string[], a: number, b: number): string[] | null {
+  if (b < 0 || b >= values.length) return null
+  const next = [...values]
+  const held = next[a]
+  next[a] = next[b]
+  next[b] = held
+  return next
+}
+
 // A header logo is a wide mark. Logo.tsx keeps the uploaded aspect ratio, so a
 // portrait or near-square image is drawn small however tall the header is: say
 // that at upload time rather than let the owner conclude the upload never went
@@ -115,7 +127,11 @@ export default function AdminSettings() {
   const [uploadingBrandLogo, setUploadingBrandLogo] = useState<string | null>(null)
   const [checkoutConfig, setCheckoutConfig] = useState<CheckoutConfig>(DEFAULT_CHECKOUT_CONFIG)
   const [savingCheckout, setSavingCheckout] = useState(false)
-  const [brandsPageEnabled, setBrandsPageEnabled] = useState(true)
+  // The WHOLE site_visibility object, not just the one flag rendered below.
+  // The toggle used to write { brands_page_enabled } on its own, which would
+  // have discarded every other key the row grows.
+  const [visibility, setVisibility] = useState<Record<string, unknown>>({})
+  const brandsPageEnabled = visibility.brands_page_enabled !== false
   const [savingVisibility, setSavingVisibility] = useState(false)
   const [regions, setRegions] = useState<ShippingRegion[]>([])
   const [savingShipping, setSavingShipping] = useState(false)
@@ -148,7 +164,7 @@ export default function AdminSettings() {
       for (const row of content || []) {
         if (row.key === 'whatsapp') setWhatsapp({ ...EMPTY_WHATSAPP, ...row.value })
         if (row.key === 'checkout_config') setCheckoutConfig({ ...DEFAULT_CHECKOUT_CONFIG, ...row.value })
-        if (row.key === 'site_visibility') setBrandsPageEnabled((row.value as { brands_page_enabled?: boolean })?.brands_page_enabled !== false)
+        if (row.key === 'site_visibility') setVisibility((row.value as Record<string, unknown>) || {})
         if (row.key === 'shipping') {
           const rs = (row.value as { regions?: ShippingRegion[] })?.regions
           setRegions(Array.isArray(rs) ? rs : [])
@@ -274,9 +290,13 @@ export default function AdminSettings() {
 
   // ----- Brands page visibility (nav link + /brands page) -----
   async function handleToggleBrandsPage(enabled: boolean) {
-    setBrandsPageEnabled(enabled)
+    const next = { ...visibility, brands_page_enabled: enabled }
+    setVisibility(next)
     setSavingVisibility(true)
-    await saveContent('site_visibility', { brands_page_enabled: enabled })
+    // Merged over the row that was read, so a second flag added later is not
+    // erased by whoever toggles this one first.
+    const saved = await saveContent('site_visibility', next)
+    if (!saved) setVisibility(visibility)
     setSavingVisibility(false)
   }
 
@@ -310,10 +330,12 @@ export default function AdminSettings() {
     const invalid = validateBrandName(label_en, categories.flatMap(c => [c.value, c.label_en]))
     if (invalid) { toast.error(nameErrorMessage(invalid, t)); return }
     setSavingCategory(true)
-    const position = categories.length ? Math.max(...categories.map(c => c.position)) + 1 : 0
+    // No position: the database assigns max + 1 (see the 20260811000000
+    // migration). Computed here from the loaded array, two admins adding at
+    // the same moment both read the same max and landed on the same position.
     const { data, error } = await supabase
       .from('categories')
-      .insert({ value: label_en, label_en, label_ar, position })
+      .insert({ value: label_en, label_en, label_ar })
       .select('value')
       .maybeSingle()
     setSavingCategory(false)
@@ -351,21 +373,35 @@ export default function AdminSettings() {
     // over however many products are really pointing at this category.
     if (countError) { toast.error(t.adminCouldNotCheckUsage); return }
     if (count) { toast.error(t.adminCategoryInUse(count)); return }
-    const { error } = await supabase.from('categories').delete().eq('value', value)
+    const { data, error } = await supabase.from('categories').delete().eq('value', value).select('value')
     if (error) { toast.error(error.message || t.adminDeleteFailed); return }
+    // A delete matching no row returns no error, so the reload below would put
+    // the category straight back under a green "Category deleted".
+    if (!data.length) { toast.error(t.adminDeleteFailed); return }
     toast.success(t.adminCategoryDeleted)
     reloadCategories()
   }
 
+  // One statement for the whole order, in place of two independent UPDATEs.
+  // A swap made of two writes can half-apply, and both rows then hold the same
+  // position: every later swap of that pair trades identical numbers and reads
+  // as a no-op the admin cannot explain. Both errors were discarded too.
+  // The RPC rewrites position 0..n-1 and rolls back unless every row matched.
+  async function reorder(table: 'categories' | 'brands', values: string[]): Promise<boolean> {
+    const { data, error } = await supabase.rpc('admin_reorder_positions_by_value', {
+      p_table: table,
+      p_values: values,
+    })
+    // Refused, incomplete or never sent: the RPC is all or nothing, so every
+    // failure here means the stored order is untouched.
+    if (error || !Number(data)) { toast.error(t.adminSaveNotApplied); return false }
+    return true
+  }
+
   async function handleMoveCategory(index: number, direction: -1 | 1) {
-    const target = categories[index + direction]
-    const current = categories[index]
-    if (!target) return
-    await Promise.all([
-      supabase.from('categories').update({ position: target.position }).eq('value', current.value),
-      supabase.from('categories').update({ position: current.position }).eq('value', target.value),
-    ])
-    reloadCategories()
+    const next = swapAt(categories.map(c => c.value), index, index + direction)
+    if (!next) return
+    if (await reorder('categories', next)) reloadCategories()
   }
 
   // ----- Brands (mirror of categories, plus a logo upload per brand) -----
@@ -374,12 +410,12 @@ export default function AdminSettings() {
     const invalid = validateBrandName(name, brands.flatMap(b => [b.value, b.name]))
     if (invalid) { toast.error(nameErrorMessage(invalid, t)); return }
     setSavingBrand(true)
-    const position = brands.length ? Math.max(...brands.map(b => b.position)) + 1 : 0
     // The key is seeded from the name and then frozen for the life of the row:
     // this is the ONE moment `value` is ever written. See src/lib/brands.ts.
+    // The position is the database's to assign, as it is for categories above.
     const { data, error } = await supabase
       .from('brands')
-      .insert({ value: name, name, position })
+      .insert({ value: name, name })
       .select('value')
       .maybeSingle()
     setSavingBrand(false)
@@ -419,21 +455,18 @@ export default function AdminSettings() {
     // Same as the category guard: a null count is "could not tell", not "none".
     if (countError) { toast.error(t.adminCouldNotCheckUsage); return }
     if (count) { toast.error(t.adminBrandInUse(count)); return }
-    const { error } = await supabase.from('brands').delete().eq('value', value)
+    const { data, error } = await supabase.from('brands').delete().eq('value', value).select('value')
     if (error) { toast.error(error.message || t.adminDeleteFailed); return }
+    // Same zero-row trap as the category delete above.
+    if (!data.length) { toast.error(t.adminDeleteFailed); return }
     toast.success(t.adminBrandDeleted)
     reloadBrands()
   }
 
   async function handleMoveBrand(index: number, direction: -1 | 1) {
-    const target = brands[index + direction]
-    const current = brands[index]
-    if (!target) return
-    await Promise.all([
-      supabase.from('brands').update({ position: target.position }).eq('value', current.value),
-      supabase.from('brands').update({ position: current.position }).eq('value', target.value),
-    ])
-    reloadBrands()
+    const next = swapAt(brands.map(b => b.value), index, index + direction)
+    if (!next) return
+    if (await reorder('brands', next)) reloadBrands()
   }
 
   async function handleUploadBrandLogo(value: string, raw: File | undefined) {
@@ -559,8 +592,13 @@ export default function AdminSettings() {
                 defaultValue={r.price}
                 disabled={!contentLoaded}
                 onBlur={e => {
-                  const v = Number(e.target.value)
-                  if (!Number.isNaN(v) && v !== r.price) handleRegionPrice(r.code, v)
+                  // Number('') is 0, and this saves on blur with a success
+                  // toast: a stray backspace made a governorate ship free.
+                  // An unusable box goes back to the stored price instead.
+                  const raw = e.target.value.trim()
+                  const v = Number(raw)
+                  if (raw === '' || !Number.isFinite(v) || v < 0) { e.target.value = String(r.price); return }
+                  if (v !== r.price) handleRegionPrice(r.code, v)
                 }}
                 className="w-24 bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none disabled:opacity-40"
               />

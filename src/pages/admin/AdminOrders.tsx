@@ -61,6 +61,14 @@ function allowedStatuses(order: Order): string[] {
   return [...ACTIVE_STATUSES, 'cancelled']
 }
 
+// Pieces, not order lines: an order of two products with three pairs each is
+// six pieces, and reading it as "2 pieces" understates every order in the list.
+// A line with no quantity recorded is still one piece.
+function pieceCount(items: unknown): number {
+  if (!Array.isArray(items)) return 0
+  return items.reduce((sum, item) => sum + (Number(item?.quantity) || 1), 0)
+}
+
 export default function AdminOrders() {
   const [orders, setOrders] = useState<Order[]>([])
   const [total, setTotal] = useState(0)
@@ -172,6 +180,11 @@ export default function AdminOrders() {
     if (hint === 'order_never_reserved') return t.adminOrderNeverReserved
     if (hint === 'payment_not_markable') return t.adminPaymentNotMarkable
     if (hint === 'fulfill_failed') return t.adminFulfillFailed
+    // The three the RPC also raises. Missing here, they surfaced as the raw
+    // English SQL message to an owner reading the dashboard in Arabic.
+    if (hint === 'not_admin') return t.adminNotAuthorised
+    if (hint === 'order_not_found') return t.adminOrderNotFound
+    if (hint === 'status_not_settable') return t.adminStatusNotSettable
     return fallback
   }
 
@@ -182,11 +195,15 @@ export default function AdminOrders() {
     // away from 'delivered', so it gets the same confirm() a product deletion
     // gets in AdminProducts.
     if (newStatus === 'cancelled' && !confirm(t.adminCancelConfirm)) return
-    const { error } = await supabase.rpc('admin_update_order_status', {
+    const { data, error } = await supabase.rpc('admin_update_order_status', {
       p_order_id: order.id,
       p_status: newStatus,
     })
     if (error) { toast.error(refusalMessage(error.hint, error.message)); return }
+    // The RPC returns whether anything actually changed. It returns false for
+    // a status the order is already in, and "Order updated" over a no-op is
+    // how the owner concludes a change was saved when none was.
+    if (!data) { toast.error(t.adminOrderNoChange); return }
     toast.success(t.adminUpdated)
     reload()
   }
@@ -202,11 +219,14 @@ export default function AdminOrders() {
   async function markPaid(order: Order) {
     const isOnlineFulfil = order.payment_method !== 'cash'
     if (isOnlineFulfil && !confirm(t.adminMarkPaidConfirm)) return
-    const { error } = await supabase.rpc('admin_update_order_status', {
+    const { data, error } = await supabase.rpc('admin_update_order_status', {
       p_order_id: order.id,
       p_payment_status: 'paid',
     })
     if (error) { toast.error(refusalMessage(error.hint, error.message)); return }
+    // Same as updateStatus: false means the order was already in that state,
+    // so no payment was recorded and no confirmation email should be sent.
+    if (!data) { toast.error(t.adminOrderNoChange); return }
     // The customer of a lost webhook never got the confirmation the gateway
     // path sends, so send it here. Non-fatal exactly as it is in the webhook:
     // the order is fulfilled either way and a failed email must not read as a
@@ -327,7 +347,7 @@ export default function AdminOrders() {
                       {new Date(o.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                     </td>
                     <td className="px-4 py-4 text-muted-foreground">
-                      {Array.isArray(o.items) ? o.items.length : 0} {(o.items as any[])?.length === 1 ? t.piece : t.pieces}
+                      {pieceCount(o.items)} {pieceCount(o.items) === 1 ? t.piece : t.pieces}
                     </td>
                     <td className="px-4 py-4 font-medium">{formatPrice(Number(o.total_amount))}</td>
                     <td className="px-4 py-4">
