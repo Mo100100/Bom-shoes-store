@@ -63,6 +63,11 @@ export default function Signup() {
               placeholder={lang === 'ar' ? 'اسمك' : 'Your name'}
             />
           </label>
+            {/* Email addresses and passwords are always read left-to-right,
+                even on an Arabic page: forcing them RTL put the leading
+                characters and the domain on the wrong end. rtl:text-right
+                follows the PAGE direction, not the input's own, so the field
+                still sits on the start edge of an Arabic form. */}
           <label className="block">
             <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{t.signupEmail}</span>
             <input
@@ -70,8 +75,8 @@ export default function Signup() {
               required
               value={email}
               onChange={e => setEmail(e.target.value)}
-              dir={lang === 'ar' ? 'rtl' : 'ltr'}
-              className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors"
+              dir="ltr"
+              className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors rtl:text-right"
               placeholder="you@example.com"
             />
           </label>
@@ -83,8 +88,8 @@ export default function Signup() {
               minLength={6}
               value={password}
               onChange={e => setPassword(e.target.value)}
-              dir={lang === 'ar' ? 'rtl' : 'ltr'}
-              className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors"
+              dir="ltr"
+              className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors rtl:text-right"
               placeholder={t.signupPasswordHint}
             />
           </label>
