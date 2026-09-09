@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { ProductCatalogEntry } from '@/lib/supabase'
 import { useT } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
+import { useBrands } from '@/contexts/BrandsContext'
 import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import WishlistButton from '@/components/WishlistButton'
 import { cn } from '@/lib/utils'
@@ -41,6 +42,7 @@ export default function ProductCard({
 }: ProductCardProps) {
   const t = useT()
   const { formatPrice } = useCurrency()
+  const { brandLabel } = useBrands()
   const catalogPrice = useCatalogPrice()
   const isNew = Date.now() - new Date(p.created_at).getTime() < NEW_WINDOW_MS
   // has_discount comes straight from product_catalog, which computes it from
@@ -49,7 +51,10 @@ export default function ProductCard({
   // Reading it rather than re-deriving it here is what keeps this badge and
   // the /sale filter in Shop.tsx meaning the same thing.
   const hasSale = p.has_discount
-  const topLabel = p.brand || categoryLabel
+  // products.brand stores brands.value, an immutable key that is not the
+  // display name (the live row value='ل' has name='Burberry'). Look it up the
+  // same way the category beside it is looked up.
+  const topLabel = brandLabel(p.brand) || categoryLabel
 
   return (
     <Link

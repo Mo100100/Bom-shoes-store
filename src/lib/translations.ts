@@ -157,6 +157,8 @@ export const translations = {
     // Brands
     brandsEyebrow: 'Shop by Brand',
     brandsSubtitle: 'The names behind every pair, curated for you.',
+    brandsLoadError: 'Could not load the brands. Please try again.',
+    brandsEmpty: 'No brands to show yet.',
 
     // Shop
     shopEyebrow: 'The Collection',
@@ -660,6 +662,10 @@ export const translations = {
     adminBrandDeleted: 'Brand deleted',
     adminBrandNameRequired: 'Brand name is required',
     adminCouldNotAddBrand: 'Could not add brand',
+    adminNameTooShort: (min: number) => `Name must be at least ${min} characters`,
+    adminNameTooLong: (max: number) => `Name must be ${max} characters or less`,
+    adminNameDuplicate: 'That name is already in the list',
+    adminBrandKeyTitle: 'Product key. Fixed when the brand was created, so renaming the brand never disconnects its products.',
     adminBrandInUse: (count: number) => `${count} product(s) still use this brand`,
     adminUploadLogo: 'Upload logo',
     adminRemoveLogo: 'Remove logo',
@@ -681,6 +687,7 @@ export const translations = {
     // Admin - product form (extra fields)
     adminBrandField: 'Brand',
     adminBrandNoneOption: '- None (BOM Store own) -',
+    adminOptionNotInList: (value: string) => `${value} (no longer in the list)`,
     adminCostPrice: 'Cost Price',
     adminMaterials: 'Materials',
     adminWeightGrams: 'Weight (grams)',
@@ -981,6 +988,8 @@ export const translations = {
     // Brands
     brandsEyebrow: 'تسوق حسب الماركة',
     brandsSubtitle: 'الأسماء وراء كل زوج، مختارة لك.',
+    brandsLoadError: 'تعذر تحميل الماركات. يرجى المحاولة مرة أخرى.',
+    brandsEmpty: 'لا توجد ماركات لعرضها بعد.',
 
     // Shop
     shopEyebrow: 'المجموعة',
@@ -1473,6 +1482,10 @@ export const translations = {
     adminBrandDeleted: 'تم حذف الماركة',
     adminBrandNameRequired: 'اسم الماركة مطلوب',
     adminCouldNotAddBrand: 'تعذرت إضافة الماركة',
+    adminNameTooShort: (min: number) => `الاسم يجب ألا يقل عن ${min} حرفين`,
+    adminNameTooLong: (max: number) => `الاسم يجب ألا يزيد عن ${max} حرفًا`,
+    adminNameDuplicate: 'هذا الاسم موجود بالفعل في القائمة',
+    adminBrandKeyTitle: 'مُعرّف المنتجات. يُثبَّت عند إنشاء الماركة، لذا تغيير الاسم لا يفصل منتجاتها أبدًا.',
     adminBrandInUse: (count: number) => `${count} منتج ما زال يستخدم هذه الماركة`,
     adminUploadLogo: 'رفع الشعار',
     adminRemoveLogo: 'إزالة الشعار',
@@ -1494,6 +1507,7 @@ export const translations = {
     // Admin - product form (extra fields)
     adminBrandField: 'الماركة',
     adminBrandNoneOption: '- بلا ماركة (منتج BOM Store) -',
+    adminOptionNotInList: (value: string) => `${value} (لم يعد موجودًا في القائمة)`,
     adminCostPrice: 'سعر التكلفة',
     adminMaterials: 'الخامات',
     adminWeightGrams: 'الوزن (جرام)',

@@ -106,8 +106,18 @@ export default function AdminProducts() {
   const t = useT()
   const { formatPrice, currency } = useCurrency()
   const { categories, categoryLabel } = useCategories()
-  const { brands } = useBrands()
+  const { brands, brandLabel } = useBrands()
   const CATEGORY_VALUES = categories.map(c => c.value)
+  // What the two selects in the editor are actually bound to. A product can
+  // hold a category or brand that is no longer in its list (renamed, deleted,
+  // or seeded before the table existed); a <select> whose value matches no
+  // <option> renders the FIRST option instead, so the control claimed the
+  // product was a Sneaker while `editing.category` still held the old value
+  // and the save wrote the old value back. Both now render the stored value as
+  // an explicit "not in list" option, so the screen cannot disagree with the
+  // payload.
+  const editingCategory = editing?.category || 'Sneakers'
+  const editingBrand = editing?.brand ?? ''
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -461,6 +471,7 @@ export default function AdminProducts() {
                     </button>
                   </th>
                   <th className="text-start px-4 py-3">{t.adminCategory}</th>
+                  <th className="text-start px-4 py-3">{t.adminBrandField}</th>
                   <th className="text-start px-4 py-3">
                     <button
                       type="button"
@@ -491,6 +502,12 @@ export default function AdminProducts() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{categoryLabel(p.category)}</td>
+                    {/* Brands were invisible here, which is why 116 of 118
+                        products silently have none. An unset brand reads as a
+                        gap, not as a blank cell. */}
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {p.brand ? brandLabel(p.brand) : <span className="opacity-50">{t.dash}</span>}
+                    </td>
                     <td className="px-4 py-3">{formatPrice(Number(p.price))}</td>
                     <td className="px-4 py-3">
                       <span className={p.total_stock < 10 ? 'text-red-700' : ''}>{p.total_stock}</span>
@@ -548,10 +565,13 @@ export default function AdminProducts() {
                 <div>
                   <label className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{t.adminCategory}</label>
                   <select
-                    value={editing.category || 'Sneakers'}
+                    value={editingCategory}
                     onChange={e => setEditing({ ...editing, category: e.target.value })}
                     className="w-full bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none cursor-pointer"
                   >
+                    {!CATEGORY_VALUES.includes(editingCategory) && (
+                      <option value={editingCategory}>{t.adminOptionNotInList(editingCategory)}</option>
+                    )}
                     {CATEGORY_VALUES.map(c => (
                       <option key={c} value={c}>{categoryLabel(c)}</option>
                     ))}
@@ -562,11 +582,14 @@ export default function AdminProducts() {
                 <div>
                   <label className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{t.adminBrandField}</label>
                   <select
-                    value={editing.brand ?? ''}
+                    value={editingBrand}
                     onChange={e => setEditing({ ...editing, brand: e.target.value || null })}
                     className="w-full bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none cursor-pointer"
                   >
                     <option value="">{t.adminBrandNoneOption}</option>
+                    {editingBrand && !brands.some(b => b.value === editingBrand) && (
+                      <option value={editingBrand}>{t.adminOptionNotInList(editingBrand)}</option>
+                    )}
                     {brands.map(b => (
                       <option key={b.value} value={b.value}>{b.name}</option>
                     ))}

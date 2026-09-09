@@ -1,19 +1,17 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { useT } from '@/contexts/LanguageContext'
+import { useBrands } from '@/contexts/BrandsContext'
 import { useSeo } from '@/hooks/useSeo'
 import { supabase } from '@/lib/supabase'
-import { ArrowUpRight } from 'lucide-react'
-
-// Static for now -- BOM Store is a multi-brand retailer, but the
-// admin-managed `brands` table (mirroring `categories`) hasn't been
-// migrated in yet. Swap this list for a live `useBrands()` fetch once that
-// lands; the /shop?brand= links below already degrade harmlessly today
-// since Shop.tsx doesn't yet filter on that param.
-const BRANDS = ['Prada', 'Nike', 'Balenciaga', 'Adidas', 'Amiri', 'New Balance', 'Gucci']
+import { ArrowUpRight, Loader2 } from 'lucide-react'
 
 export default function Brands() {
   const t = useT()
+  // The brands the admin actually manages. This page used to render a
+  // hardcoded array of seven names, which is why editing a brand in the admin
+  // never changed anything here.
+  const { brands, loading, loadError, reload } = useBrands()
   // The admin can hide this page entirely (site_content.site_visibility);
   // Layout already hides the nav link, but this page is also reachable by a
   // direct URL/bookmark, so it needs its own check.
@@ -43,18 +41,51 @@ export default function Brands() {
           <p className="text-zen text-muted-foreground mb-4">{t.brandsEyebrow}</p>
           <h1 className="font-display text-5xl md:text-7xl">{t.navBrands}</h1>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-          {BRANDS.map(brand => (
-            <Link
-              key={brand}
-              to={`/shop?brand=${encodeURIComponent(brand)}`}
-              className="group flex items-center justify-between gap-3 border border-border bg-background px-6 py-8 hover:border-foreground hover:bg-foreground hover:text-background transition-colors"
+        {loading ? (
+          <div className="py-24 flex justify-center">
+            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : loadError ? (
+          // Never an empty grid for a failed read: "we carry nothing" and
+          // "the list did not load" must not look the same.
+          <div className="py-24 text-center">
+            <p className="text-terracotta">{t.brandsLoadError}</p>
+            <button
+              onClick={() => reload()}
+              className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
             >
-              <span className="font-display text-xl md:text-2xl">{brand}</span>
-              <ArrowUpRight className="w-5 h-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
-            </Link>
-          ))}
-        </div>
+              {t.failedTryAgain}
+            </button>
+          </div>
+        ) : brands.length === 0 ? (
+          <div className="py-24 text-center">
+            <p className="text-muted-foreground">{t.brandsEmpty}</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            {brands.map(b => (
+              // The link carries `value` (what products.brand stores and
+              // Shop.tsx filters on), the tile shows `name`.
+              <Link
+                key={b.value}
+                to={`/shop?brand=${encodeURIComponent(b.value)}`}
+                className="group flex items-center justify-between gap-3 border border-border bg-background px-6 py-8 hover:border-foreground hover:bg-foreground hover:text-background transition-colors"
+              >
+                {b.logo_url ? (
+                  <img
+                    src={b.logo_url}
+                    alt={b.name}
+                    loading="lazy"
+                    className="h-8 md:h-10 w-auto max-w-[70%] object-contain"
+                  />
+                ) : (
+                  <span className="font-display text-xl md:text-2xl">{b.name}</span>
+                )}
+                <ArrowUpRight className="w-5 h-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

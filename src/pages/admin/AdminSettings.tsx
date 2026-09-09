@@ -5,6 +5,10 @@ import { useBrands } from '@/contexts/BrandsContext'
 import { useStoreSettings } from '@/contexts/StoreSettingsContext'
 import { compressImage } from '@/lib/compressImage'
 import {
+  validateBrandName, MIN_BRAND_NAME_LENGTH, MAX_BRAND_NAME_LENGTH,
+  type BrandNameError,
+} from '@/lib/brands'
+import {
   DEFAULT_CHECKOUT_CONFIG, EGYPT_GOVERNORATES,
   type CheckoutConfig, type ShippingRegion,
 } from '@/lib/checkoutConfig'
@@ -19,6 +23,17 @@ type Translations = ReturnType<typeof useT>
 const STORE_SETTINGS_ID = '00000000-0000-0000-0000-000000000001'
 
 type UploadField = 'logo_url' | 'favicon_url'
+
+// Brands and categories share one rule because they share one shape: the name
+// typed here becomes `value`, the primary key products.brand / products.category
+// store as free text, and nothing can change it afterwards. One unvalidated
+// keystroke is how the live row value='ل' / name='Burberry' was created.
+function nameErrorMessage(error: BrandNameError, t: Translations): string {
+  if (error === 'required') return t.adminBrandNameRequired
+  if (error === 'tooShort') return t.adminNameTooShort(MIN_BRAND_NAME_LENGTH)
+  if (error === 'tooLong') return t.adminNameTooLong(MAX_BRAND_NAME_LENGTH)
+  return t.adminNameDuplicate
+}
 
 // A header logo is a wide mark. Logo.tsx keeps the uploaded aspect ratio, so a
 // portrait or near-square image is drawn small however tall the header is: say
@@ -283,13 +298,22 @@ export default function AdminSettings() {
     const label_en = newLabelEn.trim()
     const label_ar = newLabelAr.trim()
     if (!label_en || !label_ar) { toast.error(t.adminBothNamesRequired); return }
+    // label_en becomes the primary key, so it gets the same guard a brand name
+    // does: a one-character key or a case-variant duplicate is unmanageable
+    // once products point at it.
+    const invalid = validateBrandName(label_en, categories.flatMap(c => [c.value, c.label_en]))
+    if (invalid) { toast.error(nameErrorMessage(invalid, t)); return }
     setSavingCategory(true)
     const position = categories.length ? Math.max(...categories.map(c => c.position)) + 1 : 0
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('categories')
       .insert({ value: label_en, label_en, label_ar, position })
+      .select('value')
+      .maybeSingle()
     setSavingCategory(false)
     if (error) { toast.error(error.message || t.adminCouldNotAddCategory); return }
+    // An insert that matched no row comes back with no error and no row.
+    if (!data) { toast.error(t.adminCouldNotAddCategory); return }
     setNewLabelEn('')
     setNewLabelAr('')
     toast.success(t.adminCategoryAdded)
@@ -332,22 +356,44 @@ export default function AdminSettings() {
   // ----- Brands (mirror of categories, plus a logo upload per brand) -----
   async function handleAddBrand() {
     const name = newBrandName.trim()
-    if (!name) { toast.error(t.adminBrandNameRequired); return }
+    const invalid = validateBrandName(name, brands.flatMap(b => [b.value, b.name]))
+    if (invalid) { toast.error(nameErrorMessage(invalid, t)); return }
     setSavingBrand(true)
     const position = brands.length ? Math.max(...brands.map(b => b.position)) + 1 : 0
-    // value == name (same convention categories use); products.brand stores it.
-    const { error } = await supabase.from('brands').insert({ value: name, name, position })
+    // The key is seeded from the name and then frozen for the life of the row:
+    // this is the ONE moment `value` is ever written. See src/lib/brands.ts.
+    const { data, error } = await supabase
+      .from('brands')
+      .insert({ value: name, name, position })
+      .select('value')
+      .maybeSingle()
     setSavingBrand(false)
     if (error) { toast.error(error.message || t.adminCouldNotAddBrand); return }
+    if (!data) { toast.error(t.adminCouldNotAddBrand); return }
     setNewBrandName('')
     toast.success(t.adminBrandAdded)
     reloadBrands()
   }
 
-  async function handleUpdateBrandName(value: string, name: string) {
-    const { error } = await supabase.from('brands').update({ name }).eq('value', value)
-    if (error) { toast.error(error.message || t.adminSaveFailed); return }
+  // A rename changes the DISPLAY NAME only. `value` is the primary key that
+  // products.brand stores, it is written once at creation and never again, so
+  // no rename can leave a product pointing at a key that no longer exists.
+  // Every screen renders `name` through brandLabel(), which is what makes the
+  // key's staying put invisible to customers.
+  // Returns whether the new name is now the saved one, so the caller can put
+  // the box back to what the database actually holds when it is not.
+  async function handleUpdateBrandName(value: string, name: string): Promise<boolean> {
+    const invalid = validateBrandName(name, brands.filter(b => b.value !== value).flatMap(b => [b.value, b.name]))
+    if (invalid) { toast.error(nameErrorMessage(invalid, t)); return false }
+    const { data, error } = await supabase
+      .from('brands').update({ name }).eq('value', value).select('value').maybeSingle()
+    if (error) { toast.error(error.message || t.adminSaveFailed); return false }
+    // An UPDATE matching no row (RLS, or a brand deleted in another tab)
+    // returns no error: without this the admin sees a rename that never was.
+    if (!data) { toast.error(t.adminSaveFailed); return false }
+    toast.success(t.adminSaved)
     reloadBrands()
+    return true
   }
 
   async function handleDeleteBrand(value: string) {
@@ -674,10 +720,26 @@ export default function AdminSettings() {
               <input
                 type="text"
                 defaultValue={b.name}
-                onBlur={e => e.target.value.trim() && e.target.value !== b.name && handleUpdateBrandName(b.value, e.target.value.trim())}
+                // Uncontrolled, so a rejected rename has to be put back by
+                // hand: leaving the typed text in the box is how the admin ends
+                // up believing a name that was never saved.
+                onBlur={async e => {
+                  const next = e.target.value.trim()
+                  if (!next || next === b.name) { e.target.value = b.name; return }
+                  if (!await handleUpdateBrandName(b.value, next)) e.target.value = b.name
+                }}
                 placeholder={t.adminBrandName}
                 className="flex-1 min-w-0 bg-transparent border border-border px-3 py-2 text-sm focus:border-foreground outline-none"
               />
+              {/* The immutable key products point at. Shown so a rename that
+                  leaves the /shop?brand= link unchanged is not a surprise. */}
+              <span
+                dir="ltr"
+                title={t.adminBrandKeyTitle}
+                className="text-[10px] font-mono text-muted-foreground shrink-0 max-w-[80px] truncate"
+              >
+                {b.value}
+              </span>
               <button
                 type="button"
                 onClick={() => handleDeleteBrand(b.value)}
