@@ -32,11 +32,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Create profile if not exists
       const { data: userData } = await supabase.auth.getUser()
       if (userData.user) {
+        // No role: the column defaults to 'customer' and a BEFORE INSERT
+        // trigger forces it anyway (20260809000000). The client never gets a
+        // say in it.
         const newProfile = {
           id: userId,
           email: userData.user.email || '',
           full_name: userData.user.user_metadata?.full_name || '',
-          role: 'customer',
         }
         const { data: created } = await supabase
           .from('profiles')
@@ -86,12 +88,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       options: { data: { full_name: fullName } }
     })
     if (!error && data.user) {
-      // Create profile
+      // Create profile. Role is never sent from the browser: the server-side
+      // default plus the prevent_self_role_change INSERT trigger own it.
       await supabase.from('profiles').insert({
         id: data.user.id,
         email,
         full_name: fullName,
-        role: 'customer',
       })
     }
     return { error }
