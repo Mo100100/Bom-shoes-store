@@ -1,11 +1,14 @@
 import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 
+type StoreSettingsRow = { logo_url: string | null; favicon_url: string | null }
+
 type StoreSettingsContextType = {
   logoUrl: string | null
   faviconUrl: string | null
   loading: boolean
   loadError: boolean
+  apply: (row: StoreSettingsRow) => void
   reload: () => Promise<void>
 }
 
@@ -56,6 +59,16 @@ export function StoreSettingsProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
 
+  // Adopt a row the caller already has. The admin's own UPDATE returns the
+  // saved row, so it can hand it straight over instead of paying for a second
+  // read -- a read that could fail and leave the header pointing at the file
+  // the admin is about to delete.
+  const apply = useCallback((row: StoreSettingsRow) => {
+    setLogoUrl(row.logo_url || null)
+    setFaviconUrl(row.favicon_url || null)
+    setLoadError(false)
+  }, [])
+
   const reload = useCallback(async () => {
     const { data, error } = await supabase
       .from('store_settings')
@@ -66,13 +79,10 @@ export function StoreSettingsProvider({ children }: { children: ReactNode }) {
     // back to the SVG monogram and index.html's static favicon, and the admin
     // gets loadError so it can say "could not read" instead of "None", which
     // reads as "my logo disappeared".
-    setLoadError(!!error)
-    if (!error) {
-      setLogoUrl(data?.logo_url || null)
-      setFaviconUrl(data?.favicon_url || null)
-    }
+    if (error) setLoadError(true)
+    else apply(data || { logo_url: null, favicon_url: null })
     setLoading(false)
-  }, [])
+  }, [apply])
 
   useEffect(() => { reload() }, [reload])
 
@@ -82,7 +92,7 @@ export function StoreSettingsProvider({ children }: { children: ReactNode }) {
   }, [faviconUrl])
 
   return (
-    <StoreSettingsContext.Provider value={{ logoUrl, faviconUrl, loading, loadError, reload }}>
+    <StoreSettingsContext.Provider value={{ logoUrl, faviconUrl, loading, loadError, apply, reload }}>
       {children}
     </StoreSettingsContext.Provider>
   )

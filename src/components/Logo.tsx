@@ -6,15 +6,23 @@ interface LogoProps {
   size?: number
   className?: string
   showText?: boolean
+  /**
+   * Also cap the uploaded logo's width at a share of the viewport. For the
+   * sticky header only, where the logo shares a 375px row with the menu button
+   * and the icon group. The footer and the mobile drawer have the width to
+   * spare, so they leave it off and show the mark at full size.
+   */
+  capToViewport?: boolean
 }
 
 // An uploaded logo is constrained by HEIGHT and keeps its natural width, which
 // is what a real (wide) logo needs -- forcing it into a square box drew a
 // 600x200 mark at 56x19 in a 56px header slot. The width is capped at this
-// multiple of the height, and additionally at a share of the viewport, because
-// a 375px header only has about 110px to spare next to the menu button and the
-// icon group. object-contain letterboxes anything wider than the cap.
+// multiple of the height so a very wide mark cannot push the header nav out of
+// place; object-contain letterboxes anything wider than the cap.
 const MAX_LOGO_ASPECT = 3
+// The extra cap capToViewport asks for: a 375px header has about 110px to
+// spare next to the menu button and the icon group.
 const MAX_LOGO_VIEWPORT_WIDTH = '30vw'
 
 /**
@@ -23,13 +31,15 @@ const MAX_LOGO_VIEWPORT_WIDTH = '30vw'
  * Renders the admin-uploaded logo (store_settings.logo_url) if one is set,
  * otherwise falls back to this hardcoded SVG monogram.
  */
-export default function Logo({ size = 64, className, showText = true }: LogoProps) {
+export default function Logo({ size = 64, className, showText = true, capToViewport = false }: LogoProps) {
   const { logoUrl: fetchedLogoUrl } = useStoreSettings()
   // Keyed by URL, not a bare boolean: the admin can now replace the logo
   // without a page reload, so a broken upload must not keep the monogram
   // showing once a working one lands.
   const [failedUrl, setFailedUrl] = useState<string | null>(null)
   const logoUrl = fetchedLogoUrl === failedUrl ? null : fetchedLogoUrl
+  const aspectCap = `${size * MAX_LOGO_ASPECT}px`
+  const maxLogoWidth = capToViewport ? `min(${aspectCap}, ${MAX_LOGO_VIEWPORT_WIDTH})` : aspectCap
   const r = size * 0.45
   const cx = size / 2
   const cy = size / 2
@@ -52,7 +62,7 @@ export default function Logo({ size = 64, className, showText = true }: LogoProp
         <img
           src={logoUrl}
           alt="BOM Store logo"
-          style={{ height: size, maxWidth: `min(${size * MAX_LOGO_ASPECT}px, ${MAX_LOGO_VIEWPORT_WIDTH})` }}
+          style={{ height: size, maxWidth: maxLogoWidth }}
           className="w-auto object-contain"
           onError={() => setFailedUrl(logoUrl)}
         />

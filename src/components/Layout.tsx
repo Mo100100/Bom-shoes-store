@@ -400,7 +400,7 @@ export default function Layout() {
             className="flex-shrink-0 transition-transform duration-500 hover:scale-105"
             aria-label={t.navHome}
           >
-            <Logo size={56} showText={false} />
+            <Logo size={56} showText={false} capToViewport />
           </Link>
 
           {/* Centered nav (desktop) -- absolutely positioned at the bar's exact

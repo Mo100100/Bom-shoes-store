@@ -20,11 +20,16 @@ const STORE_SETTINGS_ID = '00000000-0000-0000-0000-000000000001'
 
 type UploadField = 'logo_url' | 'favicon_url'
 
-// A header logo is a wide mark. Logo.tsx now keeps the uploaded aspect ratio,
-// so a portrait image is drawn as a narrow strip however tall the header is:
-// say that at upload time rather than let the owner conclude the upload never
-// went through. Never blocks the upload -- the owner may have a reason.
-const MIN_HEADER_ASPECT = 1
+// A header logo is a wide mark. Logo.tsx keeps the uploaded aspect ratio, so a
+// portrait or near-square image is drawn small however tall the header is: say
+// that at upload time rather than let the owner conclude the upload never went
+// through. Never blocks the upload -- the owner may have a reason.
+//
+// The lower bound is 1.5 rather than 1 because the header gives a logo three
+// times its height in width (Logo.tsx MAX_LOGO_ASPECT), so anything below 1.5:1
+// uses less than half the space it is offered -- a 1.05:1 mark draws 59px wide
+// in a 168px slot and looks exactly as unchanged as the 277x600 one did.
+const MIN_HEADER_ASPECT = 1.5
 const MAX_HEADER_ASPECT = 6
 
 async function warnIfNotHeaderShaped(file: File, t: Translations) {
@@ -86,8 +91,8 @@ export default function AdminSettings() {
   // The logo/favicon live in the one context the storefront header reads, so
   // an upload here updates the header in place instead of after a reload.
   const {
-    logoUrl, faviconUrl, loading: settingsLoading,
-    loadError: settingsError, reload: reloadStoreSettings,
+    logoUrl, faviconUrl, loading: settingsLoading, loadError: settingsError,
+    apply: applyStoreSettings, reload: reloadStoreSettings,
   } = useStoreSettings()
   const [newBrandName, setNewBrandName] = useState('')
   const [savingBrand, setSavingBrand] = useState(false)
@@ -190,7 +195,6 @@ export default function AdminSettings() {
       const prefix = field === 'logo_url' ? 'logo' : 'favicon'
       // Compress the logo; leave the favicon untouched (it must stay tiny/native).
       const file = field === 'logo_url' ? await compressImage(raw, { maxDim: 600 }) : raw
-      if (field === 'logo_url') await warnIfNotHeaderShaped(raw, t)
       const previousUrl = field === 'logo_url' ? logoUrl : faviconUrl
       const path = `${prefix}/${Date.now()}-${file.name}`
       const { error: upErr } = await supabase.storage.from('store-assets').upload(path, file)
@@ -216,9 +220,16 @@ export default function AdminSettings() {
         await removeStoreAsset(pub.publicUrl)
         throw new Error(t.adminSaveFailed)
       }
+      // Adopt the row the UPDATE just returned, BEFORE deleting anything: a
+      // re-read here could fail, leave the header on the old URL, and then the
+      // delete below would 404 every <Logo> into the monogram fallback under a
+      // green "Saved" toast -- the exact symptom this task exists to remove.
+      applyStoreSettings(saved)
       await removeStoreAsset(previousUrl)
-      await reloadStoreSettings()
       toast.success(t.adminSaved)
+      // After the write, so a failed upload never explains how a logo that was
+      // never saved would have rendered.
+      if (field === 'logo_url') await warnIfNotHeaderShaped(raw, t)
     } catch (e: any) {
       toast.error(e.message || t.adminUploadFailed)
     } finally {
