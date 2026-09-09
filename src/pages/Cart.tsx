@@ -111,7 +111,7 @@ export default function Cart() {
   // "calculated at checkout". A free-shipping coupon is noted but doesn't
   // change the number shown here.
   const hasDiscount = !!discount && discount.amount > 0
-  const grand = totalPrice - (hasDiscount ? discount!.amount : 0)
+  const grand = Math.max(0, totalPrice - (hasDiscount ? discount!.amount : 0))
 
   if (items.length === 0) {
     return (

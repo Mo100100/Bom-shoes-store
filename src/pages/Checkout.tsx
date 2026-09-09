@@ -169,13 +169,16 @@ export default function Checkout() {
   }, [couponCode, form.regionCode])
 
   // Exactly the server's own arithmetic (computeOrderTotal in
-  // supabase/functions/_shared/pricing.ts): shipping is always the selected
+  // supabase/functions/_shared/pricing.ts), including its rounding to
+  // piastres: a percentage coupon can land on a half-piastre, and without the
+  // same rounding here the page would show a total one piastre off what the
+  // customer is actually charged. Shipping is always the selected
   // governorate's price, and a waiver arrives as part of discountAmount
   // rather than by zeroing this. Zeroing it here as well double-counted the
   // waiver, which is why the whole total is reconciled from the preview now
   // and not just the discount line.
   const shipping = selectedRegion?.price ?? 0
-  const grand = Math.max(0, totalPrice + shipping - discountAmount)
+  const grand = Math.max(0, Math.round((totalPrice + shipping - discountAmount) * 100) / 100)
 
   function setField(k: keyof typeof form, v: string) {
     setForm(f => ({ ...f, [k]: v }))
