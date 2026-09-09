@@ -110,11 +110,11 @@ export default function AdminSettings() {
   const [contact, setContact] = useState<ContactContentState>(EMPTY_CONTACT)
   const [savingWhatsapp, setSavingWhatsapp] = useState(false)
   const [savingContact, setSavingContact] = useState(false)
-  const { categories, reload: reloadCategories } = useCategories()
+  const { categories, categoryLabel, reload: reloadCategories } = useCategories()
   const [newLabelEn, setNewLabelEn] = useState('')
   const [newLabelAr, setNewLabelAr] = useState('')
   const [savingCategory, setSavingCategory] = useState(false)
-  const { brands, reload: reloadBrands } = useBrands()
+  const { brands, brandLabel, reload: reloadBrands } = useBrands()
   // The logo/favicon live in the one context the storefront header reads, so
   // an upload here updates the header in place instead of after a reload.
   const {
@@ -366,7 +366,12 @@ export default function AdminSettings() {
   }
 
   async function handleDeleteCategory(value: string) {
-    if (!confirm(t.adminDeleteConfirm(value))) return
+    // The dialog names what the row shows, not the key it is stored under.
+    // `value` is the immutable identifier and is never rendered to a human:
+    // asking an Arabic reader to confirm deleting "Sneakers" while the row on
+    // screen reads its Arabic label is a destructive prompt about something
+    // that is not on the screen.
+    if (!confirm(t.adminDeleteConfirm(categoryLabel(value)))) return
     // ponytail: a simple existence check, not a foreign key -- products.category
     // has always been free text, so this is the same protection an FK ON DELETE
     // RESTRICT would give without a schema change.
@@ -454,7 +459,9 @@ export default function AdminSettings() {
   }
 
   async function handleDeleteBrand(value: string) {
-    if (!confirm(t.adminDeleteConfirm(value))) return
+    // Same as the category delete: the key is never shown to a human, so the
+    // dialog names the display name. The two diverge on the first rename.
+    if (!confirm(t.adminDeleteConfirm(brandLabel(value)))) return
     // Same free-text guard categories use -- products.brand isn't an FK.
     const { count, error: countError } = await supabase
       .from('products').select('id', { count: 'exact', head: true }).eq('brand', value)
