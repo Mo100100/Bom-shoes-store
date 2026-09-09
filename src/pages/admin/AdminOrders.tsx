@@ -338,12 +338,16 @@ export default function AdminOrders() {
                       {/* Real <button>, not just the row's onClick, so the
                           toggle is reachable and operable from the keyboard
                           (a bare onClick on <tr> is invisible to Tab/Enter).
-                          Same fix as AdminActivityLog. */}
+                          Same fix as AdminActivityLog, but deliberately with
+                          NO aria-label: this button wraps the visible order
+                          id, and a label would replace it as the accessible
+                          name, so the table could no longer be navigated (or
+                          voice-controlled) by order number. aria-expanded
+                          carries the state on its own. */}
                       <button
                         type="button"
                         onClick={e => { e.stopPropagation(); setExpandedId(id => (id === o.id ? null : o.id)) }}
                         aria-expanded={expandedId === o.id}
-                        aria-label={expandedId === o.id ? t.adminCollapseDetails : t.adminExpandDetails}
                         className="inline-flex items-center gap-1.5 cursor-pointer text-start"
                       >
                         {expandedId === o.id ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}

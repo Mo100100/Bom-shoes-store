@@ -615,7 +615,10 @@ export const translations = {
     adminQuantityMustBePositive: 'Quantity must be a whole number of 1 or more.',
     adminSelectProduct: 'Select a product',
     adminRemoveRow: 'Remove row',
-    adminRemoveRowConfirm: 'Remove this row? There is no undo, though nothing is written until you save.',
+    // Shared by five remove buttons whose own labels call the thing a row, a
+    // badge or a link, so the dialog names no noun at all rather than
+    // contradicting the button the admin just clicked.
+    adminRemoveConfirm: 'Remove this? There is no undo, though nothing is written until you save.',
     adminNameRequired: 'Name is required',
     adminBundleUpdated: 'Bundle updated',
     adminBundleCreated: 'Bundle created',
@@ -1459,7 +1462,7 @@ export const translations = {
     adminQuantityMustBePositive: 'يجب أن تكون الكمية رقما صحيحا لا يقل عن 1.',
     adminSelectProduct: 'اختر منتجا',
     adminRemoveRow: 'إزالة الصف',
-    adminRemoveRowConfirm: 'إزالة هذا الصف؟ لا يمكن التراجع، مع أن شيئا لا يحفظ قبل الضغط على حفظ.',
+    adminRemoveConfirm: 'إزالة هذا؟ لا يمكن التراجع، مع أن شيئا لا يحفظ قبل الضغط على حفظ.',
     adminNameRequired: 'الاسم مطلوب',
     adminBundleUpdated: 'تم تحديث الحزمة',
     adminBundleCreated: 'تم إنشاء الحزمة',

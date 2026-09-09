@@ -355,7 +355,7 @@ function ShowcaseTab({
   function remove(idx: number) {
     // The trash sits right beside the two move arrows in a cluster of 3.5px
     // icons, and there is no undo, so a misclick is the realistic failure.
-    if (!confirm(t.adminRemoveRowConfirm)) return
+    if (!confirm(t.adminRemoveConfirm)) return
     setField('product_ids', ids.filter((_, i) => i !== idx))
   }
   function move(idx: number, dir: -1 | 1) {
@@ -427,7 +427,7 @@ function TrustBadgesTab({ value, setField, onSave, readOnly }: { value: any; set
     setField('items', [...items, { icon: 'Truck', title_en: '', title_ar: '', desc_en: '', desc_ar: '' }])
   }
   function removeItem(idx: number) {
-    if (!confirm(t.adminRemoveRowConfirm)) return
+    if (!confirm(t.adminRemoveConfirm)) return
     setField('items', items.filter((_, i) => i !== idx))
   }
 
@@ -528,7 +528,7 @@ function AnnouncementTab({ value, setField, onSave, readOnly }: { value: any; se
     setField('lines', [...lines, { en: '', ar: '' }])
   }
   function removeLine(idx: number) {
-    if (!confirm(t.adminRemoveRowConfirm)) return
+    if (!confirm(t.adminRemoveConfirm)) return
     setField('lines', lines.filter((_, i) => i !== idx))
   }
   function move(idx: number, dir: -1 | 1) {
@@ -589,7 +589,7 @@ function FooterLinksTab({ value, setField, onSave, readOnly }: { value: any; set
     setField('items', [...items, { label_en: '', label_ar: '', url: '' }])
   }
   function removeItem(idx: number) {
-    if (!confirm(t.adminRemoveRowConfirm)) return
+    if (!confirm(t.adminRemoveConfirm)) return
     setField('items', items.filter((_, i) => i !== idx))
   }
 
