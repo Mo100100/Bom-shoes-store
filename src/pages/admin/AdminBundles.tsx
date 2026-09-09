@@ -41,6 +41,8 @@ export default function AdminBundles() {
   const [itemCounts, setItemCounts] = useState<Record<string, number>>({})
   const [products, setProducts] = useState<ProductOption[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const loadIdRef = useRef(0)
   const [editing, setEditing] = useState<Partial<Bundle> | null>(null)
   // `null` means this bundle's items are not in hand: never read, or the read
   // failed. saveItems replaces the whole list, so such a list must never reach
@@ -55,18 +57,38 @@ export default function AdminBundles() {
   const t = useT()
 
   async function load() {
+    const id = ++loadIdRef.current
     setLoading(true)
-    const [{ data: bundleRows }, { data: itemRowsData }, { data: productRows }] = await Promise.all([
-      supabase.from('bundles').select('*').order('created_at', { ascending: false }),
-      supabase.from('bundle_items').select('bundle_id'),
-      supabase.from('products').select('id, name').order('name'),
-    ])
-    setBundles(bundleRows || [])
-    setProducts(productRows || [])
-    const counts: Record<string, number> = {}
-    for (const r of itemRowsData || []) counts[r.bundle_id] = (counts[r.bundle_id] || 0) + 1
-    setItemCounts(counts)
-    setLoading(false)
+    try {
+      const [bundleRes, itemRes, productRes] = await Promise.all([
+        supabase.from('bundles').select('*').order('created_at', { ascending: false }),
+        supabase.from('bundle_items').select('bundle_id'),
+        supabase.from('products').select('id, name').order('name'),
+      ])
+      if (id !== loadIdRef.current) return
+      // A failed read must not render as "No bundles yet".
+      if (bundleRes.error || itemRes.error || productRes.error) {
+        setLoadError(true)
+        setBundles([])
+        setProducts([])
+        setItemCounts({})
+        return
+      }
+      setLoadError(false)
+      setBundles(bundleRes.data || [])
+      setProducts(productRes.data || [])
+      const counts: Record<string, number> = {}
+      for (const r of itemRes.data || []) counts[r.bundle_id] = (counts[r.bundle_id] || 0) + 1
+      setItemCounts(counts)
+    } catch {
+      if (id !== loadIdRef.current) return
+      setLoadError(true)
+      setBundles([])
+      setProducts([])
+      setItemCounts({})
+    } finally {
+      if (id === loadIdRef.current) setLoading(false)
+    }
   }
   useEffect(() => { load() }, [])
 
@@ -88,6 +110,7 @@ export default function AdminBundles() {
     } catch {
       // postgrest-js reports a failed request as { error }, but a genuine throw
       // must still land on the failed-read state, not a stuck spinner.
+      if (id !== itemsLoadIdRef.current) return
       setItemRows(null)
     } finally {
       if (id === itemsLoadIdRef.current) setItemsLoading(false)
@@ -151,6 +174,13 @@ export default function AdminBundles() {
       const { data, error: insError } = await supabase.from('bundle_items').insert(rows).select('id')
       if (insError) throw insError
       for (const r of data) inserted.push(r.id)
+      // The delete below is filtered by these ids, so an insert that reports
+      // success but returns no rows would turn it into a delete-everything and
+      // re-arm the empty-bundle bug. Today it always returns them, because
+      // bundle_items has `create policy "Public can view bundle items" ...
+      // using (true)` (20260704009000:79-81); if a future migration narrows
+      // that SELECT policy, this refuses instead of wiping the bundle.
+      if (!inserted.length) throw new Error(t.adminSaveNotApplied)
     }
     // Everything for this bundle except what was just inserted: that is exactly
     // the old set, including rows the admin removed in the editor.
@@ -219,8 +249,9 @@ export default function AdminBundles() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">{t.adminBundleCount(bundles.length)}</p>
-        {isAdmin && (
+        {/* A count and an Add button over a failed read would both be lies. */}
+        {!loadError && <p className="text-sm text-muted-foreground">{t.adminBundleCount(bundles.length)}</p>}
+        {isAdmin && !loadError && (
           <button
             onClick={openNew}
             className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 text-sm tracking-wider hover:bg-primary/90 cursor-pointer"
@@ -234,6 +265,17 @@ export default function AdminBundles() {
       {loading ? (
         <div className="py-24 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : loadError ? (
+        <div className="py-24 text-center">
+          <p className="text-terracotta">{t.adminBundlesLoadError}</p>
+          <button
+            type="button"
+            onClick={() => load()}
+            className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
+          >
+            {t.failedTryAgain}
+          </button>
         </div>
       ) : (
         <div className="border border-border bg-card overflow-hidden">
