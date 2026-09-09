@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useCart, CartItem } from '@/contexts/CartContext'
 import { couponRejectionMessage } from '@/lib/cart'
 import { useT } from '@/contexts/LanguageContext'
+import { useCategories } from '@/contexts/CategoriesContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { supabase, readServerError } from '@/lib/supabase'
 import { Minus, Plus, X, ArrowRight, ShoppingBag, Loader2 } from 'lucide-react'
@@ -24,6 +25,7 @@ export default function Cart() {
   const navigate = useNavigate()
   const t = useT()
   const { formatPrice } = useCurrency()
+  const { categoryLabel } = useCategories()
 
   useSeo({ title: `${t.cart} · ${t.brandName}`, description: t.cartEmptyDesc })
 
@@ -181,7 +183,7 @@ export default function Cart() {
                         {item.product.name}
                       </Link>
                       <p className="text-xs text-muted-foreground tracking-wider uppercase mt-1">
-                        {item.product.category}
+                        {categoryLabel(item.product.category)}
                       </p>
                       <p className="text-sm text-muted-foreground mt-2">
                         {t.cartVariant(item.color, item.size)}

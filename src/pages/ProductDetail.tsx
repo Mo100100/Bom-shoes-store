@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency, SETTLEMENT_CURRENCY } from '@/contexts/CurrencyContext'
 import { useBrands } from '@/contexts/BrandsContext'
+import { useCategories } from '@/contexts/CategoriesContext'
 import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { useRecentlyViewed } from '@/hooks/useRecentlyViewed'
 import { useSeo } from '@/hooks/useSeo'
@@ -86,6 +87,7 @@ export default function ProductDetail() {
   const { lang } = useLanguage()
   const { formatPrice } = useCurrency()
   const { brandLabel } = useBrands()
+  const { categoryLabel } = useCategories()
 
   // Guards against two overlapping loads (fast slug-to-slug navigation, or a
   // retry click while the previous attempt is still in flight): only the
@@ -575,11 +577,12 @@ export default function ProductDetail() {
 
           {/* Details */}
           <div className="lg:pt-8">
-            {/* Brand then category. products.brand stores brands.value, an
-                immutable key that is not the display name, so it goes through
-                the same lookup ProductCard uses. */}
+            {/* Brand then category. Both are stored keys, not display
+                names: products.brand holds brands.value and products.category
+                holds categories.value, so each goes through the same lookup
+                every other surface uses. The category used to print raw here. */}
             <p className="text-zen text-muted-foreground mb-3">
-              {[brandLabel(product.brand), product.category].filter(Boolean).join(` ${t.dash} `)}
+              {[brandLabel(product.brand), categoryLabel(product.category)].filter(Boolean).join(` ${t.dash} `)}
             </p>
             <h1 className="font-display text-4xl md:text-5xl mb-3 text-balance">{product.name}</h1>
             <p className="font-display text-2xl text-muted-foreground mb-3">
