@@ -62,7 +62,9 @@ export default function AdminBundles() {
     try {
       const [bundleRes, itemRes, productRes] = await Promise.all([
         supabase.from('bundles').select('*').order('created_at', { ascending: false }),
-        supabase.from('bundle_items').select('bundle_id'),
+        // Grouped in SQL, one row per non-empty bundle, instead of pulling
+        // every bundle_items row in the shop to count them in a loop.
+        supabase.from('bundle_item_counts').select('bundle_id, item_count'),
         supabase.from('products').select('id, name').order('name'),
       ])
       if (id !== loadIdRef.current) return
@@ -78,7 +80,7 @@ export default function AdminBundles() {
       setBundles(bundleRes.data || [])
       setProducts(productRes.data || [])
       const counts: Record<string, number> = {}
-      for (const r of itemRes.data || []) counts[r.bundle_id] = (counts[r.bundle_id] || 0) + 1
+      for (const r of itemRes.data || []) counts[r.bundle_id] = Number(r.item_count) || 0
       setItemCounts(counts)
     } catch {
       if (id !== loadIdRef.current) return

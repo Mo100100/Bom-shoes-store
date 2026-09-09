@@ -707,6 +707,8 @@ function TestimonialsTab() {
     load()
   }
 
+  // One RPC, one UPDATE statement, same as AdminBanners: this was one UPDATE
+  // per row per arrow click with every result discarded.
   async function move(row: Testimonial, direction: -1 | 1) {
     const idx = rows.findIndex(r => r.id === row.id)
     const swapIdx = idx + direction
@@ -714,7 +716,11 @@ function TestimonialsTab() {
     const reordered = [...rows]
     ;[reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]]
     setRows(reordered)
-    await Promise.all(reordered.map((r, i) => supabase.from('testimonials').update({ position: i }).eq('id', r.id)))
+    const { data, error } = await supabase.rpc('admin_reorder_positions', {
+      p_table: 'testimonials',
+      p_ids: reordered.map(r => r.id),
+    })
+    if (error || !Number(data)) toast.error(error?.message || t.adminSaveNotApplied)
     load()
   }
 

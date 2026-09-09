@@ -82,7 +82,12 @@ export default function AdminCoupons() {
     setLoading(true)
     const [couponRes, redemptionRes, productRes] = await Promise.all([
       supabase.from('coupons').select('*').order('created_at', { ascending: false }),
-      supabase.from('coupon_redemptions').select('coupon_id'),
+      // Grouped in SQL. This used to download every redemption row in the shop
+      // and tally them in a loop, capped at max_rows = 1000, so a busy code
+      // could read as barely used here while the checkout was already
+      // refusing it. The view is one row per redeemed coupon, so its size
+      // follows the coupon list rather than the order book.
+      supabase.from('coupon_redemption_counts').select('coupon_id, redemption_count'),
       supabase.from('products').select('id, name').order('name'),
     ])
     // "No coupons yet" over live discount codes invites the owner to create a
@@ -92,7 +97,7 @@ export default function AdminCoupons() {
     setCoupons(failed ? [] : couponRes.data || [])
     setProducts(failed ? [] : productRes.data || [])
     const counts: Record<string, number> = {}
-    if (!failed) for (const r of redemptionRes.data || []) counts[r.coupon_id] = (counts[r.coupon_id] || 0) + 1
+    if (!failed) for (const r of redemptionRes.data || []) counts[r.coupon_id] = Number(r.redemption_count) || 0
     setUsageCounts(counts)
     setLoading(false)
   }

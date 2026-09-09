@@ -329,12 +329,21 @@ export default function AdminProducts() {
 
   async function handleDropImage(dropIndex: number) {
     if (dragIndex === null || dragIndex === dropIndex || !editing?.id) { setDragIndex(null); return }
+    const productId = editing.id
     const reordered = [...images]
     const [moved] = reordered.splice(dragIndex, 1)
     reordered.splice(dropIndex, 0, moved)
     setImages(reordered)
     setDragIndex(null)
-    await Promise.all(reordered.map((img, idx) => supabase.from('product_images').update({ position: idx }).eq('id', img.id)))
+    // One RPC, one UPDATE statement. Dropping an image used to fire one UPDATE
+    // per image with every result discarded, so a refused write left the
+    // gallery showing an order the database never took.
+    const { data, error } = await supabase.rpc('admin_reorder_positions', {
+      p_table: 'product_images',
+      p_ids: reordered.map(img => img.id),
+    })
+    if (error || !Number(data)) toast.error(error?.message || t.adminSaveNotApplied)
+    await loadImages(productId)
   }
 
   async function handleSave() {

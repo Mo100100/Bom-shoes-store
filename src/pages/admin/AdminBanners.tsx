@@ -49,8 +49,12 @@ export default function AdminBanners() {
   // Swaps this row with its neighbor in the currently-ordered list, then
   // reassigns 0..n-1 positions across the whole list -- simpler and more
   // robust than juggling raw position values, which can collide if rows were
-  // ever saved with duplicate/default positions. List is short and
-  // low-frequency to reorder, so re-writing every row is cheap.
+  // ever saved with duplicate/default positions.
+  //
+  // One RPC, one UPDATE statement. This used to be one UPDATE per row per
+  // arrow click inside a Promise.all over a .map (the N+1 write this project
+  // forbids), with every result discarded while the list on screen had already
+  // been redrawn in the new order.
   async function move(banner: HeroBanner, direction: -1 | 1) {
     const idx = banners.findIndex(b => b.id === banner.id)
     const swapIdx = idx + direction
@@ -58,7 +62,13 @@ export default function AdminBanners() {
     const reordered = [...banners]
     ;[reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]]
     setBanners(reordered)
-    await Promise.all(reordered.map((b, i) => supabase.from('hero_banners').update({ position: i }).eq('id', b.id)))
+    const { data, error } = await supabase.rpc('admin_reorder_positions', {
+      p_table: 'hero_banners',
+      p_ids: reordered.map(b => b.id),
+    })
+    // A swap always moves at least two rows, so zero means nothing was
+    // written and the order on screen is a lie.
+    if (error || !Number(data)) toast.error(error?.message || t.adminSaveNotApplied)
     load()
   }
 
