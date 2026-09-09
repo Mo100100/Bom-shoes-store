@@ -235,21 +235,30 @@ export default function Home() {
       )}
 
       {/* ===== BRAND BAR ===== */}
+      {/* Brand is the primary shopping axis here, so this is the first thing
+          under the hero. 22 brands do not wrap into anything readable on a
+          390px screen, so on a phone the row scrolls sideways instead and each
+          brand keeps a 44px tap target. */}
       {brandBarEnabled && brands.length > 0 && (
-      <section className="bg-[#efece6] border-y border-border px-6 lg:px-8 py-8">
-        <div className="max-w-[1320px] mx-auto flex flex-col md:flex-row items-center gap-6">
-          <div className="flex-1 flex items-center justify-between flex-wrap gap-x-6 gap-y-4">
+      <section className="bg-[#efece6] border-y border-border py-6 lg:py-8">
+        <div className="max-w-[1320px] mx-auto px-6 lg:px-8">
+          <span className="block text-[11px] tracking-[0.25em] uppercase text-muted-foreground mb-4">
+            {t.homeBrandsEyebrow}
+          </span>
+        </div>
+        <div className="max-w-[1320px] mx-auto flex flex-col md:flex-row md:items-center gap-5 md:px-6 lg:px-8">
+          <div className="flex-1 flex items-center gap-x-7 gap-y-3 overflow-x-auto md:overflow-visible md:flex-wrap md:justify-between px-6 md:px-0">
             {brands.map(b => (
               <Link
                 key={b.value}
                 to={`/shop?brand=${encodeURIComponent(b.value)}`}
-                className="group inline-flex items-center"
+                className="group inline-flex items-center shrink-0 min-h-[44px]"
                 aria-label={b.name}
               >
                 {b.logo_url ? (
                   <img src={b.logo_url} alt={b.name} className="h-6 w-auto object-contain opacity-80 group-hover:opacity-100 transition-opacity" />
                 ) : (
-                  <span className="latin-text font-display text-[22px] md:text-[26px] font-semibold tracking-[0.04em] leading-none text-foreground/85 group-hover:text-foreground transition-colors">
+                  <span className="latin-text font-display text-[22px] md:text-[26px] font-semibold tracking-[0.04em] leading-none text-foreground/85 group-hover:text-foreground transition-colors whitespace-nowrap">
                     {b.name}
                   </span>
                 )}
@@ -258,7 +267,7 @@ export default function Home() {
           </div>
           <Link
             to="/brands"
-            className="inline-flex items-center gap-3.5 bg-foreground text-background rounded-full px-5 py-3.5 text-xs tracking-[0.12em] uppercase font-semibold hover:bg-[#2a2a2a] transition-colors shrink-0"
+            className="mx-6 md:mx-0 inline-flex items-center justify-center gap-3.5 bg-foreground text-background rounded-full px-5 min-h-[44px] text-xs tracking-[0.12em] uppercase font-semibold hover:bg-[#2a2a2a] transition-colors shrink-0"
           >
             <LayoutGrid className="w-4 h-4" />
             {t.shopViewAll}

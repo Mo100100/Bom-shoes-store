@@ -125,6 +125,9 @@ export const translations = {
     homeBestTitle: 'Best sellers',
     homeBestViewAll: 'View all bestsellers',
 
+    // New: brand bar
+    homeBrandsEyebrow: 'Shop by brand',
+
     // New: testimonials. The quotes themselves live in the `testimonials`
     // table, so only the section headings are translated here.
     homeTestimonialsEyebrow: 'What customers say',
@@ -972,6 +975,9 @@ export const translations = {
     homeBestEyebrow: 'المفضلة',
     homeBestTitle: 'الأكثر مبيعا',
     homeBestViewAll: 'اطلع على الأكثر مبيعا',
+
+    // New: brand bar
+    homeBrandsEyebrow: 'تسوق حسب الماركة',
 
     // New: testimonials. The quotes themselves live in the `testimonials`
     // table, so only the section headings are translated here.
