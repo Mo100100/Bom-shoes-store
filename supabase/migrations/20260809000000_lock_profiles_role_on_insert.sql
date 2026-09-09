@@ -24,10 +24,14 @@
 -- owner's own account is an admin and this migration cannot tell it apart from
 -- an intruder.
 
--- Both statements below that touch the profiles table itself (create trigger,
--- drop/create policy) take ACCESS EXCLUSIVE on it, and profiles is read on
--- every page load. Fail fast rather than queueing behind a long reader and
--- stalling the site while every later query piles up on the lock.
+-- The policy statements below take ACCESS EXCLUSIVE on profiles, which is read
+-- on every page load. (`create trigger` takes only ShareRowExclusive, so
+-- readers are unaffected by that one.) This whole file is one transaction, so
+-- the ACCESS EXCLUSIVE is then held until commit, through the audit scan at the
+-- end. Fail fast rather than queueing behind a long reader and stalling the
+-- site while every later query piles up on the lock. Note this bounds how long
+-- the migration WAITS for the lock, not how long it holds it: the work after it
+-- is a handful of catalog reads and one scan of a small table.
 set local lock_timeout = '3s';
 
 -- ---------------------------------------------------------------------------
@@ -108,24 +112,45 @@ create trigger prevent_self_role_insert
 -- removes the assumption.
 --
 -- Policies with cmd = 'ALL' also admit INSERT but carry SELECT/UPDATE/DELETE
--- rules too, so dropping one would be destructive. None exists on profiles
--- today; the post-condition below counts them and fails the migration loudly
--- if that ever changes, rather than shipping a false sense of safety.
+-- rules too, and DROP POLICY has no per-command granularity, so dropping one
+-- would be destructive. None exists on profiles today; the post-condition
+-- below counts them and fails the migration loudly if that ever changes,
+-- rather than shipping a false sense of safety.
+--
+-- Both queries filter permissive = 'PERMISSIVE' for the same reason this loop
+-- exists at all. A RESTRICTIVE policy is ANDed, not ORed, so it can only make
+-- the check stricter: dropping one would RELAX what a client may insert, which
+-- is the one way this migration could leave the table worse than it found it.
+-- None is declared anywhere in this repo, but the base schema is a
+-- self-declared reconstruction, so "none is declared" is not "none exists".
+-- Restrictive policies are therefore left alone and not counted.
 -- ---------------------------------------------------------------------------
 do $insert_policy$
 declare
-  v_name text;
+  v_policy record;
   v_dropped text;
   v_admitting int;
 begin
-  for v_name in
-    select policyname
+  for v_policy in
+    select policyname, permissive, roles::text as roles, qual, with_check
     from pg_policies
-    where schemaname = 'public' and tablename = 'profiles' and cmd = 'INSERT'
+    where schemaname = 'public'
+      and tablename = 'profiles'
+      and cmd = 'INSERT'
+      and permissive = 'PERMISSIVE'
     order by policyname
   loop
-    execute format('drop policy %I on public.profiles', v_name);
-    v_dropped := concat_ws(', ', v_dropped, v_name);
+    -- Log the whole definition, not just the name. If this drops something the
+    -- reconstruction never knew about, this NOTICE is the only record of what
+    -- it was and the operator has to be able to put it back by hand.
+    raise notice 'dropping profiles INSERT policy %: permissive=%, roles=%, using=%, with check=%',
+      v_policy.policyname,
+      v_policy.permissive,
+      v_policy.roles,
+      coalesce(v_policy.qual, '(none)'),
+      coalesce(v_policy.with_check, '(none)');
+    execute format('drop policy %I on public.profiles', v_policy.policyname);
+    v_dropped := concat_ws(', ', v_dropped, v_policy.policyname);
   end loop;
 
   raise notice 'profiles INSERT policies replaced: %', coalesce(v_dropped, '(none existed)');
@@ -137,7 +162,10 @@ begin
   select count(*)
   into v_admitting
   from pg_policies
-  where schemaname = 'public' and tablename = 'profiles' and cmd in ('INSERT', 'ALL');
+  where schemaname = 'public'
+    and tablename = 'profiles'
+    and cmd in ('INSERT', 'ALL')
+    and permissive = 'PERMISSIVE';
 
   if v_admitting <> 1 then
     raise exception 'expected exactly 1 policy admitting INSERT on public.profiles, found %. Permissive policies are OR''d, so a second one would re-open the role hole. Inspect pg_policies and re-run.', v_admitting;
