@@ -1,6 +1,19 @@
 // Bilingual translations: English (en) and Arabic (ar) with RTL support
 export type Lang = 'en' | 'ar'
 
+// Arabic count agreement, for the two customer-facing item counters (the shop
+// result count and the cart header). Arabic does not split one/many the way
+// English does: 1 and 2 have their own forms and take no numeral, 3 to 10 take
+// the plural, and 11 upwards reverts to the singular. Without this "2 قطع" and
+// "15 قطع" both read as broken Arabic. The admin counters are left on the
+// simpler shape: they are owner-facing and not worth the extra call sites.
+function arPieces(n: number) {
+  if (n === 1) return 'قطعة'
+  if (n === 2) return 'قطعتان'
+  const tens = n % 100
+  return `${n} ${tens >= 3 && tens <= 10 ? 'قطع' : 'قطعة'}`
+}
+
 export const translations = {
   en: {
     // Brand
@@ -1031,7 +1044,7 @@ export const translations = {
     shopSortPriceAsc: 'السعر، من الأقل',
     shopSortPriceDesc: 'السعر، من الأعلى',
     shopSortNewest: 'الأحدث',
-    shopPieces: (n: number) => `${n} ${n === 1 ? 'قطعة' : 'قطع'}`,
+    shopPieces: arPieces,
     shopNoMatch: 'لا تلائم هذه اللحظة أي قطعة.',
     shopLoadError: 'تعذر تحميل المجموعة. يرجى المحاولة مرة أخرى.',
     shopViewAll: 'عرض الكل',
@@ -1141,7 +1154,7 @@ export const translations = {
 
     // Cart
     cartEyebrow: 'سلتك',
-    cartPieces: (n: number) => `${n} ${n === 1 ? 'قطعة' : 'قطع'}`,
+    cartPieces: arPieces,
     cartEmptyTitle: 'لم تختر بعد',
     cartEmptyDesc: 'حين تجد قطعة تناديك، ستنتظرك هنا.',
     cartEmptyCta: 'تصفح المجموعة',
