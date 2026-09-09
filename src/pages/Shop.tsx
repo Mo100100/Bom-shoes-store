@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { supabase, ProductCatalogEntry, Coupon } from '@/lib/supabase'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCart } from '@/contexts/CartContext'
-import { Loader2 } from 'lucide-react'
+import { Loader2, SlidersHorizontal, X } from 'lucide-react'
 import QuickViewModal from '@/components/QuickViewModal'
 import ProductCard from '@/components/ProductCard'
 import { useSeo } from '@/hooks/useSeo'
@@ -16,12 +16,19 @@ const SORT_VALUES = ['featured', 'price-asc', 'price-desc', 'newest']
 
 export default function Shop() {
   const [params, setParams] = useSearchParams()
-  const initialCategory = params.get('category') || 'All'
+  // Every URL-backed filter is read LIVE, category included. It used to be
+  // seeded into state once, so a category link followed while already on this
+  // page changed the URL and nothing else, and browser back/forward across
+  // category URLs moved the address bar past a grid that never re-filtered.
+  const category = params.get('category') || 'All'
   const search = params.get('search') || ''
   const brand = params.get('brand') || ''
   const saleOnly = params.get('sale') === '1'
-  const [category, setCategory] = useState(initialCategory)
   const [sort, setSort] = useState('featured')
+  // Collapsed on a phone: every colour and every size in the catalog, wrapping,
+  // used to sit between the customer and the first product. Always open from md
+  // up, where the row costs nothing.
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [products, setProducts] = useState<ProductCatalogEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
@@ -159,20 +166,54 @@ export default function Shop() {
     return true
   }), [sorted, selectedColors, selectedSizes, minPrice, maxPrice])
 
+  // One writer for the URL-backed filters. Writes a COPY: the object
+  // useSearchParams hands back is shared across renders, so mutating it in
+  // place lets one control silently carry another's half-made edit.
+  function writeParams(mutate: (next: URLSearchParams) => void, replace = false) {
+    const next = new URLSearchParams(params)
+    mutate(next)
+    setParams(next, { replace })
+  }
+
+  // Pushed, not replaced, so back really does return to the previous category.
   function selectCategory(c: string) {
-    setCategory(c)
-    if (c === 'All') {
-      params.delete('category')
-    } else {
-      params.set('category', c)
-    }
-    setParams(params, { replace: true })
+    writeParams(next => c === 'All' ? next.delete('category') : next.set('category', c))
   }
 
   function clearSearch() {
-    params.delete('search')
-    setParams(params, { replace: true })
+    writeParams(next => next.delete('search'), true)
   }
+
+  // Everything the grid is filtered by, in one place: the four URL filters and
+  // the four client-side ones. The empty state's button used to reset only the
+  // category, which is almost never why the grid came back empty.
+  function clearAllFilters() {
+    setSelectedColors([])
+    setSelectedSizes([])
+    setMinPrice('')
+    setMaxPrice('')
+    writeParams(next => {
+      next.delete('category')
+      next.delete('brand')
+      next.delete('sale')
+      next.delete('search')
+    })
+  }
+
+  // What is currently narrowing the grid, each with the one control that undoes
+  // it. Rendered as chips so a collapsed filter panel on a phone can still say
+  // what is active, and so the customer can drop one filter without dropping
+  // all of them.
+  const activeFilters: { key: string; label: string; clear: () => void }[] = [
+    ...(category !== 'All' ? [{ key: 'category', label: categoryLabel(category), clear: () => selectCategory('All') }] : []),
+    ...(brand ? [{ key: 'brand', label: brandLabel(brand) || brand, clear: () => writeParams(next => next.delete('brand')) }] : []),
+    ...(saleOnly ? [{ key: 'sale', label: t.navSale, clear: () => writeParams(next => next.delete('sale')) }] : []),
+    ...(search ? [{ key: 'search', label: `${t.searchLabel}: ${search}`, clear: clearSearch }] : []),
+    ...selectedColors.map(c => ({ key: `color:${c}`, label: c, clear: () => toggleColor(c) })),
+    ...selectedSizes.map(s => ({ key: `size:${s}`, label: `${t.productSize} ${s}`, clear: () => toggleSize(s) })),
+    ...(minPrice ? [{ key: 'min', label: `${t.shopPriceMin}: ${minPrice}`, clear: () => setMinPrice('') }] : []),
+    ...(maxPrice ? [{ key: 'max', label: `${t.shopPriceMax}: ${maxPrice}`, clear: () => setMaxPrice('') }] : []),
+  ]
 
   function toggleColor(c: string) {
     setSelectedColors(current => current.includes(c) ? current.filter(x => x !== c) : [...current, c])
@@ -231,7 +272,7 @@ export default function Shop() {
             <div className="flex items-center justify-center gap-3 flex-wrap">
               <p className="text-muted-foreground font-light">{products.length} {products.length === 1 ? t.piece : t.pieces}</p>
               <button
-                onClick={() => { params.delete('brand'); params.delete('sale'); setParams(params, { replace: true }) }}
+                onClick={() => writeParams(next => { next.delete('brand'); next.delete('sale') })}
                 className="text-xs tracking-widest uppercase border-b border-foreground pb-0.5 cursor-pointer"
               >
                 {t.shopClearSearch}
@@ -245,8 +286,8 @@ export default function Shop() {
         </div>
 
         {/* Filter bar */}
-        <div className="flex flex-col gap-6 bg-background/60 border border-border px-6 py-5 mb-12">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+        <div className="flex flex-col gap-4 bg-background/60 border border-border px-4 py-4 md:px-6 md:py-5 mb-8 md:mb-12">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 md:gap-6">
             {/* No scrollbar-none here: on a narrow screen the scrollbar is the
                 only sign that more categories exist past the edge. */}
             <div className="flex items-center gap-1 overflow-x-auto -mx-1 px-1">
@@ -255,7 +296,7 @@ export default function Shop() {
                   key={c}
                   onClick={() => selectCategory(c)}
                   aria-pressed={category === c}
-                  className={`px-4 py-1.5 text-sm whitespace-nowrap transition-colors cursor-pointer ${
+                  className={`min-h-[44px] md:min-h-0 px-4 py-1.5 text-sm whitespace-nowrap transition-colors cursor-pointer ${
                     category === c
                       ? 'bg-foreground text-background'
                       : 'text-muted-foreground hover:text-foreground'
@@ -265,24 +306,43 @@ export default function Shop() {
                 </button>
               ))}
             </div>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-muted-foreground tracking-wider uppercase">{t.shopSort}</span>
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value)}
-                dir={lang === 'ar' ? 'rtl' : 'ltr'}
-                className="bg-transparent text-sm border-b border-foreground/30 py-1 focus:outline-none focus:border-foreground cursor-pointer"
+            <div className="flex items-center justify-between gap-3">
+              <button
+                onClick={() => setFiltersOpen(open => !open)}
+                aria-expanded={filtersOpen}
+                aria-controls="shop-filters"
+                className="md:hidden min-h-[44px] px-4 inline-flex items-center gap-2 border border-border text-sm cursor-pointer"
               >
-                {SORT_VALUES.map(s => (
-                  <option key={s} value={s}>{sortLabel(s)}</option>
-                ))}
-              </select>
+                <SlidersHorizontal className="w-4 h-4" />
+                {t.shopFilters}
+                {activeFilters.length > 0 && (
+                  <span className="bg-foreground text-background rounded-full w-5 h-5 text-[11px] flex items-center justify-center">
+                    {activeFilters.length}
+                  </span>
+                )}
+              </button>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground tracking-wider uppercase">{t.shopSort}</span>
+                <select
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value)}
+                  dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                  className="bg-transparent text-base md:text-sm border-b border-foreground/30 py-1 focus:outline-none focus:border-foreground cursor-pointer"
+                >
+                  {SORT_VALUES.map(s => (
+                    <option key={s} value={s}>{sortLabel(s)}</option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
 
           {/* Color / size / price -- derived client-side from the loaded rows, filtered client-side too */}
           {(availableColors.length > 0 || availableSizes.length > 0) && (
-            <div className="flex flex-wrap items-center gap-6 pt-1">
+            <div
+              id="shop-filters"
+              className={`flex-wrap items-center gap-4 md:gap-6 pt-1 md:flex ${filtersOpen ? 'flex' : 'hidden'}`}
+            >
               {availableColors.length > 0 && (
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs text-muted-foreground tracking-wider uppercase">{t.productColor}</span>
@@ -291,7 +351,7 @@ export default function Shop() {
                       key={c}
                       onClick={() => toggleColor(c)}
                       aria-pressed={selectedColors.includes(c)}
-                      className={`px-3 py-1 text-xs border transition-colors cursor-pointer ${
+                      className={`min-h-[44px] md:min-h-0 px-4 py-1 text-xs border transition-colors cursor-pointer ${
                         selectedColors.includes(c)
                           ? 'border-foreground bg-foreground text-background'
                           : 'border-border hover:border-foreground/50'
@@ -310,7 +370,7 @@ export default function Shop() {
                       key={s}
                       onClick={() => toggleSize(s)}
                       aria-pressed={selectedSizes.includes(s)}
-                      className={`px-3 py-1 text-xs border transition-colors cursor-pointer ${
+                      className={`min-h-[44px] md:min-h-0 px-4 py-1 text-xs border transition-colors cursor-pointer ${
                         selectedSizes.includes(s)
                           ? 'border-foreground bg-foreground text-background'
                           : 'border-border hover:border-foreground/50'
@@ -330,7 +390,7 @@ export default function Shop() {
                   onChange={(e) => setMinPrice(e.target.value)}
                   placeholder={t.shopPriceMin}
                   aria-label={`${t.shopFilterPrice}: ${t.shopPriceMin}`}
-                  className="w-16 bg-transparent text-xs border-b border-foreground/30 focus:outline-none focus:border-foreground py-1"
+                  className="w-20 md:w-16 bg-transparent text-base md:text-xs border-b border-foreground/30 focus:outline-none focus:border-foreground py-1"
                 />
                 <span className="text-muted-foreground">-</span>
                 <input
@@ -340,9 +400,35 @@ export default function Shop() {
                   onChange={(e) => setMaxPrice(e.target.value)}
                   placeholder={t.shopPriceMax}
                   aria-label={`${t.shopFilterPrice}: ${t.shopPriceMax}`}
-                  className="w-16 bg-transparent text-xs border-b border-foreground/30 focus:outline-none focus:border-foreground py-1"
+                  className="w-20 md:w-16 bg-transparent text-base md:text-xs border-b border-foreground/30 focus:outline-none focus:border-foreground py-1"
                 />
               </div>
+            </div>
+          )}
+
+          {/* Active filters -- outside the collapsible panel on purpose, so a
+              phone with the panel shut still says what the grid is narrowed by
+              and can undo any single one of them. */}
+          {activeFilters.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+              <span className="text-xs text-muted-foreground tracking-wider uppercase me-1">{t.shopActiveFilters}</span>
+              {activeFilters.map(f => (
+                <button
+                  key={f.key}
+                  onClick={f.clear}
+                  aria-label={t.shopRemoveFilter(f.label)}
+                  className="min-h-[44px] md:min-h-0 px-3 py-1.5 inline-flex items-center gap-1.5 text-xs border border-foreground cursor-pointer hover:bg-foreground hover:text-background transition-colors"
+                >
+                  {f.label}
+                  <X className="w-3 h-3" />
+                </button>
+              ))}
+              <button
+                onClick={clearAllFilters}
+                className="min-h-[44px] md:min-h-0 px-1 text-xs tracking-wider uppercase text-muted-foreground hover:text-foreground underline underline-offset-4 cursor-pointer"
+              >
+                {t.shopClearAll}
+              </button>
             </div>
           )}
         </div>
@@ -365,11 +451,14 @@ export default function Shop() {
         ) : filtered.length === 0 ? (
           <div className="py-24 text-center">
             <p className="text-muted-foreground">{t.shopNoMatch}</p>
+            {/* Clears the colour, size, price and brand filters too. Resetting
+                only the category left the customer staring at the same empty
+                grid, since the category is rarely what emptied it. */}
             <button
-              onClick={() => selectCategory('All')}
-              className="mt-4 text-sm border-b border-foreground pb-0.5"
+              onClick={activeFilters.length > 0 ? clearAllFilters : () => selectCategory('All')}
+              className="mt-4 text-sm border-b border-foreground pb-0.5 cursor-pointer"
             >
-              {t.shopViewAll}
+              {activeFilters.length > 0 ? t.shopClearAll : t.shopViewAll}
             </button>
           </div>
         ) : (
