@@ -539,6 +539,11 @@ export const translations = {
     adminSaveFailed: 'Save failed',
     adminSaveNotApplied: 'Nothing was written. Reload the page and try again.',
     adminLoadError: 'Could not load this list. It has not been emptied, this screen just could not read it.',
+    // The same panel on a storefront page. adminLoadError is owner-voiced ("this
+    // list has not been emptied") and means nothing to a shopper, so the two
+    // call sites outside the admin (the homepage grid, the order lookup) pass
+    // this instead.
+    storeLoadError: 'We could not load this right now. Check your connection and try again.',
     adminCouldNotCheckUsage: 'Could not check whether any products still use this. Nothing was deleted.',
     adminDeleteFailed: 'Delete failed',
     adminUploadFailed: 'Upload failed',
@@ -1379,6 +1384,7 @@ export const translations = {
     adminSaveFailed: 'فشل الحفظ',
     adminSaveNotApplied: 'لم يتم حفظ أي شيء. أعد تحميل الصفحة وحاول مرة أخرى.',
     adminLoadError: 'تعذر تحميل هذه القائمة. لم يتم حذف محتواها، هذه الشاشة فقط لم تستطع قراءتها.',
+    storeLoadError: 'تعذر التحميل الآن. تأكد من اتصالك بالإنترنت وحاول مرة أخرى.',
     adminCouldNotCheckUsage: 'تعذر التحقق مما إذا كانت هناك منتجات ما زالت تستخدم هذا. لم يتم حذف أي شيء.',
     adminDeleteFailed: 'فشل الحذف',
     adminUploadFailed: 'فشل الرفع',

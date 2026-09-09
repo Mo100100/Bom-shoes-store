@@ -130,7 +130,7 @@ export default function OrderLookup() {
 
       {/* A read that FAILED and a reference that does not exist are different
           answers and must never draw the same panel. */}
-      {!loading && result?.kind === 'error' && <LoadErrorPanel onRetry={() => run(queried)} />}
+      {!loading && result?.kind === 'error' && <LoadErrorPanel onRetry={() => run(queried)} message={t.storeLoadError} />}
 
       {/* Deliberately NOT LoadErrorPanel: its answer is a retry button, and
           retrying is the one thing that makes a throttled shopper's situation
