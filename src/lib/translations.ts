@@ -129,6 +129,7 @@ export const translations = {
     // table, so only the section headings are translated here.
     homeTestimonialsEyebrow: 'What customers say',
     homeTestimonialsTitle: 'In their own words',
+    homeTestimonialRating: (n: number) => `${n} out of 5 stars`,
 
     // New: limited drop banner
     homeDropEyebrow: 'Limited Drop',
@@ -976,6 +977,7 @@ export const translations = {
     // table, so only the section headings are translated here.
     homeTestimonialsEyebrow: 'رأي العملاء',
     homeTestimonialsTitle: 'بكلامهم هم',
+    homeTestimonialRating: (n: number) => `${n} من 5 نجوم`,
 
     // New: limited drop banner
     homeDropEyebrow: 'إصدار محدود',

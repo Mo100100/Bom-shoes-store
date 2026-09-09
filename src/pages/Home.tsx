@@ -11,6 +11,7 @@ import { toast } from 'sonner'
 import ShoeShowcase3D from '@/components/ShoeShowcase3D'
 import ProductCard from '@/components/ProductCard'
 import CountdownTimer from '@/components/CountdownTimer'
+import HomeTestimonials from '@/components/HomeTestimonials'
 import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { useSeo } from '@/hooks/useSeo'
 import { useBrands } from '@/contexts/BrandsContext'
@@ -363,6 +364,11 @@ export default function Home() {
         </div>
       </section>
       )}
+
+      {/* ===== TESTIMONIALS ===== */}
+      {/* Hides itself when the owner has no active testimonials, so it costs
+          the customer nothing until there is something real to read. */}
+      <HomeTestimonials />
 
       {/* ===== FEATURES BAR ===== */}
       {trustEnabled && (
