@@ -32,3 +32,6 @@ supabase/.temp/
 
 # SDD scratch workspace (subagent-driven-development)
 .superpowers/
+
+# Playwright MCP session artifacts
+.playwright-mcp/
