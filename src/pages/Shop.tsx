@@ -155,6 +155,11 @@ export default function Shop() {
   const availableColors = useMemo(() => Array.from(new Set(products.flatMap(p => p.available_colors))), [products])
   // Sorted so the chips read 9, 10, 40 rather than 10, 40, 9.
   const availableSizes = useMemo(() => Array.from(new Set(products.flatMap(p => p.available_sizes))).sort(compareSizes), [products])
+  // An empty or single-variant result set has no chips, so #shop-filters is
+  // not rendered. The mobile toggle has to follow it: a button announcing
+  // aria-expanded and pointing aria-controls at an element that does not exist
+  // is a control that does nothing when tapped.
+  const hasFilterPanel = availableColors.length > 0 || availableSizes.length > 0
 
   // Client-side on top of the server-filtered set: color/size/price. Empty
   // selection = no filter, and all four filter dimensions compose (AND).
@@ -305,20 +310,26 @@ export default function Shop() {
               ))}
             </div>
             <div className="flex items-center justify-between gap-3">
-              <button
-                onClick={() => setFiltersOpen(open => !open)}
-                aria-expanded={filtersOpen}
-                aria-controls="shop-filters"
-                className="md:hidden min-h-[44px] px-4 inline-flex items-center gap-2 border border-border text-sm cursor-pointer"
-              >
-                <SlidersHorizontal className="w-4 h-4" />
-                {t.shopFilters}
-                {activeFilters.length > 0 && (
-                  <span className="bg-foreground text-background rounded-full w-5 h-5 text-[11px] flex items-center justify-center">
-                    {activeFilters.length}
-                  </span>
-                )}
-              </button>
+              {hasFilterPanel ? (
+                <button
+                  onClick={() => setFiltersOpen(open => !open)}
+                  aria-expanded={filtersOpen}
+                  aria-controls="shop-filters"
+                  className="md:hidden min-h-[44px] px-4 inline-flex items-center gap-2 border border-border text-sm cursor-pointer"
+                >
+                  <SlidersHorizontal className="w-4 h-4" />
+                  {t.shopFilters}
+                  {activeFilters.length > 0 && (
+                    <span className="bg-foreground text-background rounded-full w-5 h-5 text-[11px] flex items-center justify-center">
+                      {activeFilters.length}
+                    </span>
+                  )}
+                </button>
+              ) : (
+                /* Holds the sort control at the end of the row, where it sits
+                   when the toggle is there. */
+                <span />
+              )}
               <div className="flex items-center gap-3">
                 <span className="text-xs text-muted-foreground tracking-wider uppercase">{t.shopSort}</span>
                 <select
@@ -336,7 +347,7 @@ export default function Shop() {
           </div>
 
           {/* Color / size / price -- derived client-side from the loaded rows, filtered client-side too */}
-          {(availableColors.length > 0 || availableSizes.length > 0) && (
+          {hasFilterPanel && (
             <div
               id="shop-filters"
               className={`flex-wrap items-center gap-4 md:gap-6 pt-1 md:flex ${filtersOpen ? 'flex' : 'hidden'}`}
