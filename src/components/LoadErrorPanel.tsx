@@ -6,12 +6,16 @@ import { useT } from '@/contexts/LanguageContext'
 // Extracted rather than copied a ninth time: the eight admin screens all say
 // the same two strings, and the copies had already started to drift apart. The
 // three screens that need a more specific message (bundles, homepage,
-// settings) keep their own panels, so this one takes no message prop.
-export default function LoadErrorPanel({ onRetry }: { onRetry: () => void }) {
+// settings) keep their own panels.
+//
+// The two call sites OUTSIDE the admin (the homepage grid, the guest order
+// lookup) pass `message` instead: the default is owner-voiced ("this list has
+// not been emptied") and a shopper is not the owner of a list.
+export default function LoadErrorPanel({ onRetry, message }: { onRetry: () => void; message?: string }) {
   const t = useT()
   return (
     <div className="border border-terracotta bg-card p-12 text-center">
-      <p className="text-terracotta">{t.adminLoadError}</p>
+      <p className="text-terracotta">{message || t.adminLoadError}</p>
       {/* onRetry is called with NO arguments, deliberately. `onClick={onRetry}`
           hands React's SyntheticMouseEvent to the retry function as its first
           argument, so a retry that takes an optional parameter (a page size, a

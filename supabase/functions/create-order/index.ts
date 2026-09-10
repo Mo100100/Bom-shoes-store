@@ -48,7 +48,6 @@ type CustomerInput = {
   notes?: string
 }
 
-const TAX_RATE = 0.08
 // Kashier is an Egyptian gateway and the store settles in EGP: every payment is
 // always charged in EGP. Prices are shown in EGP too -- the admin display-
 // currency selector that once let them disagree is gone (see
@@ -190,7 +189,6 @@ Deno.serve(async (req: Request) => {
     const { items: orderItems, subtotal, productById } = pricing
 
     const shipping = Math.max(0, Number(region.price) || 0)
-    const tax = subtotal * TAX_RATE
 
     // Coupon/promotion/bundle resolution -- never trust anything the client
     // says about the discount, re-run the exact same evaluation
@@ -226,7 +224,7 @@ Deno.serve(async (req: Request) => {
     // Rounded to cents (so the stored total_amount and the amount string in
     // the Kashier hash below derive from one value) and floored at 0 (so no
     // discount can ever post a negative amount to the gateway).
-    const total = computeOrderTotal(subtotal, shipping, tax, discountAmount)
+    const total = computeOrderTotal(subtotal, shipping, discountAmount)
 
     // The value half of the COD ceiling, checked against the server's own
     // total rather than anything the client said it would be.

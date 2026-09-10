@@ -35,3 +35,7 @@ supabase/.temp/
 
 # Playwright MCP session artifacts
 .playwright-mcp/
+
+# Claude Code session data and agent worktrees (a full copy of this repo
+# lives under .claude/worktrees, so never let it be added).
+.claude/

@@ -742,10 +742,9 @@ export function findBestBundle(
 export function computeOrderTotal(
   subtotal: number,
   shipping: number,
-  tax: number,
   discountAmount: number,
 ): number {
-  return Math.max(0, Math.round((subtotal + shipping + tax - discountAmount) * 100) / 100)
+  return Math.max(0, Math.round((subtotal + shipping - discountAmount) * 100) / 100)
 }
 
 // ---------------------------------------------------------------------------

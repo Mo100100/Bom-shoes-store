@@ -3,6 +3,9 @@ Disallow: /admin
 Disallow: /account
 Disallow: /checkout
 Disallow: /cart
+# /order?ref=... is the guest order lookup. useSeo sets noindex from a
+# useEffect, so a crawler that runs no JavaScript never sees it.
+Disallow: /order
 
 # TODO: replace your-store-domain.com with the real production domain once
 # it's known -- keep it in sync with the SITE_URL secret used by the

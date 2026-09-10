@@ -142,18 +142,18 @@ test('an over-100 get_discount_percent gives the free units away, not more', () 
 // --- the charged total -------------------------------------------------------
 
 test('the order total is rounded to cents', () => {
-  assert.equal(computeOrderTotal(1000, 60, 80, 0), 1140)
-  assert.equal(computeOrderTotal(0.115, 0, 0, 0), 0.12)
+  assert.equal(computeOrderTotal(1000, 60, 0), 1060)
+  assert.equal(computeOrderTotal(0.115, 0, 0), 0.12)
 })
 
 test('the order total is floored at 0, never negative', () => {
-  assert.equal(computeOrderTotal(1000, 60, 80, 99999), 0)
+  assert.equal(computeOrderTotal(1000, 60, 99999), 0)
 })
 
-test('a 100% coupon still leaves shipping and tax payable', () => {
+test('a 100% coupon still leaves shipping payable', () => {
   const subtotal = 1000
   const { discountAmount } = computeDiscount(coupon({ discount_value: 100 }), ctx(subtotal))
-  assert.equal(computeOrderTotal(subtotal, 60, 80, discountAmount), 140)
+  assert.equal(computeOrderTotal(subtotal, 60, discountAmount), 60)
 })
 
 // --- case-insensitive codes --------------------------------------------------

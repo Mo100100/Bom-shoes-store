@@ -12,14 +12,39 @@
 // endpoint can change an order.
 //
 // verify_jwt = false (see supabase/config.toml): the customer coming back
-// from Kashier's hosted page may be a guest with no Supabase session. The
-// order reference is therefore the sole capability, which is exactly why the
-// response is this thin -- ONLY the three state fields, never the total, the
-// customer details or the items. Holding a reference reveals nothing beyond
-// the state of that one order. It runs with the service-role key because
-// `orders` has no public SELECT policy (a guest order has no user_id to match
-// on). Guessing at that capability is rate limited per IP, see
-// ../_shared/rate-limit.ts.
+// from Kashier's hosted page may be a guest with no Supabase session, and the
+// same guest has no /account to look the order up in later. The order
+// reference is therefore the sole capability, which is why the response stays
+// this thin. It runs with the service-role key because `orders` has no public
+// SELECT policy (a guest order has no user_id to match on). Guessing at that
+// capability is rate limited per IP, see ../_shared/rate-limit.ts.
+//
+// The response carries the three state fields, a BOOLEAN for whether an email
+// was recorded, and the total ONLY while cash is still owed. What it
+// deliberately still does not carry: the email address, the name, the phone,
+// the delivery address, or the items. So a reference reveals nothing that
+// identifies a person and nothing that lets its holder act on the order --
+// they cannot pay it, cancel it, redirect it, or contact the buyer.
+//
+// The two additions each answer a question the customer cannot answer any
+// other way:
+//   total     -- a cash-on-delivery buyer has to hand the courier an exact
+//                amount, and the basket is cleared the moment the order is
+//                confirmed, so the server is the only remaining source of it.
+//                (create-order does not return it either.) Never taken from
+//                the client: the amount shown is the amount recorded.
+//   hasEmail  -- the success page used to promise "a confirmation has been
+//                sent to your inbox" to every buyer, including the ones who
+//                left the optional email field blank.
+//
+// The threat the total is withheld against is not enumeration, it is a KNOWN
+// reference: forwarded in a WhatsApp thread, screenshotted into a family
+// group, left in the history of a shared phone, read off a courier manifest.
+// /order?ref= is a URL guests are told to keep, so the number of people
+// holding one is deliberately large. Once the cash is collected the amount
+// answers no question the holder still has, and all it discloses is what an
+// identified person spent -- so it is returned only while it is the one thing
+// the buyer genuinely cannot get any other way.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { corsHeaders } from '../_shared/cors.ts'
@@ -60,7 +85,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: order, error } = await admin
       .from('orders')
-      .select('status, payment_status, payment_method')
+      .select('status, payment_status, payment_method, total_amount, customer_email')
       .eq('kashier_order_id', orderId)
       .maybeSingle()
 
@@ -69,10 +94,31 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: 'Order not found' }, 404)
     }
 
+    // Whether the courier still has cash to collect. payment_method is 'cash'
+    // or 'kashier' (create-order), payment_status walks
+    // pending -> paid/failed/refunded and status walks
+    // pending -> confirmed -> processing -> shipped -> delivered, or
+    // cancelled. A cash order sits at payment_status 'pending' the whole way
+    // until an admin marks the cash collected, so 'delivered' and 'cancelled'
+    // are the two states where nothing is owed despite that.
+    //
+    // The client repeats this test (awaitingCash in src/lib/orderStatus.ts)
+    // and must keep repeating it: this gate only takes effect once the
+    // function is deployed, and the client one is a superset of it.
+    const cashDue = order.payment_method === 'cash'
+      && order.payment_status !== 'paid'
+      && order.status !== 'delivered'
+      && order.status !== 'cancelled'
+
     return jsonResponse({
       status: order.status,
       paymentStatus: order.payment_status,
       paymentMethod: order.payment_method,
+      // total_amount is numeric, which postgrest returns as a string. Omitted
+      // (JSON.stringify drops undefined) rather than zeroed, so the client
+      // can tell "nothing to collect" from "the server did not say".
+      total: cashDue ? Number(order.total_amount) || 0 : undefined,
+      hasEmail: !!order.customer_email,
     })
   } catch (err) {
     console.error('order-status error:', err)

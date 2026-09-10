@@ -3,12 +3,6 @@
 // (same arrangement as src/lib/sizes.ts). Everything about React, Supabase and
 // localStorage stays in the context; only the arithmetic lives here.
 
-// Sales tax rate shown on the Cart and Checkout pages. Must match the
-// server's own TAX_RATE (supabase/functions/create-order/index.ts) -- the
-// server recomputes the total from scratch and is authoritative, but a client
-// estimate that disagrees just confuses the shopper before they even submit.
-export const TAX_RATE = 0.08
-
 // Just enough of a product_variants row to price and cap a line. Structural on
 // purpose so this module stays free of the Supabase types.
 export type VariantSnapshot = {
@@ -80,4 +74,28 @@ export function couponRejectionMessage(
   }
   if (rejection?.reasonCode === 'sign_in_required') return t.cartCouponSignIn
   return t.cartCouponInvalid
+}
+
+// What visibly changed on one line when revalidation reconciled it against
+// the database. One verdict per line, in the order that matters to the person
+// about to pay: a line that just went unavailable has no meaningful price or
+// quantity story left to tell.
+//
+// A name or image change is deliberately NOT a change here. Both used to
+// trigger the old unexplained "your basket was updated", and neither is
+// something the customer can be told anything useful about: the line already
+// renders the current name and the current picture.
+export type LineChange = 'unavailable' | 'price' | 'quantity'
+
+export function lineChange(
+  before: { unitPrice: number; quantity: number; unavailable?: boolean; unitPriceUnverified?: boolean },
+  after: { unitPrice: number; quantity: number; unavailable?: boolean },
+): LineChange | null {
+  if (after.unavailable) return before.unavailable ? null : 'unavailable'
+  // A cart stored before unitPrice existed only has the product price to
+  // compare against, which was never what an override-priced line cost. It
+  // must not be announced as a price change that never happened.
+  if (!before.unitPriceUnverified && after.unitPrice !== before.unitPrice) return 'price'
+  if (after.quantity !== before.quantity) return 'quantity'
+  return null
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase, ProductCatalogEntry } from '@/lib/supabase'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
@@ -11,6 +11,8 @@ import { toast } from 'sonner'
 import ShoeShowcase3D from '@/components/ShoeShowcase3D'
 import ProductCard from '@/components/ProductCard'
 import CountdownTimer from '@/components/CountdownTimer'
+import HomeTestimonials from '@/components/HomeTestimonials'
+import LoadErrorPanel from '@/components/LoadErrorPanel'
 import { useSeo } from '@/hooks/useSeo'
 import { useBrands } from '@/contexts/BrandsContext'
 import { useCategories } from '@/contexts/CategoriesContext'
@@ -24,9 +26,8 @@ export default function Home() {
   const [featured, setFeatured] = useState<ProductCatalogEntry[]>([])
   const [recent, setRecent] = useState<ProductCatalogEntry[]>([])
   const [productsLoading, setProductsLoading] = useState(true)
+  const [productsError, setProductsError] = useState(false)
   const [dropEndsAt, setDropEndsAt] = useState<Date | null>(null)
-  // ponytail: fallback drop deadline when no auto-promo/manual target set.
-  const [placeholderDrop] = useState(() => new Date(Date.now() + 3 * 24 * 60 * 60 * 1000))
   const [quickAddingId, setQuickAddingId] = useState<string | null>(null)
   const [content, setContent] = useState<Record<string, any>>({})
   const t = useT()
@@ -37,20 +38,31 @@ export default function Home() {
 
   useSeo({ title: `${t.brandName} · ${t.brandTagline}`, description: t.homeHeroSubtitle })
 
-  useEffect(() => {
-    async function load() {
-      const { data: f } = await supabase
-        .from('product_catalog').select('*').eq('featured', true)
-        .order('created_at', { ascending: false }).limit(10)
-      const { data: r } = await supabase
-        .from('product_catalog').select('*')
-        .order('created_at', { ascending: false }).limit(10)
-      if (f) setFeatured(f)
-      if (r) setRecent(r)
+  // One catalog read for the whole page: the curated grid and the showcase's
+  // fallback both come out of it, so the showcase no longer runs its own copy
+  // of the same two queries.
+  const loadProducts = useCallback(async () => {
+    setProductsLoading(true)
+    setProductsError(false)
+    const [featuredRes, recentRes] = await Promise.all([
+      supabase.from('product_catalog').select('*').eq('featured', true)
+        .order('created_at', { ascending: false }).limit(10),
+      supabase.from('product_catalog').select('*')
+        .order('created_at', { ascending: false }).limit(20),
+    ])
+    // "We sell nothing" and "we could not look" must not draw the same thing,
+    // so a failed read gets the error panel, never the empty grid.
+    if (featuredRes.error || recentRes.error) {
+      setProductsError(true)
       setProductsLoading(false)
+      return
     }
-    load()
+    setFeatured(featuredRes.data || [])
+    setRecent(recentRes.data || [])
+    setProductsLoading(false)
   }, [])
+
+  useEffect(() => { loadProducts() }, [loadProducts])
 
   useEffect(() => {
     supabase.from('site_content').select('key, value').then(({ data }) => {
@@ -71,9 +83,7 @@ export default function Home() {
       .then(({ data }) => setDropEndsAt(data?.[0]?.ends_at ? new Date(data[0].ends_at) : null))
   }, [content.limited_drop])
 
-  async function quickAdd(p: ProductCatalogEntry, e: React.MouseEvent) {
-    e.preventDefault()
-    e.stopPropagation()
+  async function quickAdd(p: ProductCatalogEntry) {
     setQuickAddingId(p.id)
     const { data: variants, error } = await supabase.from('product_variants').select('*').eq('product_id', p.id).order('size').order('color')
     setQuickAddingId(null)
@@ -88,11 +98,22 @@ export default function Home() {
     toast.success(t.productAdded, { description: t.productAddedSize(p.name, variant.size) })
   }
 
-  const pool = featured.length > 0 ? featured : recent
+  const pool = useMemo(() => (featured.length > 0 ? featured : recent), [featured, recent])
   const heroProduct = pool[0]
   const lookThumbs = pool.slice(0, 2)
   const curatedLimit = content.curated?.limit ?? 5
-  const curated = pool.slice(0, curatedLimit)
+  const curated = useMemo(() => pool.slice(0, curatedLimit), [pool, curatedLimit])
+
+  // What the showcase falls back to when the admin has picked no products of
+  // its own: the newest pairs the curated grid is not already showing. Both
+  // sections used to take the head of the same ordering, so the homepage
+  // exposed the same five products twice out of a catalog of 118. Memoised
+  // because it is a prop: a fresh array every render would re-run the
+  // showcase's effects on every render.
+  const showcaseFallback = useMemo(() => {
+    const shown = new Set(curated.map(p => p.id))
+    return recent.filter(p => !shown.has(p.id)).slice(0, 3)
+  }, [recent, curated])
 
   const heroC = content.hero
   const curatedC = content.curated
@@ -105,9 +126,23 @@ export default function Home() {
   const trustEnabled = trustC?.enabled !== false
   const brandBarEnabled = content.categories_strip?.enabled !== false
 
-  const dropTarget = dropC?.countdown_mode === 'manual' && dropC?.manual_target
-    ? new Date(dropC.manual_target)
-    : (dropEndsAt || placeholderDrop)
+  // A deadline is either real or it is not rendered. The old fallback invented
+  // "now plus three days" and, being state-initialised, reset on every page
+  // load: a timer that never reaches zero is a lie told to rush a purchase.
+  // Manual mode reads the admin's date, auto mode the soonest promo end, and
+  // both drop the timer once the date is in the past. The rest of the section
+  // (copy, image, CTA) keeps rendering either way.
+  // Memoised because it is a Date: a fresh instance every render is a new
+  // `target` prop, and CountdownTimer tears down and rebuilds its one-second
+  // interval on every re-render it sees.
+  const dropTarget = useMemo(() => (
+    dropC?.countdown_mode === 'manual'
+      ? (dropC?.manual_target ? new Date(dropC.manual_target) : null)
+      : dropEndsAt
+  ), [dropC?.countdown_mode, dropC?.manual_target, dropEndsAt])
+  const showCountdown = dropC?.countdown_mode !== 'off'
+    && dropTarget != null
+    && dropTarget.getTime() > Date.now()
 
   const pick = (en?: string, ar?: string) => (lang === 'ar' ? (ar ?? en) : (en ?? ar)) || ''
 
@@ -184,7 +219,10 @@ export default function Home() {
                 </div>
                 <div>
                   <h3 className="font-sans text-sm font-bold tracking-[0.04em] uppercase leading-tight">{heroProduct.name}</h3>
-                  <p className="text-xs text-muted-foreground uppercase tracking-[0.06em] mt-0.5 mb-2.5">
+                  {/* latin-text: brand names and the BOM Store fallback are
+                      Latin in both locales, so this run keeps its tracking
+                      instead of being zeroed by the Arabic rule in index.css. */}
+                  <p className="latin-text text-xs text-muted-foreground uppercase tracking-[0.06em] mt-0.5 mb-2.5">
                     {/* products.brand holds brands.value, an immutable key
                         that is not the display name, so it goes through the
                         same lookup every other brand render uses. */}
@@ -203,21 +241,30 @@ export default function Home() {
       )}
 
       {/* ===== BRAND BAR ===== */}
+      {/* Brand is the primary shopping axis here, so this is the first thing
+          under the hero. 22 brands do not wrap into anything readable on a
+          390px screen, so on a phone the row scrolls sideways instead and each
+          brand keeps a 44px tap target. */}
       {brandBarEnabled && brands.length > 0 && (
-      <section className="bg-[#efece6] border-y border-border px-6 lg:px-8 py-8">
-        <div className="max-w-[1320px] mx-auto flex flex-col md:flex-row items-center gap-6">
-          <div className="flex-1 flex items-center justify-between flex-wrap gap-x-6 gap-y-4">
+      <section className="bg-[#efece6] border-y border-border py-6 lg:py-8">
+        <div className="max-w-[1320px] mx-auto px-6 lg:px-8">
+          <span className="block text-[11px] tracking-[0.25em] uppercase text-muted-foreground mb-4">
+            {t.homeBrandsEyebrow}
+          </span>
+        </div>
+        <div className="max-w-[1320px] mx-auto flex flex-col md:flex-row md:items-center gap-5 md:px-6 lg:px-8">
+          <div className="flex-1 flex items-center gap-x-7 gap-y-3 overflow-x-auto md:overflow-visible md:flex-wrap md:justify-between px-6 md:px-0">
             {brands.map(b => (
               <Link
                 key={b.value}
                 to={`/shop?brand=${encodeURIComponent(b.value)}`}
-                className="group inline-flex items-center"
+                className="group inline-flex items-center shrink-0 min-h-[44px]"
                 aria-label={b.name}
               >
                 {b.logo_url ? (
                   <img src={b.logo_url} alt={b.name} className="h-6 w-auto object-contain opacity-80 group-hover:opacity-100 transition-opacity" />
                 ) : (
-                  <span className="font-display text-[22px] md:text-[26px] font-semibold tracking-[0.04em] leading-none text-foreground/85 group-hover:text-foreground transition-colors">
+                  <span className="latin-text font-display text-[22px] md:text-[26px] font-semibold tracking-[0.04em] leading-none text-foreground/85 group-hover:text-foreground transition-colors whitespace-nowrap">
                     {b.name}
                   </span>
                 )}
@@ -226,7 +273,7 @@ export default function Home() {
           </div>
           <Link
             to="/brands"
-            className="inline-flex items-center gap-3.5 bg-foreground text-background rounded-full px-5 py-3.5 text-xs tracking-[0.12em] uppercase font-semibold hover:bg-[#2a2a2a] transition-colors shrink-0"
+            className="mx-6 md:mx-0 inline-flex items-center justify-center gap-3.5 bg-foreground text-background rounded-full px-5 min-h-[44px] text-xs tracking-[0.12em] uppercase font-semibold hover:bg-[#2a2a2a] transition-colors shrink-0"
           >
             <LayoutGrid className="w-4 h-4" />
             {t.shopViewAll}
@@ -234,9 +281,6 @@ export default function Home() {
         </div>
       </section>
       )}
-
-      {/* ===== 3D SCROLL SHOWCASE (kept -- signature feature) ===== */}
-      {showcaseEnabled && <ShoeShowcase3D />}
 
       {/* ===== CURATED FOR YOU ===== */}
       {curatedEnabled && (
@@ -260,29 +304,37 @@ export default function Home() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 lg:gap-6">
-            {productsLoading
-              ? [1, 2, 3, 4, 5].map(i => (
-                  <div key={i} className="border border-border rounded-[14px] p-[18px] animate-pulse">
-                    <div className="aspect-square bg-muted/60 rounded-[10px] mb-[18px]" />
-                    <div className="h-3 w-1/2 bg-muted/60 mb-2" />
-                    <div className="h-3 w-2/3 bg-muted/60" />
-                  </div>
-                ))
-              : curated.map((p, i) => (
-                  <ProductCard
-                    key={p.id}
-                    product={p}
-                    categoryLabel={categoryLabel(p.category)}
-                    onQuickAdd={quickAdd}
-                    quickAdding={quickAddingId === p.id}
-                    animationDelay={`${(i % 5) * 60}ms`}
-                  />
-                ))}
-          </div>
+          {productsError ? (
+            <LoadErrorPanel onRetry={loadProducts} message={t.storeLoadError} />
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 lg:gap-6">
+              {productsLoading
+                ? [1, 2, 3, 4, 5].map(i => (
+                    <div key={i} className="border border-border rounded-[14px] p-[18px] animate-pulse">
+                      <div className="aspect-square bg-muted/60 rounded-[10px] mb-[18px]" />
+                      <div className="h-3 w-1/2 bg-muted/60 mb-2" />
+                      <div className="h-3 w-2/3 bg-muted/60" />
+                    </div>
+                  ))
+                : curated.map((p, i) => (
+                    <ProductCard
+                      key={p.id}
+                      product={p}
+                      categoryLabel={categoryLabel(p.category)}
+                      onQuickAdd={quickAdd}
+                      quickAdding={quickAddingId === p.id}
+                      animationDelay={`${(i % 5) * 60}ms`}
+                    />
+                  ))}
+            </div>
+          )}
         </div>
       </section>
       )}
+
+      {/* ===== SCROLL SHOWCASE (signature feature, now BELOW the grid so the
+              first buyable product is not two screens of scrolling away) ===== */}
+      {showcaseEnabled && <ShoeShowcase3D config={content.showcase} fallback={showcaseFallback} />}
 
       {/* ===== LIMITED DROP ===== */}
       {dropEnabled && (
@@ -316,7 +368,7 @@ export default function Home() {
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform flip-rtl" />
               </Link>
             </div>
-            {dropC?.countdown_mode !== 'off' && (
+            {showCountdown && (
               <CountdownTimer
                 target={dropTarget}
                 labels={{ days: t.homeDropDays, hours: t.homeDropHrs, minutes: t.homeDropMins, seconds: t.homeDropSecs }}
@@ -327,6 +379,11 @@ export default function Home() {
         </div>
       </section>
       )}
+
+      {/* ===== TESTIMONIALS ===== */}
+      {/* Hides itself when the owner has no active testimonials, so it costs
+          the customer nothing until there is something real to read. */}
+      <HomeTestimonials />
 
       {/* ===== FEATURES BAR ===== */}
       {trustEnabled && (

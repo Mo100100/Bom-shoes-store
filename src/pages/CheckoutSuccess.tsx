@@ -1,49 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useAuth } from '@/contexts/AuthContext'
 import { useCart } from '@/contexts/CartContext'
+import { useCurrency } from '@/contexts/CurrencyContext'
 import { useT } from '@/contexts/LanguageContext'
-import { supabase } from '@/lib/supabase'
 import { Check, Clock, Loader2 } from 'lucide-react'
 import { useSeo } from '@/hooks/useSeo'
-
-// Exactly what supabase/functions/order-status returns: the three state
-// fields and nothing else (no total, no items, no customer details).
-type OrderStatus = {
-  status: string
-  paymentStatus: string
-  paymentMethod: string | null
-}
+import OrderReference from '@/components/OrderReference'
+import OrderWhatsAppLink from '@/components/OrderWhatsAppLink'
+import { awaitingCash, fetchOrderStatus, outcomeOf, OrderStatus } from '@/lib/orderStatus'
 
 type Outcome = 'checking' | 'confirmed' | 'pending' | 'failed'
-
-// The only place payment_status/status/stock are ever mutated is
-// fulfill_order() / place_cod_order(), called from the server -- so the
-// server's copy of these two fields is the only truth about whether the
-// customer actually paid.
-//
-// 'pending' is the honest answer for anything not yet resolved, and it is
-// also where every unknown lands (see the caller): a webhook still in flight,
-// an unreachable endpoint, a missing reference. It claims nothing.
-function outcomeOf(s: OrderStatus): Exclude<Outcome, 'checking'> {
-  // Paid is tested FIRST, before any failure test. An admin can cancel an
-  // already-paid order (AdminOrders.tsx) when stock turns out to be missing
-  // after payment, and sending that customer to /checkout/failed would tell
-  // them "nothing was charged" about money that left their account.
-  if (s.paymentStatus === 'paid') return 'confirmed'
-  if (s.paymentStatus === 'failed' || s.status === 'cancelled') return 'failed'
-  // Cash on delivery has no payment to wait for: place_cod_order() already
-  // confirmed the order and reserved its stock, and payment_status stays
-  // 'pending' the whole way through 'confirmed' -> 'processing' -> 'shipped'
-  // -> 'delivered', until an admin marks the cash as collected. So any status
-  // past 'pending' is a placed order ('cancelled' already returned above).
-  if (s.paymentMethod === 'cash' && s.status !== 'pending') return 'confirmed'
-  return 'pending'
-}
 
 export default function CheckoutSuccess() {
   const [params] = useSearchParams()
   const orderId = params.get('orderId') || ''
   const { clearCart } = useCart()
+  const { user } = useAuth()
+  const { formatPrice } = useCurrency()
   const navigate = useNavigate()
   const cleared = useRef(false)
   const t = useT()
@@ -60,15 +34,10 @@ export default function CheckoutSuccess() {
   const check = useCallback(async () => {
     if (!orderId) return
     setChecking(true)
-    // functions-js only installs an AbortController when a timeout is passed,
-    // and browser fetch has none of its own: without this a stalled request
-    // (network handover, a cold start that never returns) leaves the customer
-    // on the spinner forever, right after handing over their card details.
-    const { data, error } = await supabase.functions.invoke<OrderStatus>('order-status', {
-      body: { orderId },
-      timeout: 15000,
-    })
-    setOrder(error ? null : data)
+    const result = await fetchOrderStatus(orderId)
+    // A missing reference and an unreachable endpoint both land on 'pending'
+    // below, which claims nothing.
+    setOrder(result.kind === 'found' ? result.order : null)
     setChecking(false)
   }, [orderId])
 
@@ -126,12 +95,11 @@ export default function CheckoutSuccess() {
         </h1>
         <p className="text-muted-foreground max-w-md font-light mb-2">
           {t.pendingDesc}
+          {/* Email is optional at checkout, so the promise is only made to
+              the customers who actually left an address. */}
+          {order?.hasEmail && ` ${t.pendingEmailSoon}`}
         </p>
-        {orderId && (
-          <p className="text-xs text-muted-foreground tracking-widest uppercase mb-10">
-            {t.successOrder(orderId)}
-          </p>
-        )}
+        {orderId && <div className="mt-6 mb-8 flex justify-center w-full"><OrderReference reference={orderId} /></div>}
         <div className="flex flex-wrap items-center justify-center gap-4 mt-4">
           {/* Without a reference there is nothing to re-check, so the button
               would be inert: only the basket link is offered. */}
@@ -139,14 +107,15 @@ export default function CheckoutSuccess() {
             <button
               type="button"
               onClick={check}
-              className="bg-primary text-primary-foreground px-7 py-3.5 text-sm tracking-widest uppercase hover:bg-primary/90 transition-colors cursor-pointer"
+              className="min-h-[44px] bg-primary text-primary-foreground px-7 text-sm tracking-widest uppercase hover:bg-primary/90 transition-colors cursor-pointer"
             >
               {t.pendingCheckAgain}
             </button>
           )}
+          <OrderWhatsAppLink reference={orderId} />
           <Link
             to="/cart"
-            className="text-sm tracking-wider border-b border-foreground/30 pb-1 hover:border-foreground"
+            className="inline-flex items-center min-h-[44px] text-sm tracking-wider border-b border-foreground/30 hover:border-foreground"
           >
             {t.failedBack}
           </Link>
@@ -165,31 +134,50 @@ export default function CheckoutSuccess() {
       <div className="w-20 h-20 rounded-full bg-foreground text-background flex items-center justify-center mb-8">
         <Check className="w-9 h-9" strokeWidth={1.5} />
       </div>
-      <p className="text-zen text-muted-foreground mb-4">{t.successEyebrow}</p>
+      {/* Nothing was paid on a cash order, so it cannot say "payment received". */}
+      <p className="text-zen text-muted-foreground mb-4">{isCod ? t.successCodEyebrow : t.successEyebrow}</p>
       <h1 className="font-display text-5xl md:text-7xl mb-6 text-balance">
         {t.successTitle}
       </h1>
       <p className="text-muted-foreground max-w-md font-light mb-2">
         {isCod ? t.successCodDesc : t.successDesc}
+        {order?.hasEmail && ` ${t.successEmailSent}`}
       </p>
-      {orderId && (
-        <p className="text-xs text-muted-foreground tracking-widest uppercase mb-10">
-          {t.successOrder(orderId)}
-        </p>
+      {/* The single most useful sentence on a cash order: the amount to have
+          ready for the courier. It comes from the server's recorded total,
+          never from the basket, which this page has just cleared. */}
+      {order && awaitingCash(order) && order.total > 0 && (
+        <p className="text-lg mb-2">{t.successCodAmount(formatPrice(order.total))}</p>
       )}
+      {orderId && <div className="mt-6 mb-8 flex justify-center w-full"><OrderReference reference={orderId} /></div>}
       <div className="flex flex-wrap items-center justify-center gap-4 mt-4">
         <Link
           to="/shop"
-          className="bg-primary text-primary-foreground px-7 py-3.5 text-sm tracking-widest uppercase hover:bg-primary/90 transition-colors"
+          className="inline-flex items-center min-h-[44px] bg-primary text-primary-foreground px-7 text-sm tracking-widest uppercase hover:bg-primary/90 transition-colors"
         >
           {t.successContinue}
         </Link>
-        <Link
-          to="/account"
-          className="text-sm tracking-wider border-b border-foreground/30 pb-1 hover:border-foreground"
-        >
-          {t.successViewOrders}
-        </Link>
+        <OrderWhatsAppLink reference={orderId} />
+        {/* Checkout takes no account, so most buyers here are guests and
+            /account (behind ProtectedRoute) would bounce them to /login for
+            an order that has no user_id anyway. Guests get the lookup page,
+            with the reference already in the URL so the page is bookmarkable;
+            signed-in customers keep their order history. */}
+        {user ? (
+          <Link
+            to="/account"
+            className="inline-flex items-center min-h-[44px] text-sm tracking-wider border-b border-foreground/30 hover:border-foreground"
+          >
+            {t.successViewOrders}
+          </Link>
+        ) : orderId && (
+          <Link
+            to={`/order?ref=${encodeURIComponent(orderId)}`}
+            className="inline-flex items-center min-h-[44px] text-sm tracking-wider border-b border-foreground/30 hover:border-foreground"
+          >
+            {t.orderLookupTrack}
+          </Link>
+        )}
       </div>
     </div>
   )

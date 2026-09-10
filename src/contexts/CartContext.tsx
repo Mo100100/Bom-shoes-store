@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Product, supabase } from '@/lib/supabase'
-import { clampQuantity, reconcileLine, VariantSnapshot } from '@/lib/cart'
+import { clampQuantity, lineChange, reconcileLine, type LineChange, type VariantSnapshot } from '@/lib/cart'
 import { useT } from '@/contexts/LanguageContext'
 
 export type CartItem = {
@@ -160,8 +160,33 @@ export function CartProvider({ children }: { children: ReactNode }) {
     return true
   }
 
+  // Removing a line is undoable rather than confirmed. A confirm taxes every
+  // deliberate removal to protect the rare slip, and it cannot protect the
+  // likelier slip at all: decrementing from 1 is a QUANTITY edit, so a
+  // "really delete this?" dialog on that tap is itself a surprise. An undo
+  // costs the deliberate case nothing and covers both paths, which is why
+  // this lives here and not at one call site: updateQuantity(.., 0) routes
+  // through here too, as does the unavailable-line remove button.
   function removeItem(productId: string, size: string, color: string) {
+    const index = items.findIndex(i => matchesLine(i, productId, size, color))
+    if (index < 0) return
+    const removed = items[index]
     setItems(current => current.filter(i => !matchesLine(i, productId, size, color)))
+    toast(t.cartRemovedUndo(removed.product.name), {
+      action: {
+        label: t.cartUndo,
+        // Back where it was, not appended to the end. Guarded because the
+        // same product/size/colour can be re-added from another tab or page
+        // while the toast is still up, and putting it back twice would show
+        // two lines for one variant.
+        onClick: () => setItems(current => {
+          if (current.some(i => matchesLine(i, productId, size, color))) return current
+          const copy = [...current]
+          copy.splice(Math.min(index, copy.length), 0, removed)
+          return copy
+        }),
+      },
+    })
   }
 
   function updateQuantity(productId: string, size: string, color: string, quantity: number) {
@@ -243,21 +268,29 @@ export function CartProvider({ children }: { children: ReactNode }) {
         return { product, size: item.size, color: item.color, quantity, unitPrice, stock }
       }
 
-      // Only changes the customer can actually see are worth telling them
-      // about; a stock number moving above their quantity is not one.
-      const notify = items.some(item => {
-        const next = reconcile(item)
-        return next.unavailable !== item.unavailable ||
-          (!item.unitPriceUnverified && next.unitPrice !== item.unitPrice) ||
-          next.quantity !== item.quantity ||
-          next.product.name !== item.product.name ||
-          next.product.image_url !== item.product.image_url
-      })
+      // Which pieces changed, and how. Grouped by the kind of change so the
+      // customer is told what actually moved instead of "your basket was
+      // updated": an unexplained change immediately before paying is a trust
+      // event. A stock number moving above their quantity is not a change.
+      const changed = new Map<LineChange, string[]>()
+      for (const item of items) {
+        const kind = lineChange(item, reconcile(item))
+        if (!kind) continue
+        const names = changed.get(kind)
+        if (names) names.push(item.product.name)
+        else changed.set(kind, [item.product.name])
+      }
 
       // Applied unconditionally: even when nothing visible moved, the refreshed
       // stock figures are what cap the quantity controls.
       setItems(current => current.map(reconcile))
-      if (notify) toast.info(t.cartUpdated)
+
+      const message: Record<LineChange, (names: string[]) => string> = {
+        unavailable: t.cartUpdatedUnavailable,
+        price: t.cartUpdatedPrice,
+        quantity: t.cartUpdatedQuantity,
+      }
+      for (const [kind, names] of changed) toast.info(message[kind](names))
     } finally {
       revalidating.current = false
     }

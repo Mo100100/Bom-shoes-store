@@ -6,10 +6,14 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency, SETTLEMENT_CURRENCY } from '@/contexts/CurrencyContext'
 import { useBrands } from '@/contexts/BrandsContext'
+import { useCategories } from '@/contexts/CategoriesContext'
 import { useCatalogPrice } from '@/hooks/useCatalogPrice'
 import { useRecentlyViewed } from '@/hooks/useRecentlyViewed'
+import { useWhatsApp } from '@/hooks/useWhatsApp'
 import { useSeo } from '@/hooks/useSeo'
 import { compareSizes, defaultSizeForColor, firstInStockVariant } from '@/lib/sizes'
+import { fetchShippingConfig } from '@/lib/checkoutConfig'
+import { shippingRange } from '@/lib/shippingRange'
 import WishlistButton from '@/components/WishlistButton'
 import RatingStars from '@/components/RatingStars'
 import SectionHeading from '@/components/SectionHeading'
@@ -86,6 +90,11 @@ export default function ProductDetail() {
   const { lang } = useLanguage()
   const { formatPrice } = useCurrency()
   const { brandLabel } = useBrands()
+  const { categoryLabel } = useCategories()
+  // The store's WhatsApp number, or null while it is still the seeded
+  // placeholder. Every WhatsApp instruction on this page is gated on it, so an
+  // instruction and the button it points at appear together or not at all.
+  const whatsapp = useWhatsApp()
 
   // Guards against two overlapping loads (fast slug-to-slug navigation, or a
   // retry click while the previous attempt is still in flight): only the
@@ -316,6 +325,9 @@ export default function ProductDetail() {
   const selectedVariant = hasVariants ? variants.find(v => v.color === color && v.size === size) : undefined
   const effectivePrice = selectedVariant ? (selectedVariant.price_override ?? product?.price ?? 0) : (product?.price ?? 0)
   const outOfStock = hasVariants ? (!selectedVariant || selectedVariant.stock === 0) : (product?.stock ?? 0) === 0
+  // What is left of the exact combo the Add button would add. Same number the
+  // grid card shows, and the same threshold it uses (ProductCard).
+  const selectedStock = hasVariants ? (selectedVariant?.stock ?? 0) : (product?.stock ?? 0)
 
   function sizeAvailable(s: string) {
     if (!hasVariants) return true
@@ -387,6 +399,24 @@ export default function ProductDetail() {
     toast.success(t.reviewsSubmitSuccess)
     loadReviews(product.id)
   }
+
+  // The real per-governorate delivery prices (site_content.shipping), read once
+  // for the range line below. A failed read, or shipping the owner has not
+  // priced yet, leaves it null and the line falls back to naming the rule
+  // without a number: an invented delivery price is exactly the kind of promise
+  // the checkout then refuses to honour. See src/lib/shippingRange.ts.
+  const [deliveryRange, setDeliveryRange] = useState<{ min: number; max: number } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchShippingConfig()
+      .then(({ regions }) => {
+        if (cancelled) return
+        setDeliveryRange(shippingRange(regions))
+      })
+      .catch(() => { /* no number is better than a wrong one */ })
+    return () => { cancelled = true }
+  }, [])
 
   // Back-in-stock notify: keyed to the currently selected variant, reset
   // whenever the user switches size/color to a different (in- or out-of-
@@ -575,11 +605,12 @@ export default function ProductDetail() {
 
           {/* Details */}
           <div className="lg:pt-8">
-            {/* Brand then category. products.brand stores brands.value, an
-                immutable key that is not the display name, so it goes through
-                the same lookup ProductCard uses. */}
+            {/* Brand then category. Both are stored keys, not display
+                names: products.brand holds brands.value and products.category
+                holds categories.value, so each goes through the same lookup
+                every other surface uses. The category used to print raw here. */}
             <p className="text-zen text-muted-foreground mb-3">
-              {[brandLabel(product.brand), product.category].filter(Boolean).join(` ${t.dash} `)}
+              {[brandLabel(product.brand), categoryLabel(product.category)].filter(Boolean).join(` ${t.dash} `)}
             </p>
             <h1 className="font-display text-4xl md:text-5xl mb-3 text-balance">{product.name}</h1>
             <p className="font-display text-2xl text-muted-foreground mb-3">
@@ -650,6 +681,38 @@ export default function ProductDetail() {
                   )
                 })}
               </div>
+              {sizeOptions.some(sz => !sizeAvailable(sz)) && (
+                <p className="text-xs text-muted-foreground mt-3">{t.productSizeSoldOut}</p>
+              )}
+              {selectedStock > 0 && selectedStock < 10 && (
+                <p className="text-xs text-terracotta mt-2">{t.shopOnlyLeft(selectedStock)}</p>
+              )}
+
+              {/* Size guide. No brand conversion chart on purpose: this store
+                  resells 22 brands and has no verified last data for any of
+                  them, and a chart we made up would cause the returns a size
+                  guide is meant to prevent. What it can honestly give is how to
+                  measure, what the printed number does and does not mean, and
+                  the way back if it still comes out wrong. */}
+              <details className="mt-5 border-t border-border group">
+                <summary className="flex items-center justify-between cursor-pointer list-none min-h-[44px] py-2">
+                  <span className="text-xs tracking-widest uppercase">{t.productSizeGuide}</span>
+                  <span className="text-lg group-open:rotate-45 transition-transform">+</span>
+                </summary>
+                <div className="space-y-3 text-sm text-foreground/80 font-light leading-relaxed pt-1 pb-3 max-w-md">
+                  <p>{t.productSizeGuideBrands}</p>
+                  <p>{t.productSizeGuideMeasure}</p>
+                  {/* Only when there is a WhatsApp button on the page to
+                      follow the instruction with: the store's number is the
+                      seeded placeholder today, so useWhatsApp hides every
+                      WhatsApp affordance and this would point at nothing. */}
+                  {whatsapp.phone && <p>{t.productSizeGuideAsk}</p>}
+                  <p>
+                    {t.productSizeGuideReturns}{' '}
+                    <Link to="/policies" className="border-b border-foreground pb-0.5">{t.navPolicies}</Link>
+                  </p>
+                </div>
+              </details>
             </div>
 
             {/* Add */}
@@ -772,16 +835,24 @@ export default function ProductDetail() {
             <div className="mt-10 pt-8 border-t border-border space-y-4 text-sm">
               <div className="flex items-center gap-3 text-foreground/80">
                 <Check className="w-4 h-4 text-foreground/60" />
-                <span>{t.productShip1}</span>
+                <span>
+                  {!deliveryRange
+                    ? t.productShip1
+                    : deliveryRange.min === deliveryRange.max
+                    ? t.productDeliveryFlat(formatPrice(deliveryRange.min))
+                    : t.productDeliveryRange(formatPrice(deliveryRange.min), formatPrice(deliveryRange.max))}
+                </span>
               </div>
               <div className="flex items-center gap-3 text-foreground/80">
                 <Check className="w-4 h-4 text-foreground/60" />
                 <span>{t.productShip2}</span>
               </div>
-              <div className="flex items-center gap-3 text-foreground/80">
-                <Check className="w-4 h-4 text-foreground/60" />
-                <span>{t.productShip3}</span>
-              </div>
+              {whatsapp.phone && (
+                <div className="flex items-center gap-3 text-foreground/80">
+                  <Check className="w-4 h-4 text-foreground/60" />
+                  <span>{t.productShip3}</span>
+                </div>
+              )}
             </div>
 
             {/* Description accordion */}
@@ -791,9 +862,10 @@ export default function ProductDetail() {
                   <span className="text-xs tracking-widest uppercase">{t.productAccordion1}</span>
                   <span className="text-lg group-open:rotate-45 transition-transform">+</span>
                 </summary>
-                <p className="text-sm text-foreground/80 font-light leading-relaxed pt-3 pb-2">
-                  {t.productAccordion1Text}
-                </p>
+                <div className="text-sm text-foreground/80 font-light leading-relaxed pt-3 pb-2 space-y-2">
+                  <p>{t.productAccordion1Text}</p>
+                  {whatsapp.phone && <p>{t.productAccordion1Ask}</p>}
+                </div>
               </details>
               <details className="group border-t border-border/60">
                 <summary className="flex items-center justify-between cursor-pointer list-none py-4">

@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { clampQuantity, reconcileLine } from './cart.ts'
+import { clampQuantity, lineChange, reconcileLine } from './cart.ts'
 
 test('clampQuantity never goes below one', () => {
   assert.equal(clampQuantity(10, 0), 1)
@@ -54,4 +54,37 @@ test('a quantity above the remaining stock is clamped, not rejected', () => {
   assert.deepEqual(reconcileLine(9, 500, { stock: 2, price_override: null }), {
     available: true, unitPrice: 500, quantity: 2, stock: 2,
   })
+})
+
+const line = (over = {}) => ({ unitPrice: 500, quantity: 2, ...over })
+
+test('an unchanged line reports no change', () => {
+  assert.equal(lineChange(line(), line()), null)
+})
+
+test('a line that just went unavailable outranks any other change on it', () => {
+  assert.equal(lineChange(line(), line({ unitPrice: 400, quantity: 1, unavailable: true })), 'unavailable')
+})
+
+test('a line that was ALREADY unavailable is not announced again', () => {
+  assert.equal(lineChange(line({ unavailable: true }), line({ unavailable: true })), null)
+})
+
+test('a price move is reported, in either direction', () => {
+  assert.equal(lineChange(line(), line({ unitPrice: 600 })), 'price')
+  assert.equal(lineChange(line(), line({ unitPrice: 400 })), 'price')
+})
+
+test('an unverified stored price is never announced as a price change', () => {
+  assert.equal(lineChange(line({ unitPriceUnverified: true }), line({ unitPrice: 399 })), null)
+  // The quantity clamp on the same line still is.
+  assert.equal(lineChange(line({ unitPriceUnverified: true }), line({ unitPrice: 399, quantity: 1 })), 'quantity')
+})
+
+test('a quantity clamped down to remaining stock is reported', () => {
+  assert.equal(lineChange(line({ quantity: 5 }), line({ quantity: 2 })), 'quantity')
+})
+
+test('price wins over quantity when both moved, so one line yields one message', () => {
+  assert.equal(lineChange(line(), line({ unitPrice: 600, quantity: 1 })), 'price')
 })

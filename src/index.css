@@ -345,6 +345,24 @@ img { object-position: center; }
   transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
 }
 
+/* Arabic is cursive: every positive letter-spacing severs the joins and the
+   word renders as a row of disconnected glyphs. Tailwind's tracking-* utilities
+   sit on Arabic strings in ~165 places (nav, buttons, labels, the announcement
+   bar at 0.25em), so neutralise them once here instead of at every call site.
+   Latin runs inside an Arabic page opt out with .latin-text and keep the exact
+   utility value they were given, since this rule never matches them. */
+body.font-arabic [class*="tracking-"]:not(.latin-text) {
+  letter-spacing: 0;
+}
+
+/* Marks an element whose text is always Latin even on the Arabic store: brand
+   names, product names, order references. Keeps its tracking-* letter-spacing
+   and isolates the run so trailing digits and punctuation order correctly
+   beside Arabic, without changing the block's alignment. */
+.latin-text {
+  unicode-bidi: isolate;
+}
+
 /* A visible keyboard focus ring. Inputs across the app set `outline-none` (or
    `focus:outline-none`) and only change border colour, which leaves keyboard
    users with nothing to follow. `!important` is what beats those utilities;
@@ -359,6 +377,30 @@ textarea:focus-visible,
 summary:focus-visible {
   outline: 2px solid hsl(var(--ring)) !important;
   outline-offset: 2px;
+}
+
+/* iOS Safari zooms the page in whenever a focused control's font-size is under
+   16px, and it never zooms back out: the customer finishes checkout on a page
+   scrolled sideways, with the submit button off screen. Every field in the app
+   is text-sm (14px), so raise them on coarse (touch) pointers only and leave
+   the desktop design at 14px. `!important` is what beats Tailwind's text-sm
+   utility, the same reason the focus ring above needs it. Nothing in the app
+   sets an input larger than text-sm, so this only ever raises. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* And while a thumb is the pointer, a py-2 text field is a 40px target.
+     Checkboxes, radios and file pickers are excluded: they size themselves,
+     and stretching them to 44px only distorts the control. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  select,
+  textarea {
+    min-height: 44px;
+  }
 }
 
 /* Minimal markdown-body styling (Policies page, admin-authored content) --

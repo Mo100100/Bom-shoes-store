@@ -21,10 +21,7 @@ export default function WishlistButton({ productId, className }: WishlistButtonP
   return (
     <button
       type="button"
-      onClick={(e) => {
-        // Stop the card's own link navigation -- this button lives inside clickable product cards.
-        e.preventDefault()
-        e.stopPropagation()
+      onClick={() => {
         if (!user) {
           toast.error(t.wishlistSignIn)
           navigate('/login')

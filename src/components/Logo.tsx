@@ -46,7 +46,7 @@ export default function Logo({ size = 64, className, showText = true, capToViewp
 
   const text = showText && (
     <div
-      className="mt-1 text-center font-display tracking-[0.35em] text-[10px] font-light"
+      className="latin-text mt-1 text-center font-display tracking-[0.35em] text-[10px] font-light"
       style={{ color: '#B8860B' }}
     >
       BOM STORE

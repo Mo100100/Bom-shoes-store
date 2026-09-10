@@ -18,13 +18,16 @@ export default function Signup() {
 
   useSeo({
     title: 'Create Account · BOM Store',
-    description: 'Create a BOM Store account to start shopping handcrafted, built-to-last shoes.',
+    description: 'Create a BOM Store account to shop authentic luxury sneakers, delivered across Egypt.',
   })
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (password.length < 6) {
       toast.error(t.signupErrorShort)
+      // Name the field by focusing it: the toast says what is wrong, and this
+      // says where, without the customer hunting back up the form.
+      document.getElementById('signup-password')?.focus()
       return
     }
     setLoading(true)
@@ -53,8 +56,13 @@ export default function Signup() {
         <form onSubmit={handleSubmit} className="space-y-6">
           <label className="block">
             <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{t.signupName}</span>
+            {/* name + autoComplete: the browser's saved contact card fills the
+                name and email, and new-password tells a password manager to
+                offer a generated one instead of an existing login. */}
             <input
               type="text"
+              name="name"
+              autoComplete="name"
               required
               value={fullName}
               onChange={e => setFullName(e.target.value)}
@@ -63,28 +71,39 @@ export default function Signup() {
               placeholder={lang === 'ar' ? 'اسمك' : 'Your name'}
             />
           </label>
+            {/* Email addresses and passwords are always read left-to-right,
+                even on an Arabic page: forcing them RTL put the leading
+                characters and the domain on the wrong end. rtl:text-right
+                follows the PAGE direction, not the input's own, so the field
+                still sits on the start edge of an Arabic form. */}
           <label className="block">
             <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{t.signupEmail}</span>
             <input
               type="email"
+              name="email"
+              autoComplete="email"
+              inputMode="email"
               required
               value={email}
               onChange={e => setEmail(e.target.value)}
-              dir={lang === 'ar' ? 'rtl' : 'ltr'}
-              className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors"
+              dir="ltr"
+              className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors rtl:text-right"
               placeholder="you@example.com"
             />
           </label>
           <label className="block">
             <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{t.signupPassword}</span>
             <input
+              id="signup-password"
               type="password"
+              name="new-password"
+              autoComplete="new-password"
               required
               minLength={6}
               value={password}
               onChange={e => setPassword(e.target.value)}
-              dir={lang === 'ar' ? 'rtl' : 'ltr'}
-              className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors"
+              dir="ltr"
+              className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors rtl:text-right"
               placeholder={t.signupPasswordHint}
             />
           </label>

@@ -1,10 +1,16 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useCart, CartItem } from '@/contexts/CartContext'
-import { couponRejectionMessage, TAX_RATE } from '@/lib/cart'
+import { couponRejectionMessage } from '@/lib/cart'
 import { useT } from '@/contexts/LanguageContext'
+import { useCategories } from '@/contexts/CategoriesContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { supabase, readServerError } from '@/lib/supabase'
+import {
+  DEFAULT_CHECKOUT_CONFIG, fetchCheckoutConfig, fetchShippingConfig,
+  type CheckoutConfig,
+} from '@/lib/checkoutConfig'
+import { shippingRange } from '@/lib/shippingRange'
 import { Minus, Plus, X, ArrowRight, ShoppingBag, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useSeo } from '@/hooks/useSeo'
@@ -24,6 +30,7 @@ export default function Cart() {
   const navigate = useNavigate()
   const t = useT()
   const { formatPrice } = useCurrency()
+  const { categoryLabel } = useCategories()
 
   useSeo({ title: `${t.cart} · ${t.brandName}`, description: t.cartEmptyDesc })
 
@@ -32,6 +39,15 @@ export default function Cart() {
   const [discount, setDiscount] = useState<CouponPreview | null>(null)
   const [confirmingClear, setConfirmingClear] = useState(false)
   const [brokenImages, setBrokenImages] = useState<string[]>([])
+  // Which payment methods the store actually takes (site_content.checkout_config)
+  // and what delivery really costs (site_content.shipping). Cash on delivery is
+  // this market's single biggest reassurance and it used to be invisible until
+  // the payment step, and "calculated at checkout" made the customer fill in a
+  // name, a phone and an address before learning a price. Both are read from
+  // the live rows rather than hardcoded, so both stay true if the owner
+  // switches card payment back on or reprices a governorate.
+  const [checkoutConfig, setCheckoutConfig] = useState<CheckoutConfig>(DEFAULT_CHECKOUT_CONFIG)
+  const [deliveryRange, setDeliveryRange] = useState<{ min: number; max: number } | null>(null)
 
   // Lines the customer can still buy. A line whose product or variant has
   // disappeared is shown but excluded here, so it never reaches the coupon
@@ -55,6 +71,22 @@ export default function Cart() {
       void previewDiscount(couponCode, { silent: true })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Both of these THROW on a read error. Neither is worth an error panel here:
+  // the basket still works without them, and the fallbacks are the honest
+  // ones -- the seeded default (cash only, which is production today) and no
+  // delivery number at all rather than an invented one. See
+  // src/lib/shippingRange.ts for why an unpriced governorate shows nothing.
+  useEffect(() => {
+    let cancelled = false
+    fetchCheckoutConfig()
+      .then(cfg => { if (!cancelled) setCheckoutConfig(cfg) })
+      .catch(err => console.error('Cart: could not read site_content.checkout_config:', err))
+    fetchShippingConfig()
+      .then(({ regions }) => { if (!cancelled) setDeliveryRange(shippingRange(regions)) })
+      .catch(err => console.error('Cart: could not read site_content.shipping:', err))
+    return () => { cancelled = true }
   }, [])
 
   // `code` is optional: with one this validates it, without one it previews
@@ -107,12 +139,11 @@ export default function Cart() {
   }
 
   // Shipping is priced per governorate at checkout (the customer hasn't chosen
-  // one yet here), so it's excluded from this running total and shown as
-  // "calculated at checkout". A free-shipping coupon is noted but doesn't
-  // change the number shown here.
-  const tax = totalPrice * TAX_RATE
+  // one yet here), so it's excluded from this running total and shown as a
+  // range instead. A free-shipping coupon is noted but doesn't change the
+  // number shown here.
   const hasDiscount = !!discount && discount.amount > 0
-  const grand = totalPrice + tax - (hasDiscount ? discount!.amount : 0)
+  const grand = Math.max(0, totalPrice - (hasDiscount ? discount!.amount : 0))
 
   if (items.length === 0) {
     return (
@@ -136,7 +167,9 @@ export default function Cart() {
   }
 
   return (
-    <div className="min-h-screen bg-cream px-6 lg:px-10 py-12 lg:py-16">
+    // pb-32 on mobile clears the fixed checkout bar at the bottom, so the last
+    // basket line is never hidden behind it.
+    <div className="min-h-screen bg-cream px-6 lg:px-10 pt-12 pb-32 lg:py-16">
       <div className="max-w-[1400px] mx-auto">
         <p className="text-zen text-muted-foreground mb-4">{t.cartEyebrow}</p>
         <h1 className="font-display text-4xl md:text-6xl mb-12">
@@ -182,7 +215,7 @@ export default function Cart() {
                         {item.product.name}
                       </Link>
                       <p className="text-xs text-muted-foreground tracking-wider uppercase mt-1">
-                        {item.product.category}
+                        {categoryLabel(item.product.category)}
                       </p>
                       <p className="text-sm text-muted-foreground mt-2">
                         {t.cartVariant(item.color, item.size)}
@@ -290,6 +323,10 @@ export default function Cart() {
                   <div className="flex gap-2">
                     <input
                       type="text"
+                      name="coupon"
+                      // A one-off code, never a saved value: without this the
+                      // browser offers the customer's name or email here.
+                      autoComplete="off"
                       value={couponInput}
                       onChange={e => setCouponInput(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleApplyClick() } }}
@@ -340,11 +377,12 @@ export default function Cart() {
                 )}
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">{t.cartShipping}</dt>
-                  <dd className="text-muted-foreground text-xs">{discount?.freeShipping ? t.cartFree : t.cartShipAtCheckout}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">{t.cartTax}</dt>
-                  <dd>{formatPrice(tax)}</dd>
+                  <dd className="text-muted-foreground text-xs">
+                    {discount?.freeShipping ? t.cartFree
+                      : !deliveryRange ? t.cartShipAtCheckout
+                        : deliveryRange.min === deliveryRange.max ? t.cartShipFlat(formatPrice(deliveryRange.min))
+                          : t.cartShipRange(formatPrice(deliveryRange.min), formatPrice(deliveryRange.max))}
+                  </dd>
                 </div>
                 <div className="pt-3 mt-3 border-t border-border flex justify-between items-baseline">
                   <dt>{t.cartTotal}</dt>
@@ -363,11 +401,33 @@ export default function Cart() {
                 <p className="text-[11px] text-terracotta text-center mt-3">{t.cartRemoveUnavailable}</p>
               )}
               <p className="text-[11px] text-muted-foreground text-center mt-4">
-                {t.cartSecure}
+                {checkoutConfig.cash_enabled ? t.cartCodReassure : t.cartSecure}
               </p>
             </div>
           </aside>
         </div>
+      </div>
+
+      {/* Mobile checkout bar. The summary column stacks BELOW every basket
+          line on a phone, so with ten items the button sat roughly four
+          screens past things the customer had already decided to buy. This
+          keeps the total and the button in reach at any scroll position; on
+          lg the sticky aside above already does that, so it is hidden there.
+          z-50 puts it over the floating WhatsApp button (z-40), which would
+          otherwise sit on top of it. */}
+      <div className="lg:hidden fixed bottom-0 inset-x-0 z-50 border-t border-border bg-cream/95 backdrop-blur-sm px-6 py-3 flex items-center gap-4">
+        <div className="min-w-0">
+          <p className="text-[11px] text-muted-foreground leading-tight">{t.cartTotal}</p>
+          <p className="font-display text-xl leading-tight">{formatPrice(grand)}</p>
+        </div>
+        <button
+          onClick={() => navigate('/checkout')}
+          disabled={hasUnavailable}
+          className="flex-1 min-h-[52px] px-3 bg-foreground text-background text-xs sm:text-sm tracking-widest uppercase leading-tight text-center hover:bg-foreground/85 transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {t.cartCheckout}
+          <ArrowRight className="w-4 h-4 flip-rtl" />
+        </button>
       </div>
     </div>
   )

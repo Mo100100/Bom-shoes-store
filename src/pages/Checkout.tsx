@@ -5,7 +5,8 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useT, useLanguage } from '@/contexts/LanguageContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { supabase, readServerError } from '@/lib/supabase'
-import { couponRejectionMessage, TAX_RATE } from '@/lib/cart'
+import { couponRejectionMessage } from '@/lib/cart'
+import { normalizeEgyptPhone } from '@/lib/phone'
 import type { CreateOrderRequest, CreateOrderResponse } from '@/lib/kashier'
 import {
   DEFAULT_CHECKOUT_CONFIG, fetchCheckoutConfig, fetchShippingConfig, regionLabel,
@@ -36,6 +37,51 @@ function readOrMintRequestId(): string {
   return mintRequestId()
 }
 
+// The delivery details of the last order placed from THIS browser, so a
+// returning customer does not retype an address they already typed.
+//
+// localStorage rather than reading the customer's last order back from the
+// database, because card payment is disabled: every order today is Cash on
+// Delivery, most of them from a guest with no account, and an account-only
+// answer would help almost nobody while adding a query to the checkout's
+// critical path. The privacy trade on a shared phone is real, so: it is only
+// what the customer typed on this device, it holds no payment data (there is
+// none to hold), notes are excluded because they are the free-text field, and
+// the form says the details were restored and offers a one-tap clear. The cart
+// itself already persists here, so this is not a new class of stored data.
+const SAVED_DETAILS_KEY = 'bom-delivery-details'
+
+type SavedDetails = {
+  fullName: string
+  phone: string
+  address: string
+  city: string
+  regionCode: string
+}
+
+function readSavedDetails(): Partial<SavedDetails> {
+  try {
+    const raw = localStorage.getItem(SAVED_DETAILS_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    // Anything but an object (a hand-edited key, an older shape) is discarded
+    // rather than spread into the form.
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch { /* unavailable in private mode, or not valid JSON */ }
+  return {}
+}
+
+function writeSavedDetails(d: SavedDetails) {
+  try { localStorage.setItem(SAVED_DETAILS_KEY, JSON.stringify(d)) }
+  catch { /* localStorage is unavailable in private mode: nothing is remembered */ }
+}
+
+// Every field the customer can be told about by name, in the order they are
+// laid out on the page, so the first error is the first one they would reach.
+const FIELD_ORDER = ['fullName', 'phone', 'email', 'regionCode', 'address', 'city'] as const
+type FieldKey = (typeof FIELD_ORDER)[number]
+type FieldErrors = Partial<Record<FieldKey, string>>
+
 export default function Checkout() {
   const { items, totalPrice, clearCart, couponCode } = useCart()
   const { user, profile } = useAuth()
@@ -47,18 +93,26 @@ export default function Checkout() {
   useSeo({ title: `${t.checkoutShipping} · ${t.brandName}`, description: t.checkoutPaymentDesc })
 
   const [submitting, setSubmitting] = useState(false)
-  const [form, setForm] = useState({
-    fullName: profile?.full_name || '',
+  const [saved] = useState(readSavedDetails)
+  const [savedRestored, setSavedRestored] = useState(() => Object.keys(saved).length > 0)
+  const [form, setForm] = useState(() => ({
+    fullName: profile?.full_name || saved.fullName || '',
     email: user?.email || '',
-    phone: '',
-    address: '',
-    city: '',
-    regionCode: '',
+    phone: saved.phone || '',
+    address: saved.address || '',
+    city: saved.city || '',
+    regionCode: saved.regionCode || '',
     notes: '',
-  })
+  }))
+  const [errors, setErrors] = useState<FieldErrors>({})
   const [discountAmount, setDiscountAmount] = useState(0)
   const [couponError, setCouponError] = useState<string | null>(null)
-  const [paymentMethod, setPaymentMethod] = useState<'online' | 'cash'>('online')
+  // Cash on Delivery is the default, and the only method the store accepts
+  // today (site_content.checkout_config has online_enabled false). It is also
+  // the majority choice in this market when both are on, so it stays the
+  // default either way; the effect below only moves off it when cash itself
+  // is switched off.
+  const [paymentMethod, setPaymentMethod] = useState<'online' | 'cash'>('cash')
   const [checkoutConfig, setCheckoutConfig] = useState<CheckoutConfig>(DEFAULT_CHECKOUT_CONFIG)
   const [regions, setRegions] = useState<ShippingRegion[]>([])
   const [regionsLoading, setRegionsLoading] = useState(true)
@@ -112,13 +166,25 @@ export default function Checkout() {
 
   // Which payment methods the admin has enabled (site_content.checkout_config).
   useEffect(() => {
-    fetchCheckoutConfig().then(cfg => {
-      setCheckoutConfig(cfg)
-      // If online is off, default the selection to cash (and vice versa) so a
-      // disabled method is never the pre-selected one.
-      if (!cfg.online_enabled && cfg.cash_enabled) setPaymentMethod('cash')
-      else if (cfg.online_enabled && !cfg.cash_enabled) setPaymentMethod('online')
-    })
+    fetchCheckoutConfig().then(
+      cfg => {
+        setCheckoutConfig(cfg)
+        // Cash is already the default, so the only move needed is off it, when
+        // the admin has switched cash off and left card on. A disabled method
+        // must never be the pre-selected one.
+        if (cfg.online_enabled && !cfg.cash_enabled) setPaymentMethod('online')
+      },
+      // fetchCheckoutConfig THROWS on a read error. Unhandled, that left the
+      // state at its defaults with nothing selected and the wrong wording on
+      // the submit button. Cash is the safe fallback: offering cash the store
+      // does not take costs one phone call, offering card it cannot process
+      // sends the customer into a payment form that does not exist.
+      err => {
+        console.error('Checkout: could not read site_content.checkout_config:', err)
+        setCheckoutConfig(DEFAULT_CHECKOUT_CONFIG)
+        setPaymentMethod('cash')
+      },
+    )
     loadShipping()
   }, [])
 
@@ -169,17 +235,50 @@ export default function Checkout() {
   }, [couponCode, form.regionCode])
 
   // Exactly the server's own arithmetic (computeOrderTotal in
-  // supabase/functions/_shared/pricing.ts): shipping is always the selected
+  // supabase/functions/_shared/pricing.ts), including its rounding to
+  // piastres: a percentage coupon can land on a half-piastre, and without the
+  // same rounding here the page would show a total one piastre off what the
+  // customer is actually charged. Shipping is always the selected
   // governorate's price, and a waiver arrives as part of discountAmount
   // rather than by zeroing this. Zeroing it here as well double-counted the
   // waiver, which is why the whole total is reconciled from the preview now
   // and not just the discount line.
   const shipping = selectedRegion?.price ?? 0
-  const tax = totalPrice * TAX_RATE
-  const grand = Math.max(0, totalPrice + shipping + tax - discountAmount)
+  const grand = Math.max(0, Math.round((totalPrice + shipping - discountAmount) * 100) / 100)
 
   function setField(k: keyof typeof form, v: string) {
     setForm(f => ({ ...f, [k]: v }))
+    // Clear this field's error the moment it is being corrected: leaving a red
+    // message under a field the customer is actively fixing reads as "still
+    // wrong" when it is not.
+    setErrors(e => (k in e ? { ...e, [k]: undefined } : e))
+  }
+
+  // Phone is required (the courier calls the customer); email is optional but
+  // must be usable when given. A governorate must be chosen so shipping can be
+  // priced. Each message names its own field, and the caller focuses the first
+  // one, so "something is wrong somewhere" never happens again.
+  function validate(): FieldErrors {
+    const e: FieldErrors = {}
+    if (!form.fullName.trim()) e.fullName = t.errNameRequired
+    if (!form.phone.trim()) e.phone = t.errPhoneRequired
+    else if (!normalizeEgyptPhone(form.phone)) e.phone = t.errPhoneInvalid
+    // The form is noValidate (see below), so the type="email" check is ours now.
+    if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) e.email = t.errEmailInvalid
+    if (!form.regionCode) e.regionCode = t.errRegionRequired
+    if (!form.address.trim()) e.address = t.errAddressRequired
+    if (!form.city.trim()) e.city = t.errCityRequired
+    return e
+  }
+
+  function clearSavedDetails() {
+    try { localStorage.removeItem(SAVED_DETAILS_KEY) }
+    catch { /* nothing was persisted in the first place */ }
+    // Emptying the fields as well: a "cleared" button that leaves the address
+    // on screen has not cleared anything the person in front of it can see.
+    setForm(f => ({ ...f, fullName: profile?.full_name || '', phone: '', address: '', city: '', regionCode: '' }))
+    setSavedRestored(false)
+    toast.success(t.checkoutSavedCleared)
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -189,10 +288,17 @@ export default function Checkout() {
       toast.error(t.checkoutUnavailable)
       return
     }
-    // Phone is required (the courier calls the customer); email is optional.
-    // A governorate must be chosen so shipping can be priced.
-    if (!form.fullName || !form.phone || !form.address || !form.city || !form.regionCode) {
-      toast.error(t.checkoutRequired)
+
+    const found = validate()
+    setErrors(found)
+    const firstKey = FIELD_ORDER.find(k => found[k])
+    if (firstKey) {
+      // Focus rather than just colour: on a phone the button is far below the
+      // offending field, and focusing scrolls it into view, opens the right
+      // keyboard, and makes a screen reader read the label, the invalid state
+      // and the message (aria-invalid + aria-describedby on the control).
+      document.getElementById(`checkout-${firstKey}`)?.focus()
+      toast.error(found[firstKey] as string)
       return
     }
 
@@ -214,7 +320,10 @@ export default function Checkout() {
         customer: {
           fullName: form.fullName,
           email: form.email || undefined,
-          phone: form.phone,
+          // The canonical 01xxxxxxxxx form, not whatever spacing or +20 shape
+          // was typed, so the courier and the admin list always read the same
+          // number. validate() already proved it normalises.
+          phone: normalizeEgyptPhone(form.phone) || form.phone,
           address: form.address,
           city: form.city,
           country: lang === 'ar' ? 'مصر' : 'Egypt',
@@ -236,6 +345,16 @@ export default function Checkout() {
       // comes back to checkout in the same tab places a genuinely new order
       // instead of being handed this one again.
       requestIdRef.current = mintRequestId()
+
+      // The order exists, so these details are worth keeping for the next one.
+      // Written only on a real order, never on every keystroke.
+      writeSavedDetails({
+        fullName: form.fullName,
+        phone: normalizeEgyptPhone(form.phone) || form.phone,
+        address: form.address,
+        city: form.city,
+        regionCode: form.regionCode,
+      })
 
       // Reconcile with what the server actually applied (it re-validates the
       // coupon independently and may land on a different number than the
@@ -310,18 +429,47 @@ export default function Checkout() {
         </Link>
 
         <div className="grid lg:grid-cols-[1fr_440px] gap-12 lg:gap-16">
-          <form onSubmit={handleSubmit} className="space-y-10">
+          {/* noValidate: the browser's own bubbles cannot say "11 digits
+              starting 01", cannot be translated, and vanish before a screen
+              reader gets to them. validate() below owns every message, and the
+              required attributes stay for the semantics assistive tech reads. */}
+          <form onSubmit={handleSubmit} noValidate className="space-y-10">
             <div>
               <p className="text-zen text-muted-foreground mb-3">{t.checkoutStep1}</p>
               <h1 className="font-display text-3xl md:text-4xl mb-8">{t.checkoutShipping}</h1>
+              {savedRestored && (
+                <div className="flex flex-wrap items-center gap-x-4 mb-6 -mt-4 text-xs text-muted-foreground">
+                  <p>{t.checkoutSavedDetails}</p>
+                  <button
+                    type="button"
+                    onClick={clearSavedDetails}
+                    className="inline-flex items-center min-h-[44px] tracking-wider underline underline-offset-4 cursor-pointer"
+                  >
+                    {t.checkoutClearSaved}
+                  </button>
+                </div>
+              )}
               <div className="grid sm:grid-cols-2 gap-4">
-                <Field label={fieldFullName} value={form.fullName} onChange={v => setField('fullName', v)} required dir={lang === 'ar' ? 'rtl' : 'ltr'} />
+                <Field
+                  id="checkout-fullName" name="name" autoComplete="name"
+                  label={fieldFullName} value={form.fullName} onChange={v => setField('fullName', v)}
+                  required dir={lang === 'ar' ? 'rtl' : 'ltr'} error={errors.fullName}
+                />
                 {/* Phone numbers and email addresses are always read
                     left-to-right, even on an Arabic page: forcing them RTL put
                     the leading + and the domain on the wrong end. They stay
                     aligned to the page's start edge (see rtl:text-right below). */}
-                <Field label={fieldPhone} type="tel" value={form.phone} onChange={v => setField('phone', v)} required dir="ltr" />
-                <Field label={fieldEmail} type="email" value={form.email} onChange={v => setField('email', v)} dir="ltr" />
+                <Field
+                  id="checkout-phone" name="tel" autoComplete="tel" type="tel" inputMode="tel"
+                  label={fieldPhone} value={form.phone} onChange={v => setField('phone', v)}
+                  required dir="ltr" error={errors.phone}
+                  placeholder={t.fieldPhonePlaceholder} hint={t.fieldPhoneHint}
+                />
+                <Field
+                  id="checkout-email" name="email" autoComplete="email" type="email" inputMode="email"
+                  label={fieldEmail} value={form.email} onChange={v => setField('email', v)}
+                  dir="ltr" error={errors.email}
+                />
                 <div className="block">
                   {/* A <label> must wrap (or point via htmlFor at) an actual form
                       control -- in the error state there isn't one, so this uses
@@ -329,7 +477,7 @@ export default function Checkout() {
                       htmlFor with no matching id (the error branch) just reads as
                       plain text to assistive tech, unlike wrapping a <button> in
                       a <label>, which would misrepresent it as the field's control. */}
-                  <label htmlFor="checkout-region" className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{fieldRegion}</label>
+                  <label htmlFor="checkout-regionCode" className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">{fieldRegion}</label>
                   {regionsError ? (
                     <div className="flex items-center gap-3 py-2">
                       <p className="text-sm text-terracotta">{t.checkoutRegionsError}</p>
@@ -343,26 +491,56 @@ export default function Checkout() {
                     </div>
                   ) : (
                     <select
-                      id="checkout-region"
+                      id="checkout-regionCode"
+                      name="address-level1"
+                      autoComplete="address-level1"
                       value={form.regionCode}
                       onChange={e => setField('regionCode', e.target.value)}
                       required
+                      aria-invalid={!!errors.regionCode}
+                      aria-describedby={errors.regionCode ? 'checkout-regionCode-error' : undefined}
                       disabled={regionsLoading}
                       dir={lang === 'ar' ? 'rtl' : 'ltr'}
-                      className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      className={`w-full bg-transparent border-b ${errors.regionCode ? 'border-terracotta' : 'border-foreground/30'} focus:border-foreground outline-none py-2 text-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`}
                     >
                       <option value="" disabled>{regionsLoading ? t.checkoutRegionsLoading : t.checkoutSelectRegion}</option>
+                      {/* The price rides along in the label, so the control
+                          that raises "how much is delivery" answers it in the
+                          same glance. A region left at the seed price of 0 is
+                          shown bare rather than as free delivery the checkout
+                          would not honour (same rule as src/lib/shippingRange.ts). */}
                       {regions.map(r => (
-                        <option key={r.code} value={r.code}>{regionLabel(r, lang)}</option>
+                        <option key={r.code} value={r.code}>
+                          {r.price > 0 ? `${regionLabel(r, lang)} · ${formatPrice(r.price)}` : regionLabel(r, lang)}
+                        </option>
                       ))}
                     </select>
                   )}
+                  {errors.regionCode && (
+                    <p id="checkout-regionCode-error" className="mt-1.5 text-xs text-terracotta">{errors.regionCode}</p>
+                  )}
                 </div>
                 <div className="sm:col-span-2">
-                  <Field label={fieldAddress} value={form.address} onChange={v => setField('address', v)} required dir={lang === 'ar' ? 'rtl' : 'ltr'} />
+                  <Field
+                    id="checkout-address" name="street-address" autoComplete="street-address"
+                    label={fieldAddress} value={form.address} onChange={v => setField('address', v)}
+                    required dir={lang === 'ar' ? 'rtl' : 'ltr'} error={errors.address}
+                    placeholder={t.fieldAddressPlaceholder}
+                  />
                 </div>
-                <Field label={fieldCity} value={form.city} onChange={v => setField('city', v)} required dir={lang === 'ar' ? 'rtl' : 'ltr'} />
-                <Field label={fieldNotes} value={form.notes} onChange={v => setField('notes', v)} dir={lang === 'ar' ? 'rtl' : 'ltr'} />
+                <Field
+                  id="checkout-city" name="address-level2" autoComplete="address-level2"
+                  label={fieldCity} value={form.city} onChange={v => setField('city', v)}
+                  required dir={lang === 'ar' ? 'rtl' : 'ltr'} error={errors.city}
+                  placeholder={t.fieldCityPlaceholder}
+                />
+                {/* Delivery notes are per order ("ring the bell twice"), never
+                    a saved value, so autofill is explicitly off here. */}
+                <Field
+                  id="checkout-notes" name="notes" autoComplete="off"
+                  label={fieldNotes} value={form.notes} onChange={v => setField('notes', v)}
+                  dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                />
               </div>
             </div>
 
@@ -374,6 +552,28 @@ export default function Checkout() {
               </p>
 
               <div className="space-y-3">
+                {/* Cash on delivery, first: it is the only method the store
+                    accepts today, and the majority choice in this market when
+                    both are on. */}
+                {checkoutConfig.cash_enabled && (
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('cash')}
+                  aria-pressed={paymentMethod === 'cash'}
+                  className={`w-full text-start border p-5 transition-colors cursor-pointer ${paymentMethod === 'cash' ? 'border-foreground bg-muted/30' : 'border-border hover:border-foreground/40'}`}
+                >
+                  <div className="flex items-start gap-4">
+                    <span className={`mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center ${paymentMethod === 'cash' ? 'border-foreground' : 'border-muted-foreground'}`}>
+                      {paymentMethod === 'cash' && <span className="w-2 h-2 rounded-full bg-foreground" />}
+                    </span>
+                    <div className="flex-1">
+                      <h3 className="font-display text-lg mb-1 flex items-center gap-2"><Banknote className="w-4 h-4" /> {t.checkoutCashOnDelivery}</h3>
+                      <p className="text-sm text-muted-foreground font-light leading-relaxed">{t.checkoutCashDesc}</p>
+                    </div>
+                  </div>
+                </button>
+                )}
+
                 {/* Pay online (Kashier) */}
                 {checkoutConfig.online_enabled && (
                 <button
@@ -396,26 +596,6 @@ export default function Checkout() {
                         <span className="px-2 py-1 border border-border">FAWRY</span>
                         <span className="px-2 py-1 border border-border">VODAFONE CASH</span>
                       </div>
-                    </div>
-                  </div>
-                </button>
-                )}
-
-                {/* Cash on delivery */}
-                {checkoutConfig.cash_enabled && (
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('cash')}
-                  aria-pressed={paymentMethod === 'cash'}
-                  className={`w-full text-start border p-5 transition-colors cursor-pointer ${paymentMethod === 'cash' ? 'border-foreground bg-muted/30' : 'border-border hover:border-foreground/40'}`}
-                >
-                  <div className="flex items-start gap-4">
-                    <span className={`mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center ${paymentMethod === 'cash' ? 'border-foreground' : 'border-muted-foreground'}`}>
-                      {paymentMethod === 'cash' && <span className="w-2 h-2 rounded-full bg-foreground" />}
-                    </span>
-                    <div className="flex-1">
-                      <h3 className="font-display text-lg mb-1 flex items-center gap-2"><Banknote className="w-4 h-4" /> {t.checkoutCashOnDelivery}</h3>
-                      <p className="text-sm text-muted-foreground font-light leading-relaxed">{t.checkoutCashDesc}</p>
                     </div>
                   </div>
                 </button>
@@ -456,7 +636,8 @@ export default function Checkout() {
               )}
             </button>
             <p className="text-[11px] text-muted-foreground text-center">
-              {t.checkoutTerms}
+              {t.checkoutTerms}{' '}
+              <Link to="/policies" className="border-b border-foreground/40 pb-0.5">{t.checkoutTermsLink}</Link>.
             </p>
           </form>
 
@@ -490,7 +671,6 @@ export default function Checkout() {
                   <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartDiscount}</dt><dd>−{formatPrice(discountAmount)}</dd></div>
                 )}
                 <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartShipping}</dt><dd>{!selectedRegion ? '-' : shipping === 0 ? t.cartFree : formatPrice(shipping)}</dd></div>
-                <div className="flex justify-between"><dt className="text-muted-foreground">{t.cartTax}</dt><dd>{formatPrice(tax)}</dd></div>
                 <div className="pt-3 border-t border-border flex justify-between items-baseline">
                   <dt>{t.cartTotal}</dt>
                   <dd className="font-display text-2xl">{formatPrice(grand)}</dd>
@@ -505,30 +685,61 @@ export default function Checkout() {
 }
 
 function Field({
-  label, value, onChange, type = 'text', required, dir
+  id, label, value, onChange, type = 'text', required, dir,
+  name, autoComplete, inputMode, placeholder, hint, error,
 }: {
+  id: string
   label: string
   value: string
   onChange: (v: string) => void
   type?: string
   required?: boolean
   dir?: 'rtl' | 'ltr'
+  // name and autoComplete are what let a returning customer fill this whole
+  // form from their saved contact card in one tap. autoComplete alone is not
+  // enough on every browser: some only offer the card when the control is
+  // also named.
+  name: string
+  autoComplete: string
+  inputMode?: 'text' | 'tel' | 'email' | 'numeric'
+  placeholder?: string
+  // Shown while the field is valid, and replaced by the error when it is not:
+  // both point at the same control through aria-describedby, so a screen
+  // reader reads whichever one is currently true.
+  hint?: string
+  error?: string
 }) {
+  const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined
+  // htmlFor/id association rather than wrapping the input in the <label>: the
+  // hint and the error live in this block too, and a wrapping label swallows
+  // their text into the field's accessible NAME instead of its description.
   return (
-    <label className="block">
-      <span className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">
+    <div className="block">
+      <label htmlFor={id} className="block text-xs tracking-widest uppercase text-muted-foreground mb-2">
         {label}
-      </span>
+      </label>
       <input
+        id={id}
+        name={name}
+        autoComplete={autoComplete}
+        inputMode={inputMode}
+        placeholder={placeholder}
         type={type}
         value={value}
         onChange={e => onChange(e.target.value)}
         required={required}
+        aria-invalid={!!error}
+        aria-describedby={describedBy}
         dir={dir}
         // rtl:text-right follows the PAGE direction, not the input's own, so a
         // dir="ltr" field still sits on the start edge of an Arabic form.
-        className="w-full bg-transparent border-b border-foreground/30 focus:border-foreground outline-none py-2 text-sm transition-colors rtl:text-right"
+        className={`w-full bg-transparent border-b ${error ? 'border-terracotta' : 'border-foreground/30'} focus:border-foreground outline-none py-2 text-sm transition-colors rtl:text-right`}
       />
-    </label>
+      {error ? (
+        <p id={`${id}-error`} className="mt-1.5 text-xs text-terracotta">{error}</p>
+      ) : hint ? (
+        <p id={`${id}-hint`} className="mt-1.5 text-xs text-muted-foreground">{hint}</p>
+      ) : null}
+    </div>
   )
 }
