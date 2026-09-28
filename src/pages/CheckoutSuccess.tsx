@@ -62,7 +62,7 @@ const purchaseTracked = useRef(false)
    }, [outcome])
 
 useEffect(() => {
-  if (outcome !== 'confirmed'  !order  purchaseTracked.current) return
+  if (outcome !== 'confirmed'  ||!order || purchaseTracked.current) return
 
   purchaseTracked.current = true
 
