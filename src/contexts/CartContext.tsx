@@ -157,6 +157,12 @@ export function CartProvider({ children }: { children: ReactNode }) {
       copy[idx] = line
       return copy
     })
+    ;(window as any).fbq?.('track', 'AddToCart', {
+  content_ids: [product.id],
+  content_type: 'product',
+  value: (variant?.price_override ?? product.price) * quantity,
+  currency: 'EGP',
+})
     return true
   }
 
