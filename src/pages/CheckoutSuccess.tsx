@@ -20,6 +20,7 @@ export default function CheckoutSuccess() {
   const { formatPrice } = useCurrency()
   const navigate = useNavigate()
   const cleared = useRef(false)
+const purchaseTracked = useRef(false)
   const t = useT()
 
   const [checking, setChecking] = useState(!!orderId)
@@ -58,7 +59,18 @@ export default function CheckoutSuccess() {
       clearCart()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [outcome])
+   }, [outcome])
+
+useEffect(() => {
+  if (outcome !== 'confirmed'  !order  purchaseTracked.current) return
+
+  purchaseTracked.current = true
+
+  ;(window as any).fbq?.('track', 'Purchase', {
+    value: Number(order.total ?? 0),
+    currency: 'EGP',
+  })
+}, [outcome, order])
 
   const seo = outcome === 'confirmed'
     ? { title: t.successTitle, description: t.successDesc }
