@@ -303,6 +303,9 @@ export default function Checkout() {
     }
 
     setSubmitting(true)
+    if (typeof window !== 'undefined' && typeof (window as any).fbq === 'function') {
+  ;(window as any).fbq('track', 'InitiateCheckout')
+}
 
     try {
       // The edge function looks up real product prices/stock server-side and
