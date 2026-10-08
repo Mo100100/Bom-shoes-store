@@ -122,6 +122,15 @@ export default function ProductDetail() {
 
       if (data) {
         setProduct(data)
+        if (typeof window !== 'undefined' && typeof (window as any).fbq === 'function') {
+  (window as any).fbq('track', 'ViewContent', {
+    content_ids: [String(data.id)],
+    content_type: 'product',
+    content_name: data.name,
+    value: Number(data.price),
+    currency: 'EGP'
+  })
+}
         setActiveImage(0)
         const [{ data: imgs }, { data: vars }, { data: rel }] = await Promise.all([
           supabase.from('product_images').select('*').eq('product_id', data.id).order('position'),
