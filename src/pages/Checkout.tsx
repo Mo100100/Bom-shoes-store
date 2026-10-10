@@ -197,7 +197,23 @@ export default function Checkout() {
   // order dies server-side in resolveCartPricing with no client-side warning.
   const sellable = items.filter(i => !i.unavailable)
   const hasUnavailable = sellable.length !== items.length
+  const checkoutTrackedRef = useRef(false);
+  useEffect(() => {
+  if (sellable.length === 0) return;
+  if (checkoutTrackedRef.current) return;
+  
 
+  if (typeof (window as any).fbq === 'function') {
+    (window as any).fbq('track', 'InitiateCheckout', {
+      content_ids: sellable.map(i => i.product.id),
+      content_type: 'product',
+      num_items: sellable.reduce((sum, i) => sum + i.quantity, 0),
+      currency: 'EGP',
+      value: totalPrice,
+    });
+    checkoutTrackedRef.current = true;
+  }
+}, [sellable, totalPrice]);
   // Live preview of every discount this cart gets: the coupon carried over
   // from the Cart page AND any auto-applied promotion or bundle. The server
   // resolves both (the same call create-order makes), so this runs even with
@@ -303,13 +319,7 @@ export default function Checkout() {
     }
 
     setSubmitting(true)
-    if (typeof window !== 'undefined' && typeof (window as any).fbq === 'function') {
-  ;(window as any).fbq('track', 'InitiateCheckout', {
-  content_ids: sellable.map((item) => item.product.id),
-  content_type: 'product',
-  num_items: sellable.reduce((sum, item) => sum + item.quantity, 0),
-})
-}
+
 
     try {
       // The edge function looks up real product prices/stock server-side and
