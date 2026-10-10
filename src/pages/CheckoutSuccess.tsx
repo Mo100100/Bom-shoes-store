@@ -15,12 +15,13 @@ type Outcome = 'checking' | 'confirmed' | 'pending' | 'failed'
 export default function CheckoutSuccess() {
   const [params] = useSearchParams()
   const orderId = params.get('orderId') || ''
-  const { clearCart } = useCart()
+  const { clearCart, items } = useCart()
   const { user } = useAuth()
   const { formatPrice } = useCurrency()
   const navigate = useNavigate()
   const cleared = useRef(false)
 const purchaseTracked = useRef(false)
+  const purchaseItems = useRef(items)
   const t = useT()
 
   const [checking, setChecking] = useState(!!orderId)
@@ -55,6 +56,7 @@ const purchaseTracked = useRef(false)
     // payment still in flight leaves it untouched so the customer can retry
     // without rebuilding it.
     if (outcome === 'confirmed' && !cleared.current) {
+      purchaseItems.current = items
       cleared.current = true
       clearCart()
     }
@@ -67,9 +69,15 @@ useEffect(() => {
   purchaseTracked.current = true
 
   ;(window as any).fbq?.('track', 'Purchase', {
-    value: Number(order.total ?? 0),
-    currency: 'EGP',
-  })
+  value: Number(order.total ?? 0),
+  currency: 'EGP',
+  content_ids: purchaseItems.current.map(i => i.product.id),
+  contents: purchaseItems.current.map(i => ({
+    id: i.product.id,
+    quantity: i.quantity
+  })),
+  content_type: 'product'
+})
 }, [outcome, order])
 
   const seo = outcome === 'confirmed'
