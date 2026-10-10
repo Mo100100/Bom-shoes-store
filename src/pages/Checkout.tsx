@@ -304,7 +304,11 @@ export default function Checkout() {
 
     setSubmitting(true)
     if (typeof window !== 'undefined' && typeof (window as any).fbq === 'function') {
-  ;(window as any).fbq('track', 'InitiateCheckout')
+  ;(window as any).fbq('track', 'InitiateCheckout', {
+  content_ids: sellable.map((item) => item.product.id),
+  content_type: 'product',
+  num_items: sellable.reduce((sum, item) => sum + item.quantity, 0),
+})
 }
 
     try {
