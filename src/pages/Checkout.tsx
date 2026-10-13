@@ -381,7 +381,6 @@ export default function Checkout() {
       // Cash on Delivery: the order is already placed + stock reserved, so go
       // straight to the thank-you page (no Kashier redirect).
       if (data?.cod) {
-        clearCart()
         navigate(`/checkout/success?orderId=${encodeURIComponent(data.orderId)}`)
         return
       }
