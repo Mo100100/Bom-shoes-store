@@ -58,7 +58,6 @@ const purchaseTracked = useRef(false)
     if (outcome === 'confirmed' && !cleared.current) {
       purchaseItems.current = items
       cleared.current = true
-      clearCart()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
    }, [outcome])
@@ -78,6 +77,7 @@ useEffect(() => {
   })),
   content_type: 'product'
 })
+  clearCart()
 }, [outcome, order])
 
   const seo = outcome === 'confirmed'
